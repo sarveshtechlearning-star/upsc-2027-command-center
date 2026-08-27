@@ -1,4 +1,3 @@
-//Claude
 import React, { useState, useEffect, useMemo, useCallback } from "react";
 import * as XLSX from "xlsx";
 import { supabase } from "./supabaseClient.js";
@@ -21,7 +20,9 @@ const CSS = `
     --green:#2F7A4B; --green-soft:#E1F0E6;
     --red:#B4402A; --red-soft:#F6E1DC;
     --grey:#8B939B; --grey-soft:#ECEDEE;
-    --study:#29344A; --office:#7A6A52; --travel:#6E7C91; --ai:#B7791F; --break:#D8DBDC;
+    --study:#29344A; --office:#7A6A52; --travel:#A08A68; --ai:#B7791F; --break:#D8DBDC;
+    --sec-s1:#3E7C74; --sec-s2:#29344A; --sec-s3:#7C5295; --sec-s4:#B0562F;
+    --sec-s5:#9C4F6E; --sec-s6:#3B6B94; --sec-s7:#6E7A3A; --sec-custom:#5B6470;
   }
   *{box-sizing:border-box;}
   .ucc-root{
@@ -124,6 +125,9 @@ const CSS = `
   .ucc-planblock .body{flex:1; min-width:0;}
   .ucc-arc{position:relative; height:34px; border-radius:6px; background:var(--grey-soft); overflow:hidden; margin:10px 0 4px 0;}
   .ucc-arc-seg{position:absolute; top:0; bottom:0;}
+  .ucc-legend{display:flex; flex-wrap:wrap; gap:10px; margin:6px 0 4px 0;}
+  .ucc-legend-item{display:flex; align-items:center; gap:5px; font-size:11px; color:var(--ink-muted);}
+  .ucc-legend-dot{width:9px; height:9px; border-radius:2px; flex-shrink:0;}
   .ucc-arc-marker{position:absolute; top:-4px; bottom:-4px; width:2px; background:var(--red);}
   .ucc-overflow-banner{
     display:flex; gap:8px; align-items:center; background:var(--red-soft); color:var(--red);
@@ -237,31 +241,38 @@ function buildBaseBlocks(dayType, settings) {
   return blocks;
 }
 
-// Applies rules (a)-(g) one at a time, stopping as soon as the plan fits.
-// Returns the surviving blocks plus a human-readable log of what was adjusted.
+// Applies rules (a)-(g) in three phases, stopping as soon as the plan fits:
+//   1. Shrink breaks to 10 min (the break right after Class Lecture stays 15 always)
+//   2. Drop whole optional slots, one at a time, in priority order
+//   3. Last resort: shrink the remaining breaks further, to 5 min
+// Returns the surviving blocks plus a plain-language summary of what changed.
 function applyTrimRules(blocks, availableMinutes) {
   let working = blocks.map(b => ({ ...b }));
   const totalNeeded = () => working.reduce((sum, b) => sum + b.duration, 0);
-  const notes = [];
-  if (totalNeeded() <= availableMinutes) return { blocks: working, notes };
+  let breakNote = null;
+  const droppedLabels = [];
+  const shrinkBreaksTo = (mins) => {
+    working = working.map(b => (b.type === "break" && b.id !== "b2" && b.duration > mins) ? { ...b, duration: mins } : b);
+  };
 
-  const shrinkable = working.filter(b => b.type === "break" && b.duration > 5);
-  if (shrinkable.length) {
-    working = working.map(b => (b.type === "break" && b.duration > 5) ? { ...b, duration: 5 } : b);
-    notes.push("Shortened all breaks to 5 minutes to fit the day");
-    if (totalNeeded() <= availableMinutes) return { blocks: working, notes };
-  }
+  if (totalNeeded() <= availableMinutes) return { blocks: working, breakNote, droppedLabels };
+
+  shrinkBreaksTo(10);
+  breakNote = "Shortened breaks to 10 minutes";
+  if (totalNeeded() <= availableMinutes) return { blocks: working, breakNote, droppedLabels };
 
   for (const id of REMOVAL_ORDER) {
     const idx = working.findIndex(b => b.id === id);
     if (idx === -1) continue;
-    const label = working[idx].label;
+    droppedLabels.push(working[idx].label);
     const pairId = BREAK_PAIR[id];
     working = working.filter(b => b.id !== id && b.id !== pairId);
-    notes.push(`Dropped "${label}" today — not enough time`);
-    if (totalNeeded() <= availableMinutes) break;
+    if (totalNeeded() <= availableMinutes) return { blocks: working, breakNote, droppedLabels };
   }
-  return { blocks: working, notes };
+
+  shrinkBreaksTo(5);
+  breakNote = "Shortened breaks to 5 minutes";
+  return { blocks: working, breakNote, droppedLabels };
 }
 
 
@@ -351,6 +362,23 @@ function minutesToTime(mins) {
   return (overflowDays > 0 ? "+1d " : "") + `${hh}:${mmS}`;
 }
 function normKey(...parts) { return parts.map(p => String(p || "").trim().toLowerCase()).join("|"); }
+function slugify(s) { return String(s || "").trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "") || "none"; }
+// Distinct topics/subtopics already associated with a subject — powers the
+// subject-scoped datalist dropdowns on Class Lecture entry, ready to line up
+// with the Syllabus tracker once it's populated from the real syllabus.
+function topicOptionsForSubject(db, subject) {
+  const set = new Set();
+  db.syllabus.filter(s => s.subject === subject && s.topic).forEach(s => set.add(s.topic));
+  db.classes.filter(c => c.subject === subject && c.topic).forEach(c => set.add(c.topic));
+  db.reading.filter(r => r.subject === subject && r.topic).forEach(r => set.add(r.topic));
+  return Array.from(set);
+}
+function subtopicOptionsForSubject(db, subject) {
+  const set = new Set();
+  db.syllabus.filter(s => s.subject === subject && s.subtopic).forEach(s => set.add(s.subtopic));
+  db.classes.filter(c => c.subject === subject && c.subtopic).forEach(c => set.add(c.subtopic));
+  return Array.from(set);
+}
 function weekStartISO(iso) {
   const [y, m, d] = iso.split("-").map(Number);
   const dt = new Date(y, m - 1, d);
@@ -454,7 +482,7 @@ function IconBtn({ icon: Icon, onClick, title, danger }) {
 /* ============================================================
    GENERIC TRACKER TABLE
    ============================================================ */
-function GenericTracker({ records, setRecords, columns, newRecord, emptyMessage, dense }) {
+function GenericTracker({ records, setRecords, columns, newRecord, emptyMessage, dense, datalists }) {
   const [expanded, setExpanded] = useState(() => new Set());
 
   function updateField(rec, col, val, isStatus) {
@@ -490,6 +518,7 @@ function GenericTracker({ records, setRecords, columns, newRecord, emptyMessage,
 
   return (
     <div style={{ overflowX: "auto" }}>
+      {(datalists || []).map(dl => <datalist id={dl.id} key={dl.id}>{dl.options.map(o => <option key={o} value={o} />)}</datalist>)}
       <table className="ucc-table">
         <thead>
           <tr>
@@ -523,7 +552,7 @@ function GenericTracker({ records, setRecords, columns, newRecord, emptyMessage,
                           {col.options.map(o => <option key={o} value={o}>{o}</option>)}
                         </select>
                       ) : (
-                        <input type="text" list={col.datalist} className="ucc-input" value={rec[col.key] || ""} onChange={e => updateField(rec, col, e.target.value)} placeholder={col.placeholder} />
+                        <input type="text" list={typeof col.datalist === "function" ? col.datalist(rec) : col.datalist} className="ucc-input" value={rec[col.key] || ""} onChange={e => updateField(rec, col, e.target.value)} placeholder={col.placeholder} />
                       )}
                     </td>
                   ))}
@@ -561,6 +590,17 @@ function GenericTracker({ records, setRecords, columns, newRecord, emptyMessage,
 /* ============================================================
    DAY ARC (signature visual)
    ============================================================ */
+// Office + its commute legs share one color family (requirement: commute is
+// a sub-section of office, not its own category); every study slot gets its
+// own distinct color so the day is scannable at a glance.
+function colorForBlock(b) {
+  if (b.type === "break") return "var(--break)";
+  if (b.id === "office") return "var(--office)";
+  if (b.id === "travelTo" || b.id === "travelFro") return "var(--travel)";
+  if (b.type === "ai") return "var(--ai)";
+  if (["s1", "s2", "s3", "s4", "s5", "s6", "s7"].includes(b.id)) return `var(--sec-${b.id})`;
+  return "var(--sec-custom)";
+}
 function DayArc({ blocks, wakeMinutes, sleepMinutes }) {
   let cursor = wakeMinutes;
   const segs = [];
@@ -571,8 +611,8 @@ function DayArc({ blocks, wakeMinutes, sleepMinutes }) {
   });
   const endMinutes = cursor;
   const totalSpan = Math.max(endMinutes, sleepMinutes) - wakeMinutes;
-  const colorFor2 = (type) => ({ study: "var(--study)", office: "var(--office)", travel: "var(--travel)", ai: "var(--ai)", break: "var(--break)" }[type] || "var(--grey)");
   const markerPct = ((sleepMinutes - wakeMinutes) / totalSpan) * 100;
+  const legendSegs = segs.filter(s => s.type !== "break" && s.id !== "travelTo" && s.id !== "travelFro");
   return (
     <div>
       <div className="ucc-arc">
@@ -581,7 +621,7 @@ function DayArc({ blocks, wakeMinutes, sleepMinutes }) {
             style={{
               left: `${((s.start - wakeMinutes) / totalSpan) * 100}%`,
               width: `${((s.end - s.start) / totalSpan) * 100}%`,
-              background: s.end > sleepMinutes ? "repeating-linear-gradient(45deg, var(--red), var(--red) 4px, #fff 4px, #fff 8px)" : colorFor2(s.type),
+              background: s.end > sleepMinutes ? "repeating-linear-gradient(45deg, var(--red), var(--red) 4px, #fff 4px, #fff 8px)" : colorForBlock(s),
               borderRight: "1px solid rgba(255,255,255,0.5)"
             }} />
         ))}
@@ -590,6 +630,11 @@ function DayArc({ blocks, wakeMinutes, sleepMinutes }) {
       <div className="ucc-flex between ucc-tiny ucc-mono">
         <span>Wake {minutesToTime(wakeMinutes)}</span>
         <span>Sleep boundary {minutesToTime(sleepMinutes)}</span>
+      </div>
+      <div className="ucc-legend">
+        {legendSegs.map((s, i) => (
+          <span className="ucc-legend-item" key={i}><span className="ucc-legend-dot" style={{ background: colorForBlock(s) }} />{s.id === "office" ? "Office (incl. commute)" : s.label}</span>
+        ))}
       </div>
     </div>
   );
@@ -603,12 +648,13 @@ function initDayPlan(dateISO, settings, dayType) {
   const dt = dayType || defaultDayType(dateISO);
   const available = parseTimeToMinutes(settings.sleepTime) - parseTimeToMinutes(wakeTime);
   const base = buildBaseBlocks(dt, settings);
-  const { blocks, notes } = applyTrimRules(base, available);
+  const { blocks, breakNote, droppedLabels } = applyTrimRules(base, available);
   return {
     date: dateISO,
     wakeTime,
     dayType: dt,
-    trimNotes: notes,
+    breakNote,
+    droppedLabels,
     blocks: blocks.map(b => ({ ...b, status: "Not Started", skipped: false, completedAt: null })),
   };
 }
@@ -619,7 +665,7 @@ function initDayPlan(dateISO, settings, dayType) {
 function regeneratePlan(prevPlan, wakeTime, dayType, settings) {
   const available = parseTimeToMinutes(settings.sleepTime) - parseTimeToMinutes(wakeTime);
   const base = buildBaseBlocks(dayType, settings);
-  const { blocks, notes } = applyTrimRules(base, available);
+  const { blocks, breakNote, droppedLabels } = applyTrimRules(base, available);
   const prevById = new Map((prevPlan.blocks || []).map(b => [b.id, b]));
   const merged = blocks.map(b => {
     const prev = prevById.get(b.id);
@@ -628,7 +674,7 @@ function regeneratePlan(prevPlan, wakeTime, dayType, settings) {
       : { ...b, status: "Not Started", completedAt: null, skipped: false };
   });
   const customBlocks = (prevPlan.blocks || []).filter(b => b.custom);
-  return { ...prevPlan, wakeTime, dayType, trimNotes: notes, blocks: [...merged, ...customBlocks] };
+  return { ...prevPlan, wakeTime, dayType, breakNote, droppedLabels, blocks: [...merged, ...customBlocks] };
 }
 
 function computePlanTimes(plan) {
@@ -671,39 +717,39 @@ function computePendingTasks(db) {
   // 2. Revision due
   db.reading.forEach(r => {
     if (r.classNotes === "Completed" && (r.revision1 === "Yet to Start" || r.revision1 === "In Progress")) {
-      items.push({ cat: "Revision due", label: `${r.subject} — ${r.topic}`, detail: "Revision 1 pending", date: r.date });
+      items.push({ cat: "Revision due", label: `${r.subject} — ${r.topic}`, detail: "Revision 1 pending", date: r.date, tab: "reading" });
     } else if (r.revision1 === "Completed" && (r.revision2 === "Yet to Start" || r.revision2 === "In Progress")) {
-      items.push({ cat: "Revision due", label: `${r.subject} — ${r.topic}`, detail: "Revision 2 pending", date: r.date });
+      items.push({ cat: "Revision due", label: `${r.subject} — ${r.topic}`, detail: "Revision 2 pending", date: r.date, tab: "reading" });
     }
   });
   // 3. Previous day's class notes
   db.classes.filter(c => c.date === yISO && c.status === "Completed").forEach(c => {
     const r = db.reading.find(x => normKey(x.subject, x.topic) === normKey(c.subject, c.topic));
     if (!r || r.classNotes !== "Completed") {
-      items.push({ cat: "Yesterday's class", label: `${c.subject} — ${c.topic}`, detail: "Class notes reading pending", date: c.date });
+      items.push({ cat: "Yesterday's class", label: `${c.subject} — ${c.topic}`, detail: "Class notes reading pending", date: c.date, tab: "classes" });
     }
   });
-  // 5. Pending reading for completed classes
+  // 5. Pending reading (standard material / NCERT) — no longer requires Class Notes to be "Completed" first
   db.reading.forEach(r => {
-    if (r.classNotes === "Completed" && r.standardMaterial === "Yet to Start") {
-      items.push({ cat: "Pending reading", label: `${r.subject} — ${r.topic}`, detail: "Standard material yet to start", date: r.date });
-    } else if (r.classNotes === "Completed" && r.ncert === "Yet to Start") {
-      items.push({ cat: "Pending reading", label: `${r.subject} — ${r.topic}`, detail: "NCERT yet to start", date: r.date });
+    if (r.standardMaterial !== "Completed" && r.standardMaterial !== "Not Needed") {
+      items.push({ cat: "Pending reading", label: `${r.subject} — ${r.topic}`, detail: `Standard material: ${r.standardMaterial}`, date: r.date, tab: "reading" });
+    } else if (r.ncert !== "Completed" && r.ncert !== "Not Needed") {
+      items.push({ cat: "Pending reading", label: `${r.subject} — ${r.topic}`, detail: `NCERT: ${r.ncert}`, date: r.date, tab: "reading" });
     }
   });
   // 6. Overdue single pagers
   db.singlePager.filter(s => s.status !== "Completed").forEach(s => {
-    items.push({ cat: "Single pager", label: `${s.subject} — ${s.topic}`, detail: `Single pager: ${s.status || "Not Started"}`, date: s.date || "" });
+    items.push({ cat: "Single pager", label: `${s.subject} — ${s.topic}`, detail: `Single pager: ${s.status || "Not Started"}`, date: s.date || "", tab: "singlePager" });
   });
   // 7. Other pending
   db.tamilReading.filter(t => t.status !== "Completed").forEach(t => {
-    items.push({ cat: "Other pending", label: t.topic, detail: `Tamil reading: ${t.status || "Not Started"}`, date: "" });
+    items.push({ cat: "Other pending", label: t.topic, detail: `Tamil reading: ${t.status || "Not Started"}`, date: "", tab: "tamil" });
   });
   db.ncert.filter(n => n.status !== "Completed").forEach(n => {
-    items.push({ cat: "Other pending", label: `${n.subject} — ${n.topic || n.chapter}`, detail: `NCERT: ${n.status || "Not Started"}`, date: "" });
+    items.push({ cat: "Other pending", label: `${n.subject} — ${n.topic || n.chapter}`, detail: `NCERT: ${n.status || "Not Started"}`, date: "", tab: "ncert" });
   });
   db.standardBooks.filter(s => s.status !== "Completed").forEach(s => {
-    items.push({ cat: "Other pending", label: `${s.subject} — ${s.topic || s.chapter}`, detail: `Standard book: ${s.status || "Not Started"}`, date: "" });
+    items.push({ cat: "Other pending", label: `${s.subject} — ${s.topic || s.chapter}`, detail: `Standard book: ${s.status || "Not Started"}`, date: "", tab: "standardBooks" });
   });
   const order = ["Revision due", "Yesterday's class", "Pending reading", "Single pager", "Other pending"];
   items.sort((a, b) => order.indexOf(a.cat) - order.indexOf(b.cat) || (a.date || "").localeCompare(b.date || ""));
@@ -713,7 +759,7 @@ function computePendingTasks(db) {
 /* ============================================================
    TODAY / DASHBOARD TAB
    ============================================================ */
-function TodayTab({ db, updateSlice }) {
+function TodayTab({ db, updateSlice, onNavigate }) {
   const [dateISO, setDateISO] = useState(todayISO());
   const settings = db.settings;
   const plan = db.dailyPlans[dateISO] || initDayPlan(dateISO, settings);
@@ -805,9 +851,13 @@ function TodayTab({ db, updateSlice }) {
           </div>
         </div>
         <DayArc blocks={timedBlocks} wakeMinutes={wakeMinutes} sleepMinutes={sleepMinutes} />
-        {plan.trimNotes && plan.trimNotes.length > 0 && (
+        {(plan.breakNote || (plan.droppedLabels && plan.droppedLabels.length > 0)) && (
           <div className="ucc-tiny" style={{ background: "var(--amber-soft)", color: "var(--amber)", borderRadius: 6, padding: "8px 12px", marginTop: 8 }}>
-            <strong>Adjusted for today:</strong> {plan.trimNotes.join(" · ")}
+            <strong>Adjusted for today:</strong>{" "}
+            {[
+              plan.breakNote,
+              plan.droppedLabels && plan.droppedLabels.length > 0 ? `Dropped ${plan.droppedLabels.map(l => `"${l}"`).join(", ")}` : null,
+            ].filter(Boolean).join(" · ")}
           </div>
         )}
         {overflow > 0 && (
@@ -820,47 +870,70 @@ function TodayTab({ db, updateSlice }) {
 
       <div className="ucc-card">
         <h3>Today's plan</h3>
-        {timedBlocks.map((b, i) => (
-          <PlanBlock key={b.id} block={b} onUpdate={patch => updateBlock(b.id, patch)}
-            onMoveUp={i > 0 ? () => moveBlock(b.id, -1) : null}
-            onMoveDown={i < timedBlocks.length - 1 ? () => moveBlock(b.id, 1) : null}
-            onRemove={b.custom ? () => removeBlock(b.id) : null}
-            db={db} updateSlice={updateSlice} dateISO={dateISO} yesterdayISO={yISO} />
-        ))}
+        {timedBlocks.map((b, i) => {
+          if (b.id === "travelTo" || b.id === "travelFro") return null; // shown inside the merged Office card
+          if (b.id === "office") {
+            const travelTo = timedBlocks.find(x => x.id === "travelTo");
+            const travelFro = timedBlocks.find(x => x.id === "travelFro");
+            return (
+              <OfficePlanBlock key="office-group" office={b} travelTo={travelTo} travelFro={travelFro}
+                onSkipAll={val => {
+                  updateBlock("office", { skipped: val });
+                  if (travelTo) updateBlock("travelTo", { skipped: val });
+                  if (travelFro) updateBlock("travelFro", { skipped: val });
+                }}
+                onStatusChange={s => {
+                  const completedAt = s === "Completed" ? new Date().toISOString() : b.completedAt;
+                  updateBlock("office", { status: s, completedAt });
+                  if (travelTo) updateBlock("travelTo", { status: s });
+                  if (travelFro) updateBlock("travelFro", { status: s });
+                }} />
+            );
+          }
+          return (
+            <PlanBlock key={b.id} block={b} onUpdate={patch => updateBlock(b.id, patch)}
+              onMoveUp={i > 0 ? () => moveBlock(b.id, -1) : null}
+              onMoveDown={i < timedBlocks.length - 1 ? () => moveBlock(b.id, 1) : null}
+              onRemove={b.custom ? () => removeBlock(b.id) : null}
+              db={db} updateSlice={updateSlice} dateISO={dateISO} yesterdayISO={yISO} onNavigate={onNavigate} />
+          );
+        })}
         <button className="ucc-btn" onClick={addCustomBlock}><Plus size={14} /> Add custom task</button>
       </div>
 
       <div className="ucc-grid">
         <SummaryCard title="Pending" count={pending.length}>
           {pending.length === 0 ? <EmptyState>Nothing pending — clean slate.</EmptyState> :
-            pending.slice(0, 6).map((p, i) => (
-              <div key={i} className="ucc-tiny" style={{ marginBottom: 4 }}><Badge tone="amber">{p.cat}</Badge> {p.label} — {p.detail}</div>
+            pending.slice(0, 2).map((p, i) => (
+              <div key={i} className="ucc-tiny" style={{ marginBottom: 4, cursor: p.tab ? "pointer" : undefined }} onClick={p.tab ? () => onNavigate(p.tab) : undefined}>
+                <Badge tone="amber">{p.cat}</Badge> {p.label} — {p.detail}
+              </div>
             ))}
         </SummaryCard>
-        <SummaryCard title="Revision due" count={revisionDue.length}>
+        <SummaryCard title="Revision due" count={revisionDue.length} onTitleClick={() => onNavigate("reading")}>
           {revisionDue.length === 0 ? <EmptyState>No revisions due today.</EmptyState> :
-            revisionDue.slice(0, 6).map((p, i) => <div key={i} className="ucc-tiny" style={{ marginBottom: 4 }}>{p.label} — {p.detail}</div>)}
+            revisionDue.slice(0, 2).map((p, i) => <div key={i} className="ucc-tiny" style={{ marginBottom: 4 }}>{p.label} — {p.detail}</div>)}
         </SummaryCard>
-        <SummaryCard title="Class" count={yClasses.length}>
+        <SummaryCard title="Class" count={yClasses.length} onTitleClick={() => onNavigate("classes")}>
           {yClasses.length === 0 ? <EmptyState>No class logged for {fmtDateLong(yISO)}.</EmptyState> :
             yClasses.map(c => <div key={c.id} className="ucc-tiny">{c.subject} #{c.classNumber} — {c.topic}</div>)}
         </SummaryCard>
-        <SummaryCard title="Reading" count={pendingReadingCount}>
+        <SummaryCard title="Reading" count={pendingReadingCount} onTitleClick={() => onNavigate("reading")}>
           <div className="ucc-tiny">{pendingReadingCount} of {db.reading.length} topics have pending reading items.</div>
         </SummaryCard>
-        <SummaryCard title="Single pager" count={pendingSP.length}>
+        <SummaryCard title="Single pager" count={pendingSP.length} onTitleClick={() => onNavigate("singlePager")}>
           {pendingSP.length === 0 ? <EmptyState>All tracked single pagers are up to date.</EmptyState> :
-            pendingSP.slice(0, 6).map(s => <div key={s.id} className="ucc-tiny">{s.subject} — {s.topic}</div>)}
+            pendingSP.slice(0, 2).map(s => <div key={s.id} className="ucc-tiny">{s.subject} — {s.topic}</div>)}
         </SummaryCard>
-        <SummaryCard title="Answer writing today" count={todayAnswers.length}>
+        <SummaryCard title="Answer writing today" count={todayAnswers.length} onTitleClick={() => onNavigate("answerWriting")}>
           {todayAnswers.length === 0 ? <EmptyState>No answer-writing task logged for today.</EmptyState> :
             todayAnswers.map(a => <div key={a.id} className="ucc-tiny">{a.gsPaper} — {a.topic} <Badge tone={colorFor(a.status)}>{a.status}</Badge></div>)}
         </SummaryCard>
-        <SummaryCard title="Current affairs today" count={todayCA.length}>
+        <SummaryCard title="Current affairs today" count={todayCA.length} onTitleClick={() => onNavigate("currentAffairs")}>
           {todayCA.length === 0 ? <EmptyState>No current affairs added for today.</EmptyState> :
             todayCA.map(c => <div key={c.id} className="ucc-tiny">{c.title}</div>)}
         </SummaryCard>
-        <SummaryCard title="Progress" count={syllabusDone}>
+        <SummaryCard title="Progress" count={syllabusDone} onTitleClick={() => onNavigate("syllabus")}>
           <div className="ucc-tiny">{syllabusDone} of {db.syllabus.length} syllabus items completed/revised</div>
           <div className="ucc-tiny">{db.classes.filter(c => c.status === "Completed").length} classes completed</div>
           <div className="ucc-tiny">{db.singlePager.filter(s => s.status === "Completed").length} single pagers completed</div>
@@ -887,16 +960,48 @@ function TodayTab({ db, updateSlice }) {
   );
 }
 
-function SummaryCard({ title, count, children }) {
+function SummaryCard({ title, count, children, onTitleClick }) {
   return (
     <div className="ucc-card">
-      <div className="ucc-flex between"><h3 style={{ margin: 0 }}>{title}</h3><Badge tone={count > 0 ? "amber" : "grey"}>{count}</Badge></div>
+      <div className="ucc-flex between">
+        <h3 style={{ margin: 0, cursor: onTitleClick ? "pointer" : undefined, textDecoration: onTitleClick ? "underline" : undefined }} onClick={onTitleClick}>{title}</h3>
+        <Badge tone={count > 0 ? "amber" : "grey"}>{count}</Badge>
+      </div>
       <div style={{ marginTop: 8 }}>{children}</div>
     </div>
   );
 }
 
-function PlanBlock({ block, onUpdate, onMoveUp, onMoveDown, onRemove, db, updateSlice, dateISO, yesterdayISO }) {
+function OfficePlanBlock({ office, travelTo, travelFro, onSkipAll, onStatusChange }) {
+  const skipped = office.skipped;
+  const start = (travelTo || office).start;
+  const end = (travelFro || office).end;
+  return (
+    <div className={`ucc-planblock ${skipped ? "skipped" : ""}`}>
+      <div className="time ucc-mono ucc-tiny">{skipped ? "skipped" : `${minutesToTime(start)} – ${minutesToTime(end)}`}</div>
+      <div className="body">
+        <div className="ucc-flex between wrap">
+          <strong>Office Work{travelTo ? " (incl. commute)" : ""}</strong>
+          <label className="ucc-tiny"><input type="checkbox" checked={skipped} onChange={e => onSkipAll(e.target.checked)} /> Skip</label>
+        </div>
+        <div className="ucc-tiny" style={{ margin: "4px 0" }}>
+          {travelTo && <span>Commute (to): {minutesToTime(travelTo.start)}–{minutesToTime(travelTo.end)} ({travelTo.duration}m) · </span>}
+          <span>Office: {minutesToTime(office.start)}–{minutesToTime(office.end)} ({office.duration}m)</span>
+          {travelFro && <span> · Commute (fro): {minutesToTime(travelFro.start)}–{minutesToTime(travelFro.end)} ({travelFro.duration}m)</span>}
+        </div>
+        <div className="ucc-tiny" style={{ marginBottom: 4 }}>Fixed hours — change in Settings.</div>
+        <div className="ucc-flex wrap">
+          {TASK_STATUS.map(s => (
+            <button key={s} className="ucc-btn ghost" style={{ padding: "3px 8px", fontWeight: office.status === s ? 800 : 600, background: office.status === s ? "var(--grey-soft)" : undefined }}
+              onClick={() => onStatusChange(s)}>{s}</button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PlanBlock({ block, onUpdate, onMoveUp, onMoveDown, onRemove, db, updateSlice, dateISO, yesterdayISO, onNavigate }) {
   const statusTone = colorFor(block.status === "Completed" ? "Completed" : block.status);
   return (
     <div className={`ucc-planblock ${block.skipped ? "skipped" : ""}`}>
@@ -919,7 +1024,7 @@ function PlanBlock({ block, onUpdate, onMoveUp, onMoveDown, onRemove, db, update
         </div>
         {block.type !== "break" && (
           <div style={{ marginTop: 6 }}>
-            <LinkedTaskInfo link={block.link} db={db} updateSlice={updateSlice} dateISO={dateISO} yesterdayISO={yesterdayISO} />
+            <LinkedTaskInfo link={block.link} db={db} updateSlice={updateSlice} dateISO={dateISO} yesterdayISO={yesterdayISO} onNavigate={onNavigate} />
             <div className="ucc-flex wrap" style={{ marginTop: 6 }}>
               {TASK_STATUS.map(s => (
                 <button key={s} className="ucc-btn ghost" style={{ padding: "3px 8px", fontWeight: block.status === s ? 800 : 600, background: block.status === s ? "var(--grey-soft)" : undefined }}
@@ -935,27 +1040,26 @@ function PlanBlock({ block, onUpdate, onMoveUp, onMoveDown, onRemove, db, update
   );
 }
 
-function LinkedTaskInfo({ link, db, updateSlice, dateISO, yesterdayISO }) {
+function LinkedTaskInfo({ link, db, updateSlice, dateISO, yesterdayISO, onNavigate }) {
   if (link === "prevClass") {
-    const yClasses = db.classes.filter(c => c.date === yesterdayISO && c.status === "Completed");
-    if (yClasses.length === 0) return <EmptyState>No class was completed yesterday.</EmptyState>;
+    // Just the single most recently completed class before today — not every
+    // pending item, and not strictly "yesterday" (in case a day was skipped).
+    const latest = db.classes
+      .filter(c => c.status === "Completed" && c.date < dateISO)
+      .sort((a, b) => (b.date + (b.completedAt || "")).localeCompare(a.date + (a.completedAt || "")))[0];
+    if (!latest) return <EmptyState>No completed class to review yet.</EmptyState>;
+    const r = db.reading.find(x => normKey(x.subject, x.topic) === normKey(latest.subject, latest.topic));
     return (
-      <div>
-        {yClasses.map(c => {
-          const r = db.reading.find(x => normKey(x.subject, x.topic) === normKey(c.subject, c.topic));
-          return (
-            <div key={c.id} className="ucc-tiny" style={{ marginBottom: 4 }}>
-              Read <strong>{c.subject} — Class {c.classNumber}: {c.topic}</strong>
-              {r && (
-                <span style={{ marginLeft: 6 }}>
-                  <Badge tone={colorFor(r.classNotes)}>Notes: {r.classNotes}</Badge>{" "}
-                  <Badge tone={colorFor(r.standardMaterial)}>Std: {r.standardMaterial}</Badge>{" "}
-                  <Badge tone={colorFor(r.ncert)}>NCERT: {r.ncert}</Badge>
-                </span>
-              )}
-            </div>
-          );
-        })}
+      <div className="ucc-tiny">
+        Read <strong>{latest.subject} — Class {latest.classNumber}: {latest.topic}</strong>
+        {latest.date !== yesterdayISO && <span className="ucc-tiny" style={{ marginLeft: 6 }}>(from {latest.date})</span>}
+        {r && (
+          <span style={{ marginLeft: 6 }}>
+            <Badge tone={colorFor(r.classNotes)}>Notes: {r.classNotes}</Badge>{" "}
+            <Badge tone={colorFor(r.standardMaterial)}>Std: {r.standardMaterial}</Badge>{" "}
+            <Badge tone={colorFor(r.ncert)}>NCERT: {r.ncert}</Badge>
+          </span>
+        )}
       </div>
     );
   }
@@ -967,7 +1071,8 @@ function LinkedTaskInfo({ link, db, updateSlice, dateISO, yesterdayISO }) {
     const todays = db.tamilWriting.filter(t => t.date === dateISO);
     return <TodayListWidget items={todays} labelFn={t => `${t.topic} (${t.wordLimit || "?"} words)`} statusField="status" statusOptions={TASK_STATUS}
       setList={u => updateSlice("tamilWriting", u)} empty="No Tamil answer-writing task logged for today."
-      addNew={() => updateSlice("tamilWriting", prev => [...prev, { id: uid(), date: dateISO, question: "", topic: "New Tamil answer", wordLimit: 150, answerWritten: "", selfEvaluation: "", status: "Not Started", history: [] }])} />;
+      addFields={[{ key: "topic", label: "Topic" }, { key: "question", label: "Question" }, { key: "wordLimit", label: "Word limit" }]}
+      newRecord={() => ({ date: dateISO, question: "", topic: "", wordLimit: 150, answerWritten: "", selfEvaluation: "", status: "Not Started" })} />;
   }
   if (link === "currentAffairs") {
     const todays = db.currentAffairs.filter(c => c.date === dateISO);
@@ -976,7 +1081,10 @@ function LinkedTaskInfo({ link, db, updateSlice, dateISO, yesterdayISO }) {
       addNew={() => updateSlice("currentAffairs", prev => [...prev, { id: uid(), date: dateISO, title: "", source: "", subject: "", relevantSyllabusTopic: "", prelims: false, mains: false, notes: "", status: "To Read", history: [] }])} />;
   }
   if (link === "gsReading") {
-    const pend = db.reading.filter(r => r.classNotes === "Completed" && (r.standardMaterial !== "Completed" && r.standardMaterial !== "Not Needed" || r.ncert !== "Completed" && r.ncert !== "Not Needed")).slice(0, 3);
+    // Any topic with pending reference reading — no longer requires Class
+    // Notes to already be "Completed", so a freshly logged class shows up
+    // here right away (it starts as "In Progress").
+    const pend = db.reading.filter(r => (r.standardMaterial !== "Completed" && r.standardMaterial !== "Not Needed") || (r.ncert !== "Completed" && r.ncert !== "Not Needed")).slice(0, 3);
     if (pend.length === 0) return <EmptyState>No pending GS reading identified. Add reading records in the Reading tracker.</EmptyState>;
     return (
       <div>
@@ -1014,33 +1122,56 @@ function ClassLectureWidget({ db, updateSlice, dateISO }) {
   const [subject, setSubject] = useState(db.settings.subjects[0] || "");
   const [classNumber, setClassNumber] = useState("");
   const [topic, setTopic] = useState("");
+  const [subtopic, setSubtopic] = useState("");
   const [eta, setEta] = useState("");
+  const topicOptions = topicOptionsForSubject(db, subject);
+  const subtopicOptions = subtopicOptionsForSubject(db, subject);
+  const dlId = "cl-topics-" + slugify(subject);
+  const dlSubId = "cl-subtopics-" + slugify(subject);
 
   function markCompleted() {
     if (!topic.trim()) { window.alert("Enter a topic before marking the class completed."); return; }
     const classNum = classNumber || (Math.max(0, ...db.classes.filter(c => c.subject === subject).map(c => Number(c.classNumber) || 0)) + 1);
     updateSlice("classes", prev => [...prev, {
-      id: uid(), date: dateISO, subject, totalClasses: "", classNumber: classNum, eta, topic,
+      id: uid(), date: dateISO, subject, totalClasses: "", classNumber: classNum, eta, topic, subtopic,
       status: "Completed", completedAt: new Date().toISOString(), history: [{ field: "Status", from: "(new)", to: "Completed", at: new Date().toISOString() }]
     }]);
     updateSlice("reading", prev => upsertReadingForTopic(prev, subject, topic, classNum, dateISO));
-    setTopic(""); setClassNumber(""); setEta("");
+    setTopic(""); setSubtopic(""); setClassNumber(""); setEta("");
   }
 
   return (
-    <div className="ucc-grid" style={{ gridTemplateColumns: "1fr 1fr 2fr 1fr auto" }}>
+    <div className="ucc-grid" style={{ gridTemplateColumns: "1fr 0.7fr 1.4fr 1.4fr 1fr auto" }}>
+      <datalist id={dlId}>{topicOptions.map(t => <option key={t} value={t} />)}</datalist>
+      <datalist id={dlSubId}>{subtopicOptions.map(t => <option key={t} value={t} />)}</datalist>
       <select className="ucc-select" value={subject} onChange={e => setSubject(e.target.value)}>
         {db.settings.subjects.map(s => <option key={s} value={s}>{s}</option>)}
       </select>
       <input className="ucc-input" placeholder="Class #" value={classNumber} onChange={e => setClassNumber(e.target.value)} />
-      <input className="ucc-input" placeholder="Topic" value={topic} onChange={e => setTopic(e.target.value)} />
+      <input className="ucc-input" list={dlId} placeholder="Topic" value={topic} onChange={e => setTopic(e.target.value)} />
+      <input className="ucc-input" list={dlSubId} placeholder="Subtopic" value={subtopic} onChange={e => setSubtopic(e.target.value)} />
       <input className="ucc-input" type="date" placeholder="ETA" value={eta} onChange={e => setEta(e.target.value)} />
       <button className="ucc-btn primary" onClick={markCompleted}><Check size={14} /> Mark class completed</button>
     </div>
   );
 }
 
-function TodayListWidget({ items, labelFn, statusField, statusOptions, setList, empty, addNew }) {
+function InlineAddForm({ fields, onSave, onCancel }) {
+  const [draft, setDraft] = useState({});
+  return (
+    <div className="ucc-flex wrap" style={{ marginTop: 6 }}>
+      {fields.map(f => (
+        <input key={f.key} className="ucc-input" placeholder={f.label} value={draft[f.key] || ""}
+          onChange={e => setDraft(d => ({ ...d, [f.key]: e.target.value }))} style={{ maxWidth: 160 }} />
+      ))}
+      <button className="ucc-btn primary" style={{ padding: "5px 9px" }} onClick={() => onSave(draft)}><Check size={12} /> Save</button>
+      <button className="ucc-btn ghost" style={{ padding: "5px 9px" }} onClick={onCancel}>Cancel</button>
+    </div>
+  );
+}
+
+function TodayListWidget({ items, labelFn, statusField, statusOptions, setList, empty, addNew, addFields, newRecord }) {
+  const [adding, setAdding] = useState(false);
   return (
     <div>
       {items.length === 0 ? <EmptyState>{empty}</EmptyState> : items.map(it => (
@@ -1049,12 +1180,23 @@ function TodayListWidget({ items, labelFn, statusField, statusOptions, setList, 
           <StatusSelect value={it[statusField]} options={statusOptions} onChange={v => setList(prev => prev.map(x => x.id === it.id ? { ...x, [statusField]: v } : x))} />
         </div>
       ))}
-      <button className="ucc-btn ghost" style={{ marginTop: 4 }} onClick={addNew}><Plus size={12} /> Quick add</button>
+      {addFields ? (
+        adding ? (
+          <InlineAddForm fields={addFields}
+            onSave={draft => { setList(prev => [...prev, { id: uid(), history: [], ...newRecord(), ...draft }]); setAdding(false); }}
+            onCancel={() => setAdding(false)} />
+        ) : (
+          <button className="ucc-btn ghost" style={{ marginTop: 4 }} onClick={() => setAdding(true)}><Plus size={12} /> Add</button>
+        )
+      ) : (
+        <button className="ucc-btn ghost" style={{ marginTop: 4 }} onClick={addNew}><Plus size={12} /> Quick add</button>
+      )}
     </div>
   );
 }
 
-function QuickPickWidget({ list, setList, labelFn, statusField, statusOptions, empty, newRecord }) {
+function QuickPickWidget({ list, setList, labelFn, statusField, statusOptions, empty, newRecord, addFields }) {
+  const [adding, setAdding] = useState(false);
   const pending = list.filter(r => r[statusField] !== "Completed");
   const next = pending[0];
   return (
@@ -1065,7 +1207,17 @@ function QuickPickWidget({ list, setList, labelFn, statusField, statusOptions, e
           <StatusSelect value={next[statusField]} options={statusOptions} onChange={v => setList(prev => prev.map(x => x.id === next.id ? { ...x, [statusField]: v } : x))} />
         </div>
       )}
-      <button className="ucc-btn ghost" style={{ marginTop: 4 }} onClick={() => setList(prev => [...prev, { id: uid(), history: [], ...newRecord() }])}><Plus size={12} /> Quick add</button>
+      {addFields ? (
+        adding ? (
+          <InlineAddForm fields={addFields}
+            onSave={draft => { setList(prev => [...prev, { id: uid(), history: [], ...newRecord(), ...draft }]); setAdding(false); }}
+            onCancel={() => setAdding(false)} />
+        ) : (
+          <button className="ucc-btn ghost" style={{ marginTop: 4 }} onClick={() => setAdding(true)}><Plus size={12} /> Add</button>
+        )
+      ) : (
+        <button className="ucc-btn ghost" style={{ marginTop: 4 }} onClick={() => setList(prev => [...prev, { id: uid(), history: [], ...newRecord() }])}><Plus size={12} /> Quick add</button>
+      )}
     </div>
   );
 }
@@ -1079,6 +1231,14 @@ function ClassesTab({ db, updateSlice }) {
     db.classes.forEach(c => { m[c.subject] = m[c.subject] || []; m[c.subject].push(c); });
     return m;
   }, [db.classes]);
+  const subjectDatalists = useMemo(() => {
+    const out = [];
+    db.settings.subjects.forEach(subj => {
+      out.push({ id: "topics-" + slugify(subj), options: topicOptionsForSubject(db, subj) });
+      out.push({ id: "subtopics-" + slugify(subj), options: subtopicOptionsForSubject(db, subj) });
+    });
+    return out;
+  }, [db]);
   return (
     <div>
       <div className="ucc-statgrid" style={{ marginBottom: 16 }}>
@@ -1097,16 +1257,18 @@ function ClassesTab({ db, updateSlice }) {
         <h3>Class completion tracker</h3>
         <GenericTracker
           records={db.classes} setRecords={u => updateSlice("classes", u)}
+          datalists={subjectDatalists}
           columns={[
             { key: "date", label: "Date", type: "date", width: 120 },
             { key: "subject", label: "Subject", width: 130 },
             { key: "classNumber", label: "Class #", width: 70 },
             { key: "totalClasses", label: "Total Classes", width: 90 },
-            { key: "topic", label: "Topic", width: 220 },
+            { key: "topic", label: "Topic", width: 180, datalist: rec => "topics-" + slugify(rec.subject) },
+            { key: "subtopic", label: "Subtopic", width: 160, datalist: rec => "subtopics-" + slugify(rec.subject) },
             { key: "eta", label: "ETA", type: "date", width: 120 },
             { key: "status", label: "Status", type: "status", options: TASK_STATUS, width: 150 },
           ]}
-          newRecord={() => ({ date: todayISO(), subject: db.settings.subjects[0] || "", classNumber: "", totalClasses: "", topic: "", eta: "", status: "Not Started" })}
+          newRecord={() => ({ date: todayISO(), subject: db.settings.subjects[0] || "", classNumber: "", totalClasses: "", topic: "", subtopic: "", eta: "", status: "Not Started" })}
         />
       </div>
     </div>
@@ -1798,7 +1960,7 @@ function Dashboard({ session }) {
   const activeTabDef = TABS.find(t => t.id === tab);
 
   let body = null;
-  if (tab === "today") body = <TodayTab db={db} updateSlice={updateSlice} />;
+  if (tab === "today") body = <TodayTab db={db} updateSlice={updateSlice} onNavigate={setTab} />;
   else if (tab === "classes") body = <ClassesTab db={db} updateSlice={updateSlice} />;
   else if (tab === "reading") body = <ReadingTab db={db} updateSlice={updateSlice} />;
   else if (tab === "syllabus") body = <SyllabusTab db={db} updateSlice={updateSlice} />;
