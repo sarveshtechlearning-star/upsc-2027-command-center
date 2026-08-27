@@ -1473,10 +1473,21 @@ function ReadingTab({ db, updateSlice }) {
   );
 }
 
+const SYLLABUS_PAPERS = ["Prelims", "Mains", "Interview"];
+
 function SyllabusTab({ db, updateSlice }) {
+  // Standard paper groups always render — with their own "Add row" button —
+  // even when a group (or the whole list) is empty. Grouping used to be
+  // derived purely from existing records, which meant a syllabus with zero
+  // items rendered zero groups and there was nowhere to click "Add".
   const byPaper = useMemo(() => {
     const m = {};
-    db.syllabus.forEach(s => { m[s.paper] = m[s.paper] || []; m[s.paper].push(s); });
+    SYLLABUS_PAPERS.forEach(p => { m[p] = []; });
+    db.syllabus.forEach(s => {
+      const key = s.paper || "Other";
+      m[key] = m[key] || [];
+      m[key].push(s);
+    });
     return m;
   }, [db.syllabus]);
   const total = db.syllabus.length;
@@ -1500,7 +1511,7 @@ function SyllabusTab({ db, updateSlice }) {
             records={items} setRecords={(u) => {
               const updated = typeof u === "function" ? u(items) : u;
               updateSlice("syllabus", prev => {
-                const others = prev.filter(s => s.paper !== paper);
+                const others = prev.filter(s => (s.paper || "Other") !== paper);
                 return [...others, ...updated];
               });
             }}
@@ -1514,6 +1525,7 @@ function SyllabusTab({ db, updateSlice }) {
               { key: "revisionStatus", label: "Revision Status", type: "status", options: SYLLABUS_STATUS, width: 130 },
             ]}
             newRecord={() => ({ paper, coverage: "", gsPaper: "", subject: db.settings.subjects[0] || "", topic: "", subtopic: "", studyStatus: "Not Started", revisionStatus: "Not Started" })}
+            emptyMessage="No syllabus items yet — click Add row below to add your first topic."
           />
         </div>
       ))}
