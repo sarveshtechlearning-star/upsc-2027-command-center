@@ -20,7 +20,7 @@ const CSS = `
     --green:#2F7A4B; --green-soft:#E1F0E6;
     --red:#B4402A; --red-soft:#F6E1DC;
     --grey:#8B939B; --grey-soft:#ECEDEE;
-    --study:#29344A; --office:#7A6A52; --ai:#B7791F; --break:#D8DBDC;
+    --study:#29344A; --office:#7A6A52; --travel:#6E7C91; --ai:#B7791F; --break:#D8DBDC;
   }
   *{box-sizing:border-box;}
   .ucc-root{
@@ -184,25 +184,86 @@ const DEFAULT_SUBJECTS = [
   "Science & Technology", "Ethics (GS4)", "Tamil Literature", "Current Affairs", "Essay", "CSAT"
 ];
 
-const SLOT_TEMPLATE = [
-  { id: "s1", label: "Previous Day's Class Notes & References", type: "study", link: "prevClass", duration: 60 },
-  { id: "b1", label: "Break", type: "break", duration: 15 },
-  { id: "s2", label: "Class Lecture", type: "study", link: "classLecture", duration: 150 },
-  { id: "b2", label: "Break", type: "break", duration: 15 },
-  { id: "s3", label: "Tamil Literature Reading", type: "study", link: "tamilReading", duration: 60 },
-  { id: "b3", label: "Break", type: "break", duration: 15 },
-  { id: "s4", label: "Current Affairs Reading", type: "study", link: "currentAffairs", duration: 60 },
-  { id: "b4", label: "Break", type: "break", duration: 15 },
-  { id: "s5", label: "Tamil Literature Answer Writing", type: "study", link: "tamilWriting", duration: 60 },
-  { id: "b5", label: "Break", type: "break", duration: 15 },
-  { id: "s6", label: "GS Notes & Reference Reading", type: "study", link: "gsReading", duration: 60 },
-  { id: "b6", label: "Break", type: "break", duration: 15 },
-  { id: "s7", label: "GS Answer Writing", type: "study", link: "gsWriting", duration: 60 },
-  { id: "office", label: "Office Work", type: "office", link: "office", duration: 510 },
-  { id: "ai", label: "AI Learning", type: "ai", link: "aiLearning", duration: 60 },
+// Core study slots + their paired breaks. "removable" + "priority" govern the
+// auto-trim cascade when the day doesn't have enough hours (see applyTrimRules).
+// Lower priority number = removed first. Office/Class Lecture/GS Reading are
+// never auto-removed — they're real-world fixed commitments.
+const CORE_SLOT_TEMPLATE = [
+  { id: "s1", label: "Previous Day's Class Notes & References", type: "study", link: "prevClass", duration: 60, removable: true },
+  { id: "b1", label: "Break", type: "break", duration: 15, pairFor: "s1" },
+  { id: "s2", label: "Class Lecture", type: "study", link: "classLecture", duration: 150, removable: false },
+  { id: "b2", label: "Break", type: "break", duration: 15, pairFor: "s2" },
+  { id: "s3", label: "Tamil Literature Reading", type: "study", link: "tamilReading", duration: 60, removable: true },
+  { id: "b3", label: "Break", type: "break", duration: 15, pairFor: "s3" },
+  { id: "s4", label: "Current Affairs Reading", type: "study", link: "currentAffairs", duration: 60, removable: true },
+  { id: "b4", label: "Break", type: "break", duration: 15, pairFor: "s4" },
+  { id: "s5", label: "Tamil Literature Answer Writing", type: "study", link: "tamilWriting", duration: 60, removable: true },
+  { id: "b5", label: "Break", type: "break", duration: 15, pairFor: "s5" },
+  { id: "s6", label: "GS Notes & Reference Reading", type: "study", link: "gsReading", duration: 60, removable: false },
+  { id: "b6", label: "Break", type: "break", duration: 15, pairFor: "s6" },
+  { id: "s7", label: "GS Answer Writing", type: "study", link: "gsWriting", duration: 60, removable: true },
 ];
+const AI_BLOCK = { id: "ai", label: "AI Learning", type: "ai", link: "aiLearning", duration: 60, removable: true };
 
-// Broad, standard UPSC CSE syllabus skeleton (well-established public structure only).
+// Rule (a) shrinks every break to 5 min first. Rules (b)-(g) then drop whole
+// slots in this exact order, stopping as soon as the day fits.
+const REMOVAL_ORDER = ["ai", "s4", "s1", "s7", "s5", "s3"];
+const BREAK_PAIR = { s1: "b1", s3: "b3", s4: "b4", s5: "b5" };
+const DAY_TYPES = ["WFH", "WFO", "Weekend"];
+
+function isWeekendISO(dateISO) {
+  const [y, m, d] = dateISO.split("-").map(Number);
+  return [0, 6].includes(new Date(y, m - 1, d).getDay());
+}
+function defaultDayType(dateISO) { return isWeekendISO(dateISO) ? "Weekend" : "WFO"; }
+
+// Builds the full candidate block list for a given day type, before any trimming.
+function buildBaseBlocks(dayType, settings) {
+  const byId = Object.fromEntries((settings.slotTemplate || CORE_SLOT_TEMPLATE).map(b => [b.id, b]));
+  let blocks = CORE_SLOT_TEMPLATE.map(b => ({ ...b, duration: (byId[b.id] || b).duration }));
+  if (dayType === "WFO") {
+    const travel = Math.round((settings.travelHoursEachWay ?? 1) * 60);
+    const office = Math.round((settings.officeHoursFixed ?? 6) * 60);
+    blocks.push({ id: "travelTo", label: "Office Commute (To)", type: "travel", link: "office", duration: travel, removable: false });
+    blocks.push({ id: "office", label: "Office Work", type: "office", link: "office", duration: office, removable: false });
+    blocks.push({ id: "travelFro", label: "Office Commute (Fro)", type: "travel", link: "office", duration: travel, removable: false });
+  } else if (dayType === "WFH") {
+    const office = Math.round((settings.officeHoursFixed ?? 6) * 60);
+    blocks.push({ id: "office", label: "Office Work", type: "office", link: "office", duration: office, removable: false });
+  }
+  const aiDefault = byId.ai || AI_BLOCK;
+  blocks.push({ ...AI_BLOCK, duration: aiDefault.duration });
+  return blocks;
+}
+
+// Applies rules (a)-(g) one at a time, stopping as soon as the plan fits.
+// Returns the surviving blocks plus a human-readable log of what was adjusted.
+function applyTrimRules(blocks, availableMinutes) {
+  let working = blocks.map(b => ({ ...b }));
+  const totalNeeded = () => working.reduce((sum, b) => sum + b.duration, 0);
+  const notes = [];
+  if (totalNeeded() <= availableMinutes) return { blocks: working, notes };
+
+  const shrinkable = working.filter(b => b.type === "break" && b.duration > 5);
+  if (shrinkable.length) {
+    working = working.map(b => (b.type === "break" && b.duration > 5) ? { ...b, duration: 5 } : b);
+    notes.push("Shortened all breaks to 5 minutes to fit the day");
+    if (totalNeeded() <= availableMinutes) return { blocks: working, notes };
+  }
+
+  for (const id of REMOVAL_ORDER) {
+    const idx = working.findIndex(b => b.id === id);
+    if (idx === -1) continue;
+    const label = working[idx].label;
+    const pairId = BREAK_PAIR[id];
+    working = working.filter(b => b.id !== id && b.id !== pairId);
+    notes.push(`Dropped "${label}" today — not enough time`);
+    if (totalNeeded() <= availableMinutes) break;
+  }
+  return { blocks: working, notes };
+}
+
+
 // Detailed subtopics intentionally left for the user to add / import from the real syllabus PDF.
 const SYLLABUS_SEED = [
   { paper: "Prelims", subject: "GS Paper I", topic: "Current Events of National & International Importance" },
@@ -243,9 +304,10 @@ function defaultDB() {
     settings: {
       wakeTimeDefault: "05:30",
       sleepTime: "23:00",
-      officeDurationDefault: 8.5,
+      officeHoursFixed: 6,
+      travelHoursEachWay: 1,
       subjects: DEFAULT_SUBJECTS,
-      slotTemplate: SLOT_TEMPLATE,
+      slotTemplate: [...CORE_SLOT_TEMPLATE, AI_BLOCK],
     },
     syllabus: SYLLABUS_SEED.map(s => ({ id: uid(), ...s, subtopic: "", studyStatus: "Not Started", revisionStatus: "Not Started", history: [] })),
     classes: [], reading: [], singlePager: [], ncert: [], standardBooks: [],
@@ -305,6 +367,16 @@ function downloadBlob(content, filename, mime) {
   setTimeout(() => URL.revokeObjectURL(url), 2000);
 }
 
+function normalizeSettings(s) {
+  const defaults = defaultDB().settings;
+  if (!s) return defaults;
+  const merged = { ...defaults, ...s };
+  if (merged.officeHoursFixed == null) merged.officeHoursFixed = s.officeDurationDefault ?? defaults.officeHoursFixed;
+  if (merged.travelHoursEachWay == null) merged.travelHoursEachWay = defaults.travelHoursEachWay;
+  if (!Array.isArray(merged.slotTemplate) || !merged.slotTemplate.some(b => b.id === "s1")) merged.slotTemplate = defaults.slotTemplate;
+  return merged;
+}
+
 /* ============================================================
    PERSISTENCE HOOK (Supabase-backed, scoped to the signed-in user)
    ============================================================ */
@@ -325,6 +397,7 @@ function useDB(userId) {
         const map = {};
         (data || []).forEach(row => { map[row.key] = row.value; });
         STORAGE_KEYS.forEach(k => { out[k] = map[k] !== undefined ? map[k] : defaults[k]; });
+        out.settings = normalizeSettings(out.settings);
       } catch (e) {
         STORAGE_KEYS.forEach(k => { out[k] = defaults[k]; });
         if (!cancelled) setSaveError(`Could not load your data — ${e.message || e}`);
@@ -497,7 +570,7 @@ function DayArc({ blocks, wakeMinutes, sleepMinutes }) {
   });
   const endMinutes = cursor;
   const totalSpan = Math.max(endMinutes, sleepMinutes) - wakeMinutes;
-  const colorFor2 = (type) => ({ study: "var(--study)", office: "var(--office)", ai: "var(--ai)", break: "var(--break)" }[type] || "var(--grey)");
+  const colorFor2 = (type) => ({ study: "var(--study)", office: "var(--office)", travel: "var(--travel)", ai: "var(--ai)", break: "var(--break)" }[type] || "var(--grey)");
   const markerPct = ((sleepMinutes - wakeMinutes) / totalSpan) * 100;
   return (
     <div>
@@ -524,18 +597,39 @@ function DayArc({ blocks, wakeMinutes, sleepMinutes }) {
 /* ============================================================
    PLANNER LOGIC
    ============================================================ */
-function initDayPlan(dateISO, settings) {
+function initDayPlan(dateISO, settings, dayType) {
+  const wakeTime = settings.wakeTimeDefault;
+  const dt = dayType || defaultDayType(dateISO);
+  const available = parseTimeToMinutes(settings.sleepTime) - parseTimeToMinutes(wakeTime);
+  const base = buildBaseBlocks(dt, settings);
+  const { blocks, notes } = applyTrimRules(base, available);
   return {
     date: dateISO,
-    wakeTime: settings.wakeTimeDefault,
-    officeDuration: settings.officeDurationDefault,
-    blocks: settings.slotTemplate.map(b => ({
-      ...b,
-      duration: b.type === "office" ? Math.round(settings.officeDurationDefault * 60) : b.duration,
-      status: "Not Started", skipped: false, completedAt: null,
-    })),
+    wakeTime,
+    dayType: dt,
+    trimNotes: notes,
+    blocks: blocks.map(b => ({ ...b, status: "Not Started", skipped: false, completedAt: null })),
   };
 }
+
+// Re-runs the day-type/wake-time -> composition logic (used whenever either
+// input changes), while preserving progress on any block that survives and
+// keeping any custom tasks the user added by hand.
+function regeneratePlan(prevPlan, wakeTime, dayType, settings) {
+  const available = parseTimeToMinutes(settings.sleepTime) - parseTimeToMinutes(wakeTime);
+  const base = buildBaseBlocks(dayType, settings);
+  const { blocks, notes } = applyTrimRules(base, available);
+  const prevById = new Map((prevPlan.blocks || []).map(b => [b.id, b]));
+  const merged = blocks.map(b => {
+    const prev = prevById.get(b.id);
+    return prev
+      ? { ...b, status: prev.status, completedAt: prev.completedAt, skipped: false }
+      : { ...b, status: "Not Started", completedAt: null, skipped: false };
+  });
+  const customBlocks = (prevPlan.blocks || []).filter(b => b.custom);
+  return { ...prevPlan, wakeTime, dayType, trimNotes: notes, blocks: [...merged, ...customBlocks] };
+}
+
 function computePlanTimes(plan) {
   const wakeMinutes = parseTimeToMinutes(plan.wakeTime);
   let cursor = wakeMinutes;
@@ -638,6 +732,13 @@ function TodayTab({ db, updateSlice }) {
     });
   }
 
+  function changeWakeTime(newWakeTime) {
+    setPlan(p => regeneratePlan(p, newWakeTime, p.dayType || defaultDayType(dateISO), settings));
+  }
+  function changeDayType(newDayType) {
+    setPlan(p => regeneratePlan(p, p.wakeTime, newDayType, settings));
+  }
+
   function updateBlock(id, patch) {
     setPlan(p => ({ ...p, blocks: p.blocks.map(b => b.id === id ? { ...b, ...patch } : b) }));
   }
@@ -693,22 +794,25 @@ function TodayTab({ db, updateSlice }) {
           </div>
           <div className="ucc-flex wrap">
             <label className="ucc-tiny">Wake time
-              <input type="time" className="ucc-input ucc-mono" value={plan.wakeTime} onChange={e => setPlan(p => ({ ...p, wakeTime: e.target.value }))} style={{ marginLeft: 6, width: 100 }} />
+              <input type="time" className="ucc-input ucc-mono" value={plan.wakeTime} onChange={e => changeWakeTime(e.target.value)} style={{ marginLeft: 6, width: 100 }} />
             </label>
-            <label className="ucc-tiny">Office hrs
-              <input type="number" step="0.5" className="ucc-input ucc-mono" value={plan.officeDuration}
-                onChange={e => {
-                  const val = Number(e.target.value);
-                  setPlan(p => ({ ...p, officeDuration: val, blocks: p.blocks.map(b => b.link === "office" ? { ...b, duration: Math.round(val * 60) } : b) }));
-                }} style={{ marginLeft: 6, width: 70 }} />
+            <label className="ucc-tiny">Day type
+              <select className="ucc-select" value={plan.dayType || defaultDayType(dateISO)} onChange={e => changeDayType(e.target.value)} style={{ marginLeft: 6, width: 110, display: "inline-block" }}>
+                {DAY_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+              </select>
             </label>
           </div>
         </div>
         <DayArc blocks={timedBlocks} wakeMinutes={wakeMinutes} sleepMinutes={sleepMinutes} />
+        {plan.trimNotes && plan.trimNotes.length > 0 && (
+          <div className="ucc-tiny" style={{ background: "var(--amber-soft)", color: "var(--amber)", borderRadius: 6, padding: "8px 12px", marginTop: 8 }}>
+            <strong>Adjusted for today:</strong> {plan.trimNotes.join(" · ")}
+          </div>
+        )}
         {overflow > 0 && (
           <div className="ucc-overflow-banner">
             <AlertTriangle size={15} />
-            Schedule overflow — you have {Math.floor(overflow / 60)}h {overflow % 60}m of planned work that cannot fit before {settings.sleepTime}.
+            Schedule overflow — even after trimming everything adjustable, you have {Math.floor(overflow / 60)}h {overflow % 60}m of fixed work (class, GS reading, office/commute) that cannot fit before {settings.sleepTime}.
           </div>
         )}
       </div>
@@ -901,7 +1005,7 @@ function LinkedTaskInfo({ link, db, updateSlice, dateISO, yesterdayISO }) {
       setList={u => updateSlice("aiLearning", u)} empty="No AI learning topic logged for today."
       addNew={() => updateSlice("aiLearning", prev => [...prev, { id: uid(), date: dateISO, topic: "", duration: 60, status: "Not Started", notes: "", history: [] }])} />;
   }
-  if (link === "office") return <div className="ucc-tiny">Office work block — no linked tracker.</div>;
+  if (link === "office") return <div className="ucc-tiny">Fixed block — no linked tracker.</div>;
   return null;
 }
 
@@ -1438,13 +1542,17 @@ function SettingsTab({ db, updateSlice }) {
           <input type="time" className="ucc-input ucc-mono" value={s.sleepTime} onChange={e => patch({ sleepTime: e.target.value })} />
         </div>
         <div>
-          <label className="ucc-tiny">Default office duration (hours)</label>
-          <input type="number" step="0.5" className="ucc-input ucc-mono" value={s.officeDurationDefault} onChange={e => patch({ officeDurationDefault: Number(e.target.value) })} />
+          <label className="ucc-tiny">Fixed office hours (WFH/WFO)</label>
+          <input type="number" step="0.5" className="ucc-input ucc-mono" value={s.officeHoursFixed} onChange={e => patch({ officeHoursFixed: Number(e.target.value) })} />
+        </div>
+        <div>
+          <label className="ucc-tiny">Fixed travel hours, each way (WFO only)</label>
+          <input type="number" step="0.5" className="ucc-input ucc-mono" value={s.travelHoursEachWay} onChange={e => patch({ travelHoursEachWay: Number(e.target.value) })} />
         </div>
       </div>
       <div className="ucc-hr" />
       <h3>Default daily slot template</h3>
-      <p className="ucc-tiny">Changes here set the default for new days — days you've already opened keep their own snapshot.</p>
+      <p className="ucc-tiny">Study slots, breaks, and AI learning — their default duration before any day-fit trimming happens. Office and commute time come from the fixed hours above instead. Changes here set the default for new days — days you've already opened keep their own snapshot until you change wake time or day type.</p>
       <table className="ucc-table">
         <thead><tr><th>Slot</th><th>Type</th><th>Default duration (min)</th></tr></thead>
         <tbody>
