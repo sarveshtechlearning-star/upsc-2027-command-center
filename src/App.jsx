@@ -174,6 +174,24 @@ const SB_STATUS = ["Not Started", "Reading", "Completed", "Revision"];
 const CA_STATUS = ["To Read", "Read", "Noted"];
 const AI_STATUS = ["Not Started", "In Progress", "Completed"];
 const SKIP_REASONS = ["Time shortage", "Office workload", "Fatigue", "Unexpected work", "Other"];
+const COVERAGE_OPTIONS = ["Prelims Only", "Mains Only", "Prelims + Mains"];
+const GS_PAPER_OPTIONS = ["GS Paper I", "GS Paper II", "GS Paper III", "GS Paper IV", "Essay", "CSAT", "Optional Paper I", "Optional Paper II", "Personality Test"];
+
+// Maps the day-plan's generic task-status vocabulary onto whatever status
+// vocabulary a specific tracker uses, so picking a status in Today's plan
+// actually lands on the linked tracker page instead of being a dead click.
+const STATUS_BRIDGE_MAP = {
+  "Not Started": ["Yet to Start", "Not Started", "To Read"],
+  "In Progress": ["In Progress", "Reading"],
+  "Completed": ["Completed", "Done", "Read"],
+  "Partially Completed": ["Partially Completed", "In Progress", "Reading"],
+  "Skipped": ["Skipped", "Not Needed", "To Read"],
+};
+function bridgeStatus(taskStatus, targetOptions) {
+  const candidates = STATUS_BRIDGE_MAP[taskStatus] || [taskStatus];
+  for (const c of candidates) if (targetOptions.includes(c)) return c;
+  return targetOptions[0];
+}
 
 const STATUS_COLOR = {
   "Not Started": "neutral", "Yet to Start": "neutral", "To Read": "neutral",
@@ -277,32 +295,36 @@ function applyTrimRules(blocks, availableMinutes) {
 
 
 // Detailed subtopics intentionally left for the user to add / import from the real syllabus PDF.
+// "gsPaper" + "coverage" capture the exam structure; "subject" is left blank
+// (except where obvious, e.g. the optional) so it can be assigned from the
+// real subject list on this Settings-managed list — that's what Class
+// Lecture's subject-wise dropdowns key off.
 const SYLLABUS_SEED = [
-  { paper: "Prelims", subject: "GS Paper I", topic: "Current Events of National & International Importance" },
-  { paper: "Prelims", subject: "GS Paper I", topic: "History of India & Indian National Movement" },
-  { paper: "Prelims", subject: "GS Paper I", topic: "Indian & World Geography" },
-  { paper: "Prelims", subject: "GS Paper I", topic: "Indian Polity & Governance" },
-  { paper: "Prelims", subject: "GS Paper I", topic: "Economic & Social Development" },
-  { paper: "Prelims", subject: "GS Paper I", topic: "Environment, Ecology, Biodiversity & Climate Change" },
-  { paper: "Prelims", subject: "GS Paper I", topic: "General Science" },
-  { paper: "Prelims", subject: "GS Paper II (CSAT)", topic: "Comprehension" },
-  { paper: "Prelims", subject: "GS Paper II (CSAT)", topic: "Logical Reasoning & Analytical Ability" },
-  { paper: "Prelims", subject: "GS Paper II (CSAT)", topic: "Decision Making & Problem Solving" },
-  { paper: "Prelims", subject: "GS Paper II (CSAT)", topic: "General Mental Ability / Basic Numeracy / Data Interpretation" },
-  { paper: "Mains", subject: "Essay", topic: "Essay Paper" },
-  { paper: "Mains", subject: "GS Paper I", topic: "Indian Heritage & Culture" },
-  { paper: "Mains", subject: "GS Paper I", topic: "Indian & World History" },
-  { paper: "Mains", subject: "GS Paper I", topic: "Geography of the World & Society" },
-  { paper: "Mains", subject: "GS Paper II", topic: "Governance, Constitution, Polity" },
-  { paper: "Mains", subject: "GS Paper II", topic: "Social Justice" },
-  { paper: "Mains", subject: "GS Paper II", topic: "International Relations" },
-  { paper: "Mains", subject: "GS Paper III", topic: "Technology, Economic Development" },
-  { paper: "Mains", subject: "GS Paper III", topic: "Biodiversity & Environment" },
-  { paper: "Mains", subject: "GS Paper III", topic: "Security & Disaster Management" },
-  { paper: "Mains", subject: "GS Paper IV", topic: "Ethics, Integrity & Aptitude" },
-  { paper: "Mains", subject: "Optional Paper I", topic: "Tamil Literature — add sections after syllabus import" },
-  { paper: "Mains", subject: "Optional Paper II", topic: "Tamil Literature — add sections after syllabus import" },
-  { paper: "Interview", subject: "Personality Test", topic: "Personality Test" },
+  { paper: "Prelims", coverage: "Prelims Only", gsPaper: "GS Paper I", subject: "", topic: "Current Events of National & International Importance" },
+  { paper: "Prelims", coverage: "Prelims Only", gsPaper: "GS Paper I", subject: "History", topic: "History of India & Indian National Movement" },
+  { paper: "Prelims", coverage: "Prelims Only", gsPaper: "GS Paper I", subject: "Geography", topic: "Indian & World Geography" },
+  { paper: "Prelims", coverage: "Prelims Only", gsPaper: "GS Paper I", subject: "Polity", topic: "Indian Polity & Governance" },
+  { paper: "Prelims", coverage: "Prelims Only", gsPaper: "GS Paper I", subject: "Economy", topic: "Economic & Social Development" },
+  { paper: "Prelims", coverage: "Prelims Only", gsPaper: "GS Paper I", subject: "Environment & Ecology", topic: "Environment, Ecology, Biodiversity & Climate Change" },
+  { paper: "Prelims", coverage: "Prelims Only", gsPaper: "GS Paper I", subject: "Science & Technology", topic: "General Science" },
+  { paper: "Prelims", coverage: "Prelims Only", gsPaper: "CSAT", subject: "CSAT", topic: "Comprehension" },
+  { paper: "Prelims", coverage: "Prelims Only", gsPaper: "CSAT", subject: "CSAT", topic: "Logical Reasoning & Analytical Ability" },
+  { paper: "Prelims", coverage: "Prelims Only", gsPaper: "CSAT", subject: "CSAT", topic: "Decision Making & Problem Solving" },
+  { paper: "Prelims", coverage: "Prelims Only", gsPaper: "CSAT", subject: "CSAT", topic: "General Mental Ability / Basic Numeracy / Data Interpretation" },
+  { paper: "Mains", coverage: "Mains Only", gsPaper: "Essay", subject: "Essay", topic: "Essay Paper" },
+  { paper: "Mains", coverage: "Prelims + Mains", gsPaper: "GS Paper I", subject: "Art & Culture", topic: "Indian Heritage & Culture" },
+  { paper: "Mains", coverage: "Prelims + Mains", gsPaper: "GS Paper I", subject: "History", topic: "Indian & World History" },
+  { paper: "Mains", coverage: "Prelims + Mains", gsPaper: "GS Paper I", subject: "Geography", topic: "Geography of the World & Society" },
+  { paper: "Mains", coverage: "Prelims + Mains", gsPaper: "GS Paper II", subject: "Polity", topic: "Governance, Constitution, Polity" },
+  { paper: "Mains", coverage: "Mains Only", gsPaper: "GS Paper II", subject: "Polity", topic: "Social Justice" },
+  { paper: "Mains", coverage: "Mains Only", gsPaper: "GS Paper II", subject: "Polity", topic: "International Relations" },
+  { paper: "Mains", coverage: "Prelims + Mains", gsPaper: "GS Paper III", subject: "Science & Technology", topic: "Technology, Economic Development" },
+  { paper: "Mains", coverage: "Prelims + Mains", gsPaper: "GS Paper III", subject: "Environment & Ecology", topic: "Biodiversity & Environment" },
+  { paper: "Mains", coverage: "Mains Only", gsPaper: "GS Paper III", subject: "", topic: "Security & Disaster Management" },
+  { paper: "Mains", coverage: "Mains Only", gsPaper: "GS Paper IV", subject: "Ethics (GS4)", topic: "Ethics, Integrity & Aptitude" },
+  { paper: "Mains", coverage: "Mains Only", gsPaper: "Optional Paper I", subject: "Tamil Literature", topic: "Tamil Literature — add sections after syllabus import" },
+  { paper: "Mains", coverage: "Mains Only", gsPaper: "Optional Paper II", subject: "Tamil Literature", topic: "Tamil Literature — add sections after syllabus import" },
+  { paper: "Interview", coverage: "Mains Only", gsPaper: "Personality Test", subject: "", topic: "Personality Test" },
 ];
 
 const STORAGE_KEYS = [
@@ -377,6 +399,14 @@ function subtopicOptionsForSubject(db, subject) {
   const set = new Set();
   db.syllabus.filter(s => s.subject === subject && s.subtopic).forEach(s => set.add(s.subtopic));
   db.classes.filter(c => c.subject === subject && c.subtopic).forEach(c => set.add(c.subtopic));
+  return Array.from(set);
+}
+// Narrower than the above: subtopics for one specific topic under a subject —
+// powers the cascading Subtopic dropdown on Class Lecture entry.
+function subtopicOptionsForTopic(db, subject, topic) {
+  const set = new Set();
+  db.syllabus.filter(s => s.subject === subject && s.topic === topic && s.subtopic).forEach(s => set.add(s.subtopic));
+  db.classes.filter(c => c.subject === subject && c.topic === topic && c.subtopic).forEach(c => set.add(c.subtopic));
   return Array.from(set);
 }
 function weekStartISO(iso) {
@@ -1001,6 +1031,43 @@ function OfficePlanBlock({ office, travelTo, travelFro, onSkipAll, onStatusChang
   );
 }
 
+// Finds the single, unambiguous tracker record a plan block's status buttons
+// should write through to (so picking "Completed" etc. here shows up on the
+// Reading / Tamil / Current Affairs / GS Answer Writing / AI Learning pages
+// instead of only changing the day-plan's own copy of the status). Returns
+// null when there's no linked record, or more than one and it'd be a guess
+// which one the person means — in that case the button only affects the
+// day-plan block itself, same as before.
+function getLinkedStatusBridge(link, db, updateSlice, dateISO) {
+  if (link === "tamilReading") {
+    const target = db.tamilReading.find(r => r.status !== "Completed");
+    if (!target) return null;
+    return { options: READ_STATUS, apply: val => updateSlice("tamilReading", prev => prev.map(x => x.id === target.id
+      ? { ...x, status: val, history: [...(x.history || []), { field: "Status", from: x.status || "(empty)", to: val, at: new Date().toISOString() }] } : x)) };
+  }
+  if (link === "tamilWriting") {
+    const todays = db.tamilWriting.filter(t => t.date === dateISO);
+    if (todays.length !== 1) return null;
+    return { options: TASK_STATUS, apply: val => updateSlice("tamilWriting", prev => prev.map(x => x.id === todays[0].id ? { ...x, status: val } : x)) };
+  }
+  if (link === "currentAffairs") {
+    const todays = db.currentAffairs.filter(c => c.date === dateISO);
+    if (todays.length !== 1) return null;
+    return { options: CA_STATUS, apply: val => updateSlice("currentAffairs", prev => prev.map(x => x.id === todays[0].id ? { ...x, status: val } : x)) };
+  }
+  if (link === "gsWriting") {
+    const todays = db.answerWriting.filter(a => a.date === dateISO);
+    if (todays.length !== 1) return null;
+    return { options: TASK_STATUS, apply: val => updateSlice("answerWriting", prev => prev.map(x => x.id === todays[0].id ? { ...x, status: val } : x)) };
+  }
+  if (link === "aiLearning") {
+    const todays = db.aiLearning.filter(a => a.date === dateISO);
+    if (todays.length !== 1) return null;
+    return { options: AI_STATUS, apply: val => updateSlice("aiLearning", prev => prev.map(x => x.id === todays[0].id ? { ...x, status: val } : x)) };
+  }
+  return null;
+}
+
 function PlanBlock({ block, onUpdate, onMoveUp, onMoveDown, onRemove, db, updateSlice, dateISO, yesterdayISO, onNavigate }) {
   const statusTone = colorFor(block.status === "Completed" ? "Completed" : block.status);
   return (
@@ -1028,7 +1095,11 @@ function PlanBlock({ block, onUpdate, onMoveUp, onMoveDown, onRemove, db, update
             <div className="ucc-flex wrap" style={{ marginTop: 6 }}>
               {TASK_STATUS.map(s => (
                 <button key={s} className="ucc-btn ghost" style={{ padding: "3px 8px", fontWeight: block.status === s ? 800 : 600, background: block.status === s ? "var(--grey-soft)" : undefined }}
-                  onClick={() => onUpdate({ status: s, completedAt: s === "Completed" ? new Date().toISOString() : block.completedAt })}>
+                  onClick={() => {
+                    onUpdate({ status: s, completedAt: s === "Completed" ? new Date().toISOString() : block.completedAt });
+                    const bridge = getLinkedStatusBridge(block.link, db, updateSlice, dateISO);
+                    if (bridge) bridge.apply(bridgeStatus(s, bridge.options));
+                  }}>
                   {s}
                 </button>
               ))}
@@ -1041,6 +1112,7 @@ function PlanBlock({ block, onUpdate, onMoveUp, onMoveDown, onRemove, db, update
 }
 
 function LinkedTaskInfo({ link, db, updateSlice, dateISO, yesterdayISO, onNavigate }) {
+  const [prevTab, setPrevTab] = useState("notes");
   if (link === "prevClass") {
     // Just the single most recently completed class before today — not every
     // pending item, and not strictly "yesterday" (in case a day was skipped).
@@ -1048,37 +1120,102 @@ function LinkedTaskInfo({ link, db, updateSlice, dateISO, yesterdayISO, onNaviga
       .filter(c => c.status === "Completed" && c.date < dateISO)
       .sort((a, b) => (b.date + (b.completedAt || "")).localeCompare(a.date + (a.completedAt || "")))[0];
     if (!latest) return <EmptyState>No completed class to review yet.</EmptyState>;
-    const r = db.reading.find(x => normKey(x.subject, x.topic) === normKey(latest.subject, latest.topic));
+    const readingKey = normKey(latest.subject, latest.topic);
+    const r = db.reading.find(x => normKey(x.subject, x.topic) === readingKey);
+    const sp = db.singlePager.find(x => normKey(x.subject, x.topic) === readingKey);
+
+    // Writes straight into the same "reading" record shown on the Reading
+    // tab — creating it first (matching upsertReadingForTopic) if the class
+    // was logged before this widget existed.
+    function updateReadingField(field, val) {
+      updateSlice("reading", prev => {
+        const exists = prev.some(x => normKey(x.subject, x.topic) === readingKey);
+        const base = exists ? prev : upsertReadingForTopic(prev, latest.subject, latest.topic, latest.classNumber, latest.date);
+        return base.map(x => normKey(x.subject, x.topic) === readingKey
+          ? { ...x, [field]: val, history: [...(x.history || []), { field, from: x[field] || "(empty)", to: val, at: new Date().toISOString() }] }
+          : x);
+      });
+    }
+    // Same idea for the linked Single Pager record.
+    function updateSinglePagerStatus(val) {
+      updateSlice("singlePager", prev => {
+        const exists = prev.some(x => normKey(x.subject, x.topic) === readingKey);
+        const base = exists ? prev : [...prev, { id: uid(), subject: latest.subject, topic: latest.topic, classNotes: "", handout: "", ncert: "", standardBooks: "", writing: "Not Started", status: "Not Started", history: [] }];
+        return base.map(x => normKey(x.subject, x.topic) === readingKey
+          ? { ...x, status: val, history: [...(x.history || []), { field: "Status", from: x.status || "(empty)", to: val, at: new Date().toISOString() }] }
+          : x);
+      });
+    }
+
+    const PC_TABS = [
+      { id: "notes", label: "Class Notes" },
+      { id: "std", label: "Std Books" },
+      { id: "ncert", label: "NCERT" },
+      { id: "sp", label: "Single Pager" },
+      { id: "revision", label: "Revision" },
+    ];
+
     return (
-      <div className="ucc-tiny">
-        Read <strong>{latest.subject} — Class {latest.classNumber}: {latest.topic}</strong>
-        {latest.date !== yesterdayISO && <span className="ucc-tiny" style={{ marginLeft: 6 }}>(from {latest.date})</span>}
-        {r && (
-          <span style={{ marginLeft: 6 }}>
-            <Badge tone={colorFor(r.classNotes)}>Notes: {r.classNotes}</Badge>{" "}
-            <Badge tone={colorFor(r.standardMaterial)}>Std: {r.standardMaterial}</Badge>{" "}
-            <Badge tone={colorFor(r.ncert)}>NCERT: {r.ncert}</Badge>
-          </span>
+      <div>
+        <div className="ucc-tiny" style={{ marginBottom: 6 }}>
+          Read <strong>{latest.subject} — Class {latest.classNumber}: {latest.topic}</strong>
+          {latest.date !== yesterdayISO && <span className="ucc-tiny" style={{ marginLeft: 6 }}>(from {latest.date})</span>}
+        </div>
+        <div className="ucc-tabbar" style={{ marginBottom: 8 }}>
+          {PC_TABS.map(t => (
+            <button key={t.id} className={prevTab === t.id ? "active" : ""} onClick={() => setPrevTab(t.id)}>{t.label}</button>
+          ))}
+        </div>
+        {prevTab === "notes" && (
+          <div className="ucc-flex"><span className="ucc-tiny">Class notes:</span>
+            <StatusSelect value={r ? r.classNotes : "Yet to Start"} options={READ_STATUS} onChange={v => updateReadingField("classNotes", v)} /></div>
+        )}
+        {prevTab === "std" && (
+          <div className="ucc-flex"><span className="ucc-tiny">Standard material:</span>
+            <StatusSelect value={r ? r.standardMaterial : "Yet to Start"} options={READ_STATUS} onChange={v => updateReadingField("standardMaterial", v)} /></div>
+        )}
+        {prevTab === "ncert" && (
+          <div className="ucc-flex"><span className="ucc-tiny">NCERT:</span>
+            <StatusSelect value={r ? r.ncert : "Yet to Start"} options={READ_STATUS} onChange={v => updateReadingField("ncert", v)} /></div>
+        )}
+        {prevTab === "sp" && (
+          <div className="ucc-flex"><span className="ucc-tiny">Single pager:</span>
+            <StatusSelect value={sp ? sp.status : "Not Started"} options={SP_STATUS} onChange={updateSinglePagerStatus} /></div>
+        )}
+        {prevTab === "revision" && (
+          <div className="ucc-flex wrap">
+            <span className="ucc-tiny">Revision 1:</span>
+            <StatusSelect value={r ? r.revision1 : "Yet to Start"} options={READ_STATUS} onChange={v => updateReadingField("revision1", v)} />
+            <span className="ucc-tiny">Revision 2:</span>
+            <StatusSelect value={r ? r.revision2 : "Yet to Start"} options={READ_STATUS} onChange={v => updateReadingField("revision2", v)} />
+          </div>
         )}
       </div>
     );
   }
-  if (link === "classLecture") return <ClassLectureWidget db={db} updateSlice={updateSlice} dateISO={dateISO} />;
+  if (link === "classLecture") return <ClassLectureWidget db={db} updateSlice={updateSlice} dateISO={dateISO} onNavigate={onNavigate} />;
   if (link === "tamilReading") return <QuickPickWidget list={db.tamilReading} setList={u => updateSlice("tamilReading", u)}
     labelFn={r => r.topic} statusField="status" statusOptions={READ_STATUS.filter(s => s !== "Not Needed")}
-    empty="No Tamil literature reading topics tracked yet." addFields={[{ key: "topic", label: "Topic" }, { key: "source", label: "Source" }]} newRecord={() => ({ topic: "", source: "", status: "Yet to Start", notes: "", revision: "Yet to Start" })} />;
+    empty="No Tamil literature reading topics tracked yet." addFields={[{ key: "topic", label: "Topic" }, { key: "source", label: "Source" }]} newRecord={() => ({ topic: "", source: "", status: "Yet to Start", notes: "", revision: "Yet to Start" })}
+    noteField="notes" noteLabel="What I've Learned" />;
   if (link === "tamilWriting") {
     const todays = db.tamilWriting.filter(t => t.date === dateISO);
     return <TodayListWidget items={todays} labelFn={t => `${t.topic} (${t.wordLimit || "?"} words)`} statusField="status" statusOptions={TASK_STATUS}
       setList={u => updateSlice("tamilWriting", u)} empty="No Tamil answer-writing task logged for today."
-      addFields={[{ key: "topic", label: "Topic" }, { key: "question", label: "Question" }, { key: "wordLimit", label: "Word limit" }]}
+      addFields={[{ key: "topic", label: "Topic" }, { key: "question", label: "Question", textarea: true }, { key: "wordLimit", label: "Word limit" }]}
       newRecord={() => ({ date: dateISO, question: "", topic: "", wordLimit: 150, answerWritten: "", selfEvaluation: "", status: "Not Started" })} />;
   }
   if (link === "currentAffairs") {
     const todays = db.currentAffairs.filter(c => c.date === dateISO);
     return <TodayListWidget items={todays} labelFn={c => c.title || "(untitled)"} statusField="status" statusOptions={CA_STATUS}
       setList={u => updateSlice("currentAffairs", u)} empty="No current affairs added for today."
-      addNew={() => updateSlice("currentAffairs", prev => [...prev, { id: uid(), date: dateISO, title: "", source: "", subject: "", relevantSyllabusTopic: "", prelims: false, mains: false, notes: "", status: "To Read", history: [] }])} />;
+      addFields={[
+        { key: "title", label: "Title" },
+        { key: "source", label: "Source" },
+        { key: "subject", label: "Subject" },
+        { key: "subtopic", label: "Subtopic" },
+      ]}
+      newRecord={() => ({ date: dateISO, title: "", source: "", subject: "", subtopic: "", relevantSyllabusTopic: "", prelims: false, mains: false, notes: "", status: "To Read", history: [] })} />;
   }
   if (link === "gsReading") {
     // Any topic with pending reference reading — no longer requires Class
@@ -1106,7 +1243,13 @@ function LinkedTaskInfo({ link, db, updateSlice, dateISO, yesterdayISO, onNaviga
     const todays = db.answerWriting.filter(a => a.date === dateISO);
     return <TodayListWidget items={todays} labelFn={a => `${a.gsPaper || "GS"} — ${a.topic}`} statusField="status" statusOptions={TASK_STATUS}
       setList={u => updateSlice("answerWriting", u)} empty="No GS answer-writing target set for today."
-      addNew={() => updateSlice("answerWriting", prev => [...prev, { id: uid(), date: dateISO, gsPaper: "GS1", topic: "", question: "", wordLimit: 150, answer: "", status: "Not Started", selfScore: "", improvementNotes: "", history: [] }])} />;
+      addFields={[
+        { key: "gsPaper", label: "GS Paper", options: ["GS1", "GS2", "GS3", "GS4", "Essay"] },
+        { key: "topic", label: "Topic" },
+        { key: "question", label: "Question", textarea: true },
+        { key: "wordLimit", label: "Word limit" },
+      ]}
+      newRecord={() => ({ date: dateISO, gsPaper: "GS1", topic: "", question: "", wordLimit: 150, answer: "", status: "Not Started", selfScore: "", improvementNotes: "", history: [] })} />;
   }
   if (link === "aiLearning") {
     const todays = db.aiLearning.filter(a => a.date === dateISO);
@@ -1118,19 +1261,20 @@ function LinkedTaskInfo({ link, db, updateSlice, dateISO, yesterdayISO, onNaviga
   return null;
 }
 
-function ClassLectureWidget({ db, updateSlice, dateISO }) {
+function ClassLectureWidget({ db, updateSlice, dateISO, onNavigate }) {
   const [subject, setSubject] = useState(db.settings.subjects[0] || "");
   const [classNumber, setClassNumber] = useState("");
   const [topic, setTopic] = useState("");
   const [subtopic, setSubtopic] = useState("");
   const [eta, setEta] = useState("");
   const topicOptions = topicOptionsForSubject(db, subject);
-  const subtopicOptions = subtopicOptionsForSubject(db, subject);
-  const dlId = "cl-topics-" + slugify(subject);
-  const dlSubId = "cl-subtopics-" + slugify(subject);
+  const subtopicOptions = subtopicOptionsForTopic(db, subject, topic);
+
+  function onSubjectChange(v) { setSubject(v); setTopic(""); setSubtopic(""); }
+  function onTopicChange(v) { setTopic(v); setSubtopic(""); }
 
   function markCompleted() {
-    if (!topic.trim()) { window.alert("Enter a topic before marking the class completed."); return; }
+    if (!topic) { window.alert("Select a topic (added on the Syllabus tab) before marking the class completed."); return; }
     const classNum = classNumber || (Math.max(0, ...db.classes.filter(c => c.subject === subject).map(c => Number(c.classNumber) || 0)) + 1);
     updateSlice("classes", prev => [...prev, {
       id: uid(), date: dateISO, subject, totalClasses: "", classNumber: classNum, eta, topic, subtopic,
@@ -1141,26 +1285,47 @@ function ClassLectureWidget({ db, updateSlice, dateISO }) {
   }
 
   return (
-    <div className="ucc-grid" style={{ gridTemplateColumns: "1fr 0.7fr 1.4fr 1.4fr 1fr auto" }}>
-      <datalist id={dlId}>{topicOptions.map(t => <option key={t} value={t} />)}</datalist>
-      <datalist id={dlSubId}>{subtopicOptions.map(t => <option key={t} value={t} />)}</datalist>
-      <select className="ucc-select" value={subject} onChange={e => setSubject(e.target.value)}>
-        {db.settings.subjects.map(s => <option key={s} value={s}>{s}</option>)}
-      </select>
-      <input className="ucc-input" placeholder="Class #" value={classNumber} onChange={e => setClassNumber(e.target.value)} />
-      <input className="ucc-input" list={dlId} placeholder="Topic" value={topic} onChange={e => setTopic(e.target.value)} />
-      <input className="ucc-input" list={dlSubId} placeholder="Subtopic" value={subtopic} onChange={e => setSubtopic(e.target.value)} />
-      <input className="ucc-input" type="date" placeholder="ETA" value={eta} onChange={e => setEta(e.target.value)} />
-      <button className="ucc-btn primary" onClick={markCompleted}><Check size={14} /> Mark class completed</button>
+    <div>
+      <div className="ucc-grid" style={{ gridTemplateColumns: "1fr 0.7fr 1.4fr 1.4fr 1fr auto" }}>
+        <select className="ucc-select" value={subject} onChange={e => onSubjectChange(e.target.value)}>
+          {db.settings.subjects.map(s => <option key={s} value={s}>{s}</option>)}
+        </select>
+        <input className="ucc-input ucc-mono" type="number" inputMode="numeric" placeholder="Class #" value={classNumber}
+          onChange={e => setClassNumber(e.target.value.replace(/[^0-9]/g, ""))} />
+        <select className="ucc-select" value={topic} onChange={e => onTopicChange(e.target.value)}>
+          <option value="">{topicOptions.length ? "Select topic…" : "No syllabus topics for this subject yet"}</option>
+          {topicOptions.map(t => <option key={t} value={t}>{t}</option>)}
+        </select>
+        <select className="ucc-select" value={subtopic} onChange={e => setSubtopic(e.target.value)} disabled={!topic}>
+          <option value="">{subtopicOptions.length ? "Select subtopic (optional)…" : "—"}</option>
+          {subtopicOptions.map(t => <option key={t} value={t}>{t}</option>)}
+        </select>
+        <input className="ucc-input" type="date" placeholder="ETA" value={eta} onChange={e => setEta(e.target.value)} />
+        <button className="ucc-btn primary" onClick={markCompleted}><Check size={14} /> Mark class completed</button>
+      </div>
+      {topicOptions.length === 0 && (
+        <div className="ucc-tiny" style={{ marginTop: 6 }}>
+          No topics tagged to <strong>{subject}</strong> in the Syllabus yet.{" "}
+          {onNavigate && <button className="ucc-btn ghost" style={{ padding: "2px 6px" }} onClick={() => onNavigate("syllabus")}>Add them on the Syllabus tab →</button>}
+        </div>
+      )}
     </div>
   );
 }
 
 function InlineAddForm({ fields, onSave, onCancel }) {
-  const [draft, setDraft] = useState({});
+  const [draft, setDraft] = useState(() => Object.fromEntries(fields.filter(f => f.options).map(f => [f.key, f.options[0]])));
   return (
     <div className="ucc-flex wrap" style={{ marginTop: 6 }}>
-      {fields.map(f => (
+      {fields.map(f => f.options ? (
+        <select key={f.key} className="ucc-select" style={{ maxWidth: 140 }} value={draft[f.key] ?? f.options[0]}
+          onChange={e => setDraft(d => ({ ...d, [f.key]: e.target.value }))}>
+          {f.options.map(o => <option key={o} value={o}>{o}</option>)}
+        </select>
+      ) : f.textarea ? (
+        <textarea key={f.key} className="ucc-textarea" placeholder={f.label} value={draft[f.key] || ""}
+          onChange={e => setDraft(d => ({ ...d, [f.key]: e.target.value }))} style={{ minWidth: 200, flex: "1 1 200px" }} rows={2} />
+      ) : (
         <input key={f.key} className="ucc-input" placeholder={f.label} value={draft[f.key] || ""}
           onChange={e => setDraft(d => ({ ...d, [f.key]: e.target.value }))} style={{ maxWidth: 160 }} />
       ))}
@@ -1195,16 +1360,25 @@ function TodayListWidget({ items, labelFn, statusField, statusOptions, setList, 
   );
 }
 
-function QuickPickWidget({ list, setList, labelFn, statusField, statusOptions, empty, newRecord, addFields }) {
+function QuickPickWidget({ list, setList, labelFn, statusField, statusOptions, empty, newRecord, addFields, noteField, noteLabel }) {
   const [adding, setAdding] = useState(false);
   const pending = list.filter(r => r[statusField] !== "Completed");
   const next = pending[0];
   return (
     <div>
       {!next ? <EmptyState>{empty}</EmptyState> : (
-        <div className="ucc-flex between">
-          <span className="ucc-tiny">{labelFn(next)}</span>
-          <StatusSelect value={next[statusField]} options={statusOptions} onChange={v => setList(prev => prev.map(x => x.id === next.id ? { ...x, [statusField]: v } : x))} />
+        <div>
+          <div className="ucc-flex between">
+            <span className="ucc-tiny">{labelFn(next)}</span>
+            <StatusSelect value={next[statusField]} options={statusOptions} onChange={v => setList(prev => prev.map(x => x.id === next.id ? { ...x, [statusField]: v } : x))} />
+          </div>
+          {noteField && (
+            <div style={{ marginTop: 6 }}>
+              <label className="ucc-tiny">{noteLabel || "Notes"}</label>
+              <textarea className="ucc-textarea" rows={2} value={next[noteField] || ""}
+                onChange={e => setList(prev => prev.map(x => x.id === next.id ? { ...x, [noteField]: e.target.value } : x))} />
+            </div>
+          )}
         </div>
       )}
       {addFields ? (
@@ -1261,7 +1435,7 @@ function ClassesTab({ db, updateSlice }) {
           columns={[
             { key: "date", label: "Date", type: "date", width: 120 },
             { key: "subject", label: "Subject", width: 130 },
-            { key: "classNumber", label: "Class #", width: 70 },
+            { key: "classNumber", label: "Class #", type: "number", width: 70 },
             { key: "totalClasses", label: "Total Classes", width: 90 },
             { key: "topic", label: "Topic", width: 180, datalist: rec => "topics-" + slugify(rec.subject) },
             { key: "subtopic", label: "Subtopic", width: 160, datalist: rec => "subtopics-" + slugify(rec.subject) },
@@ -1285,7 +1459,7 @@ function ReadingTab({ db, updateSlice }) {
         columns={[
           { key: "date", label: "Date", type: "date", width: 110 },
           { key: "subject", label: "Subject", width: 120 },
-          { key: "classNumber", label: "Class #", width: 65 },
+          { key: "classNumber", label: "Class #", type: "number", width: 65 },
           { key: "topic", label: "Topic", width: 200 },
           { key: "classNotes", label: "Class Notes", type: "status", options: READ_STATUS, width: 130 },
           { key: "standardMaterial", label: "Standard Material", type: "status", options: READ_STATUS, width: 130 },
@@ -1315,6 +1489,9 @@ function SyllabusTab({ db, updateSlice }) {
         <div className="ucc-tiny" style={{ marginTop: 6, color: "var(--ink-muted)" }}>
           This starts from the standard top-level UPSC structure only. Upload your actual syllabus PDF via Import/Export to expand it into real sub-topics — nothing here is a substitute for the official document.
         </div>
+        <div className="ucc-tiny" style={{ marginTop: 6, color: "var(--ink-muted)" }}>
+          Set <strong>Subject</strong> on each row below — that's what powers the subject-wise Topic/Subtopic dropdowns on the Class Lecture slot in Today's plan. Add or rename subjects on the Settings tab.
+        </div>
       </div>
       {Object.entries(byPaper).map(([paper, items]) => (
         <div className="ucc-card" key={paper}>
@@ -1328,13 +1505,15 @@ function SyllabusTab({ db, updateSlice }) {
               });
             }}
             columns={[
-              { key: "subject", label: "Subject", width: 160 },
-              { key: "topic", label: "Topic", width: 260 },
+              { key: "coverage", label: "Coverage", type: "select", options: COVERAGE_OPTIONS, width: 130 },
+              { key: "gsPaper", label: "GS Paper", type: "select", options: GS_PAPER_OPTIONS, width: 140 },
+              { key: "subject", label: "Subject", type: "select", options: db.settings.subjects, width: 150 },
+              { key: "topic", label: "Topic", width: 240 },
               { key: "subtopic", label: "Subtopic", width: 180 },
               { key: "studyStatus", label: "Study Status", type: "status", options: SYLLABUS_STATUS, width: 130 },
               { key: "revisionStatus", label: "Revision Status", type: "status", options: SYLLABUS_STATUS, width: 130 },
             ]}
-            newRecord={() => ({ paper, subject: "", topic: "", subtopic: "", studyStatus: "Not Started", revisionStatus: "Not Started" })}
+            newRecord={() => ({ paper, coverage: "", gsPaper: "", subject: db.settings.subjects[0] || "", topic: "", subtopic: "", studyStatus: "Not Started", revisionStatus: "Not Started" })}
           />
         </div>
       ))}
@@ -1424,7 +1603,7 @@ function TamilTab({ db, updateSlice }) {
             { key: "source", label: "Source", width: 160 },
             { key: "status", label: "Status", type: "status", options: READ_STATUS, width: 120 },
             { key: "revision", label: "Revision", type: "status", options: READ_STATUS, width: 120 },
-            { key: "notes", label: "Notes", type: "textarea", width: 220 },
+            { key: "notes", label: "What I've Learned", type: "textarea", width: 220 },
           ]}
           newRecord={() => ({ topic: "", source: "", status: "Yet to Start", revision: "Yet to Start", notes: "" })}
         />
@@ -1457,12 +1636,13 @@ function CurrentAffairsTab({ db, updateSlice }) {
           { key: "title", label: "Topic / Title", width: 200 },
           { key: "source", label: "Source", width: 130 },
           { key: "subject", label: "Subject", width: 120 },
+          { key: "subtopic", label: "Subtopic", width: 140 },
           { key: "relevantSyllabusTopic", label: "Syllabus Topic", width: 160 },
           { key: "prelims", label: "Prelims", type: "select", options: ["Yes", "No"], width: 90 },
           { key: "mains", label: "Mains", type: "select", options: ["Yes", "No"], width: 90 },
           { key: "status", label: "Status", type: "status", options: CA_STATUS, width: 110 },
         ]}
-        newRecord={() => ({ date: todayISO(), title: "", source: "", subject: "", relevantSyllabusTopic: "", prelims: "", mains: "", notes: "", status: "To Read" })}
+        newRecord={() => ({ date: todayISO(), title: "", source: "", subject: "", subtopic: "", relevantSyllabusTopic: "", prelims: "", mains: "", notes: "", status: "To Read" })}
       />
     </div>
   );
