@@ -59,8 +59,16 @@ summary will do.
 - **Data model**: a single `kv_store` table (`user_id`, `key`, `value
   jsonb`), one JSON blob per tracker, scoped per-user with Row Level
   Security (see `supabase/schema.sql`). Trackers are JSON documents, not
-  normalized relational tables — cross-tracker relationships are currently
-  resolved in client-side JS, not SQL joins.
+  normalized relational tables — cross-tracker relationships are mostly
+  resolved in client-side JS, not SQL joins. The Syllabus tracker is the
+  hierarchy anchor (Subject → Topic → Subtopic → Micro Topic, each row with
+  a stable `id`); Classes and Reading rows created via the Class Lecture
+  flow also carry a `syllabusId` pointing at that row (see
+  `findSyllabusId`), so they stay correctly grouped in Topic Master even if
+  the syllabus topic's text is renamed later. Other trackers still join by
+  subject/topic text only — extending `syllabusId` to them is a known,
+  intentionally-deferred follow-up (see PR/commit history), not an
+  oversight.
 - **Import/export**: `xlsx` for Excel, plus JSON export, applied generically
   across trackers.
 - **Auth**: Supabase email/password, single-user by design.

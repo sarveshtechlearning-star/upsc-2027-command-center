@@ -364,7 +364,7 @@ function defaultDB() {
       slotTemplate: [...CORE_SLOT_TEMPLATE, AI_BLOCK],
       driveFolderId: null, // cached id of the Google Drive folder used for Single Pager PDFs
     },
-    syllabus: SYLLABUS_SEED.map(s => ({ id: uid(), ...s, subtopic: "", studyStatus: "Not Started", revisionStatus: "Not Started", history: [] })),
+    syllabus: SYLLABUS_SEED.map(s => ({ id: uid(), ...s, subtopic: "", microtopic: "", studyStatus: "Not Started", revisionStatus: "Not Started", history: [] })),
     classes: [], reading: [], singlePager: [], ncert: [], standardBooks: [],
     tamilReading: [], tamilWriting: [], currentAffairs: [], answerWriting: [], aiLearning: [],
     dailyPlans: {}, dailyReviews: {}, weeklyReviews: {},
@@ -429,6 +429,29 @@ function subtopicOptionsForTopic(db, subject, topic) {
   db.syllabus.filter(s => s.subject === subject && s.topic === topic && s.subtopic).forEach(s => set.add(s.subtopic));
   db.classes.filter(c => c.subject === subject && c.topic === topic && c.subtopic).forEach(c => set.add(c.subtopic));
   return Array.from(set);
+}
+// Narrowest cascade level: micro-topics already used under one specific
+// subject/topic/subtopic combination — powers the Micro Topic dropdown on
+// the Syllabus tab.
+function microtopicOptionsForSubtopic(db, subject, topic, subtopic) {
+  const set = new Set();
+  db.syllabus.filter(s => s.subject === subject && s.topic === topic && s.subtopic === subtopic && s.microtopic).forEach(s => set.add(s.microtopic));
+  return Array.from(set);
+}
+// Resolves the stable Syllabus row id for a subject/topic/(subtopic)
+// combination, so other trackers can store a real foreign key instead of
+// relying on subject/topic text matching, which breaks once a syllabus
+// topic is renamed. Prefers an exact subtopic match; falls back to the
+// first row for the subject+topic pair when no subtopic is given/matched.
+// Returns null when no syllabus row exists yet for that combination.
+function findSyllabusId(db, { subject, topic, subtopic }) {
+  const candidates = db.syllabus.filter(s => s.subject === subject && s.topic === topic);
+  if (candidates.length === 0) return null;
+  if (subtopic) {
+    const exact = candidates.find(s => s.subtopic === subtopic);
+    if (exact) return exact.id;
+  }
+  return candidates[0].id;
 }
 function weekStartISO(iso) {
   const [y, m, d] = iso.split("-").map(Number);
@@ -696,6 +719,13 @@ function GenericTracker({ records, setRecords, columns, newRecord, emptyMessage,
     }));
   }
 
+  // Patches multiple fields on one record at once — used by "custom" columns
+  // (e.g. cascading dropdowns) that need to reset sibling fields when a
+  // parent selection changes, which a single-field updateField call can't do.
+  function updateFields(rec, patch) {
+    setRecords(prev => prev.map(r => (r.id === rec.id ? { ...r, ...patch } : r)));
+  }
+
   function removeRecord(id) {
     if (window.confirm("Delete this record? This cannot be undone.")) {
       setRecords(prev => prev.filter(r => r.id !== id));
@@ -740,7 +770,7 @@ function GenericTracker({ records, setRecords, columns, newRecord, emptyMessage,
                       {col.type === "status" ? (
                         <StatusSelect value={rec[col.key]} options={col.options} onChange={v => updateField(rec, col, v, true)} />
                       ) : col.type === "custom" ? (
-                        col.render(rec, (val, isStatus) => updateField(rec, col, val, isStatus))
+                        col.render(rec, (val, isStatus) => updateField(rec, col, val, isStatus), patch => updateFields(rec, patch))
                       ) : col.type === "date" ? (
                         <input type="date" className="ucc-input ucc-mono" value={rec[col.key] || ""} onChange={e => updateField(rec, col, e.target.value)} />
                       ) : col.type === "number" ? (
@@ -785,6 +815,53 @@ function GenericTracker({ records, setRecords, columns, newRecord, emptyMessage,
       </table>
       <button className="ucc-btn" style={{ marginTop: 10 }} onClick={addRecord}><Plus size={14} /> Add row</button>
     </div>
+  );
+}
+
+const ADD_NEW_VALUE = "__ucc_add_new__";
+
+// One cell in a chained subject → topic → subtopic → microtopic dropdown.
+// Shows existing values as options, always ends with "+ Add new" (which
+// swaps in a small text input, mirroring the Class Lecture add-topic flow).
+// `disabled` is used to enforce the chain — e.g. Topic stays disabled until
+// Subject is picked. `onSelect` fires for an existing value, `onAddNew`
+// fires with the trimmed typed value when a new one is confirmed.
+function CascadingSelectCell({ value, options, placeholder, disabled, onSelect, onAddNew }) {
+  const [adding, setAdding] = useState(false);
+  const [draft, setDraft] = useState("");
+
+  function handleChange(v) {
+    if (v === ADD_NEW_VALUE) { setAdding(true); setDraft(""); return; }
+    onSelect(v);
+  }
+  function confirmAdd() {
+    const name = draft.trim();
+    setAdding(false); setDraft("");
+    if (name) onAddNew(name);
+  }
+  function cancelAdd() { setAdding(false); setDraft(""); }
+
+  if (adding) {
+    return (
+      <div className="ucc-flex">
+        <input className="ucc-input" autoFocus placeholder="New value"
+          value={draft} onChange={e => setDraft(e.target.value)}
+          onKeyDown={e => { if (e.key === "Enter") confirmAdd(); if (e.key === "Escape") cancelAdd(); }} />
+        <IconBtn icon={Check} onClick={confirmAdd} title="Add" />
+        <IconBtn icon={X} onClick={cancelAdd} title="Cancel" />
+      </div>
+    );
+  }
+  // Keep a legacy/freeform value visible even if it's fallen out of the
+  // computed option list, so switching to this component never silently
+  // hides already-saved data.
+  const allOptions = value && !options.includes(value) ? [value, ...options] : options;
+  return (
+    <select className="ucc-select" value={value || ""} disabled={disabled} onChange={e => handleChange(e.target.value)}>
+      <option value="">{placeholder}</option>
+      {allOptions.map(o => <option key={o} value={o}>{o}</option>)}
+      <option value={ADD_NEW_VALUE}>+ Add new</option>
+    </select>
   );
 }
 
@@ -953,12 +1030,12 @@ function computePlanTimes(plan) {
 /* ============================================================
    PRIORITY / LINKING HELPERS
    ============================================================ */
-function upsertReadingForTopic(readingArr, subject, topic, classNumber, dateISO) {
+function upsertReadingForTopic(readingArr, subject, topic, classNumber, dateISO, syllabusId) {
   const key = normKey(subject, topic);
   const existing = readingArr.find(r => normKey(r.subject, r.topic) === key);
   if (existing) return readingArr;
   return [...readingArr, {
-    id: uid(), date: dateISO, subject, classNumber: classNumber || "", topic,
+    id: uid(), date: dateISO, subject, classNumber: classNumber || "", topic, syllabusId: syllabusId || null,
     classNotes: "In Progress", standardMaterial: "Yet to Start", ncert: "Yet to Start",
     revision1: "Yet to Start", revision2: "Yet to Start", history: [],
   }];
@@ -1351,7 +1428,7 @@ function LinkedTaskInfo({ link, db, updateSlice, dateISO, yesterdayISO, onNaviga
     function updateReadingField(field, val) {
       updateSlice("reading", prev => {
         const exists = prev.some(x => normKey(x.subject, x.topic) === readingKey);
-        const base = exists ? prev : upsertReadingForTopic(prev, latest.subject, latest.topic, latest.classNumber, latest.date);
+        const base = exists ? prev : upsertReadingForTopic(prev, latest.subject, latest.topic, latest.classNumber, latest.date, latest.syllabusId);
         return base.map(x => normKey(x.subject, x.topic) === readingKey
           ? { ...x, [field]: val, history: [...(x.history || []), { field, from: x[field] || "(empty)", to: val, at: new Date().toISOString() }] }
           : x);
@@ -1507,7 +1584,7 @@ function ClassLectureWidget({ db, updateSlice, dateISO }) {
     const name = newTopicName.trim();
     if (!name) { setAddingTopic(false); return; }
     updateSlice("syllabus", prev => [...prev, {
-      id: uid(), coverage: "", gsPaper: "", subject, topic: name, subtopic: "",
+      id: uid(), coverage: "", gsPaper: "", subject, topic: name, subtopic: "", microtopic: "",
       studyStatus: "Not Started", revisionStatus: "Not Started", history: [],
     }]);
     setTopic(name); setSubtopic(""); setAddingTopic(false); setNewTopicName("");
@@ -1517,11 +1594,15 @@ function ClassLectureWidget({ db, updateSlice, dateISO }) {
   function markCompleted() {
     if (!topic) { window.alert("Select a topic (added on the Syllabus tab) before marking the class completed."); return; }
     const classNum = classNumber || (Math.max(0, ...db.classes.filter(c => c.subject === subject).map(c => Number(c.classNumber) || 0)) + 1);
+    // Resolve the stable Syllabus row id for this subject/topic/subtopic so
+    // this class (and its auto-created Reading row) stay correctly linked
+    // even if the syllabus topic's name is edited later.
+    const syllabusId = findSyllabusId(db, { subject, topic, subtopic });
     updateSlice("classes", prev => [...prev, {
-      id: uid(), date: dateISO, subject, totalClasses: "", classNumber: classNum, eta, topic, subtopic,
+      id: uid(), date: dateISO, subject, totalClasses: "", classNumber: classNum, eta, topic, subtopic, syllabusId,
       status: "Completed", completedAt: new Date().toISOString(), history: [{ field: "Status", from: "(new)", to: "Completed", at: new Date().toISOString() }]
     }]);
-    updateSlice("reading", prev => upsertReadingForTopic(prev, subject, topic, classNum, dateISO));
+    updateSlice("reading", prev => upsertReadingForTopic(prev, subject, topic, classNum, dateISO, syllabusId));
     setTopic(""); setSubtopic(""); setClassNumber(""); setEta("");
   }
 
@@ -1688,7 +1769,7 @@ function ClassesTab({ db, updateSlice }) {
             { key: "eta", label: "ETA", type: "date", width: 120 },
             { key: "status", label: "Status", type: "status", options: TASK_STATUS, width: 150 },
           ]}
-          newRecord={() => ({ date: todayISO(), subject: db.settings.subjects[0] || "", classNumber: "", totalClasses: "", topic: "", subtopic: "", eta: "", status: "Not Started" })}
+          newRecord={() => ({ date: todayISO(), subject: db.settings.subjects[0] || "", classNumber: "", totalClasses: "", topic: "", subtopic: "", eta: "", status: "Not Started", syllabusId: null })}
         />
       </div>
     </div>
@@ -1713,7 +1794,7 @@ function ReadingTab({ db, updateSlice }) {
           { key: "revision1", label: "Revision 1", type: "status", options: READ_STATUS, width: 130 },
           { key: "revision2", label: "Revision 2", type: "status", options: READ_STATUS, width: 130 },
         ]}
-        newRecord={() => ({ date: todayISO(), subject: db.settings.subjects[0] || "", classNumber: "", topic: "", classNotes: "Yet to Start", standardMaterial: "Yet to Start", ncert: "Yet to Start", revision1: "Yet to Start", revision2: "Yet to Start" })}
+        newRecord={() => ({ date: todayISO(), subject: db.settings.subjects[0] || "", classNumber: "", topic: "", classNotes: "Yet to Start", standardMaterial: "Yet to Start", ncert: "Yet to Start", revision1: "Yet to Start", revision2: "Yet to Start", syllabusId: null })}
       />
     </div>
   );
@@ -1731,7 +1812,7 @@ function SyllabusTab({ db, updateSlice }) {
           This starts from the standard top-level UPSC structure only. Upload your actual syllabus PDF via Import/Export to expand it into real sub-topics — nothing here is a substitute for the official document.
         </div>
         <div className="ucc-tiny" style={{ marginTop: 6, color: "var(--ink-muted)" }}>
-          Set <strong>Subject</strong> on each row below — that's what powers the subject-wise Topic/Subtopic dropdowns on the Class Lecture slot in Today's plan. Add or rename subjects on the Settings tab.
+          <strong>Subject → Topic → Subtopic → Micro Topic</strong> are linked — pick each in order, or choose <strong>+ Add new</strong> to type one in. These also power the subject-wise dropdowns on the Class Lecture slot in Today's plan. New subjects are added to the shared list on the Settings tab automatically.
         </div>
       </div>
       <div className="ucc-card">
@@ -1741,13 +1822,56 @@ function SyllabusTab({ db, updateSlice }) {
           columns={[
             { key: "coverage", label: "Coverage", type: "select", options: COVERAGE_OPTIONS, width: 130 },
             { key: "gsPaper", label: "GS Paper", type: "select", options: GS_PAPER_OPTIONS, width: 140 },
-            { key: "subject", label: "Subject", type: "select", options: db.settings.subjects, width: 150 },
-            { key: "topic", label: "Topic", width: 240 },
-            { key: "subtopic", label: "Subtopic", width: 180 },
-            { key: "studyStatus", label: "Study Status", type: "status", options: SYLLABUS_STATUS, width: 130 },
-            { key: "revisionStatus", label: "Revision Status", type: "status", options: SYLLABUS_STATUS, width: 130 },
+            {
+              key: "subject", label: "Subject", width: 160, type: "custom",
+              render: (rec, _onChange, updateRecord) => (
+                <CascadingSelectCell
+                  value={rec.subject} options={db.settings.subjects} placeholder="Select subject…"
+                  onSelect={v => updateRecord({ subject: v, topic: "", subtopic: "", microtopic: "" })}
+                  onAddNew={name => {
+                    // New subjects join the shared master list (Settings tab)
+                    // so they immediately appear in every other subject dropdown.
+                    updateSlice("settings", s => (s.subjects.includes(name) ? s : { ...s, subjects: [...s.subjects, name] }));
+                    updateRecord({ subject: name, topic: "", subtopic: "", microtopic: "" });
+                  }}
+                />
+              ),
+            },
+            {
+              key: "topic", label: "Topic", width: 200, type: "custom",
+              render: (rec, _onChange, updateRecord) => (
+                <CascadingSelectCell
+                  value={rec.topic} options={topicOptionsForSubject(db, rec.subject)}
+                  placeholder={rec.subject ? "Select topic…" : "Select subject first"} disabled={!rec.subject}
+                  onSelect={v => updateRecord({ topic: v, subtopic: "", microtopic: "" })}
+                  onAddNew={name => updateRecord({ topic: name, subtopic: "", microtopic: "" })}
+                />
+              ),
+            },
+            {
+              key: "subtopic", label: "Subtopic", width: 200, type: "custom",
+              render: (rec, _onChange, updateRecord) => (
+                <CascadingSelectCell
+                  value={rec.subtopic} options={subtopicOptionsForTopic(db, rec.subject, rec.topic)}
+                  placeholder={rec.topic ? "Select subtopic…" : "Select topic first"} disabled={!rec.topic}
+                  onSelect={v => updateRecord({ subtopic: v, microtopic: "" })}
+                  onAddNew={name => updateRecord({ subtopic: name, microtopic: "" })}
+                />
+              ),
+            },
+            {
+              key: "microtopic", label: "Micro Topic", width: 200, type: "custom",
+              render: (rec, _onChange, updateRecord) => (
+                <CascadingSelectCell
+                  value={rec.microtopic} options={microtopicOptionsForSubtopic(db, rec.subject, rec.topic, rec.subtopic)}
+                  placeholder={rec.subtopic ? "Select micro topic…" : "Select subtopic first"} disabled={!rec.subtopic}
+                  onSelect={v => updateRecord({ microtopic: v })}
+                  onAddNew={name => updateRecord({ microtopic: name })}
+                />
+              ),
+            },
           ]}
-          newRecord={() => ({ coverage: "", gsPaper: "", subject: db.settings.subjects[0] || "", topic: "", subtopic: "", studyStatus: "Not Started", revisionStatus: "Not Started" })}
+          newRecord={() => ({ coverage: "", gsPaper: "", subject: "", topic: "", subtopic: "", microtopic: "", studyStatus: "Not Started", revisionStatus: "Not Started" })}
           emptyMessage="No syllabus items yet — click Add row below to add your first topic."
         />
       </div>
@@ -1936,6 +2060,11 @@ function AiLearningTab({ db, updateSlice }) {
    TOPIC MASTER PAGE
    ============================================================ */
 function TopicMasterTab({ db }) {
+  const syllabusById = useMemo(() => {
+    const m = new Map();
+    db.syllabus.forEach(s => m.set(s.id, s));
+    return m;
+  }, [db.syllabus]);
   const topics = useMemo(() => {
     const map = new Map();
     function ensure(subject, topic) {
@@ -1944,14 +2073,25 @@ function TopicMasterTab({ db }) {
       if (!map.has(key)) map.set(key, { subject, topic, classes: [], reading: [], singlePager: [], currentAffairs: [], answerWriting: [], syllabus: [] });
       return map.get(key);
     }
-    db.classes.forEach(c => { const t = ensure(c.subject, c.topic); if (t) t.classes.push(c); });
-    db.reading.forEach(r => { const t = ensure(r.subject, r.topic); if (t) t.reading.push(r); });
+    // Prefer a record's linked Syllabus row (a stable id) over its own
+    // subject/topic text, so a class or reading row logged against a topic
+    // stays correctly grouped even after that topic is renamed on the
+    // Syllabus tab. Falls back to the record's own text when unlinked.
+    function resolvedSubjectTopic(rec) {
+      if (rec.syllabusId) {
+        const syl = syllabusById.get(rec.syllabusId);
+        if (syl) return [syl.subject, syl.topic];
+      }
+      return [rec.subject, rec.topic];
+    }
+    db.classes.forEach(c => { const [subj, top] = resolvedSubjectTopic(c); const t = ensure(subj, top); if (t) t.classes.push(c); });
+    db.reading.forEach(r => { const [subj, top] = resolvedSubjectTopic(r); const t = ensure(subj, top); if (t) t.reading.push(r); });
     db.singlePager.forEach(s => { const t = ensure(s.subject, s.topic); if (t) t.singlePager.push(s); });
     db.syllabus.forEach(s => { const t = ensure(s.subject, s.topic); if (t) t.syllabus.push(s); });
     db.currentAffairs.forEach(c => { const t = ensure(c.subject, c.relevantSyllabusTopic); if (t) t.currentAffairs.push(c); });
     db.answerWriting.forEach(a => { const t = ensure(a.gsPaper, a.topic); if (t) t.answerWriting.push(a); });
     return Array.from(map.values());
-  }, [db]);
+  }, [db, syllabusById]);
   const [sel, setSel] = useState(null);
   const active = topics.find(t => normKey(t.subject, t.topic) === sel) || topics[0];
 
@@ -2295,12 +2435,13 @@ const IMPORT_TARGETS = {
     dupKey: r => normKey(r.subject, r.topic),
   },
   syllabus: {
-    label: "Syllabus", fields: ["coverage", "gsPaper", "subject", "topic", "subtopic", "studyStatus", "revisionStatus"],
+    label: "Syllabus", fields: ["coverage", "gsPaper", "subject", "topic", "subtopic", "microtopic", "studyStatus", "revisionStatus"],
     aliases: {
       coverage: ["coverage"], gsPaper: ["gs paper", "gspaper", "paper"], subject: ["subject"], topic: ["topic"],
-      subtopic: ["subtopic", "sub topic"], studyStatus: ["study status", "studystatus"], revisionStatus: ["revision status", "revisionstatus"],
+      subtopic: ["subtopic", "sub topic"], microtopic: ["microtopic", "micro topic"],
+      studyStatus: ["study status", "studystatus"], revisionStatus: ["revision status", "revisionstatus"],
     },
-    dupKey: r => normKey(r.subject, r.topic, r.subtopic),
+    dupKey: r => normKey(r.subject, r.topic, r.subtopic, r.microtopic),
   },
 };
 
@@ -2370,6 +2511,9 @@ function ImportExportTab({ db, updateSlice }) {
         ["classNotes", "standardMaterial", "ncert", "revision1", "revision2"].forEach(f => { if (!clean[f]) clean[f] = "Yet to Start"; });
       }
       if (target === "classes" && !clean.status) clean.status = "Completed";
+      if (target === "classes" || target === "reading") {
+        clean.syllabusId = findSyllabusId(db, { subject: clean.subject, topic: clean.topic, subtopic: clean.subtopic });
+      }
       if (target === "syllabus") {
         if (!clean.studyStatus) clean.studyStatus = "Not Started";
         if (!clean.revisionStatus) clean.revisionStatus = "Not Started";
