@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback } from "react";
+import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import * as XLSX from "xlsx";
 import { supabase } from "./supabaseClient.js";
 import {
@@ -362,6 +362,7 @@ function defaultDB() {
       travelHoursEachWay: 1,
       subjects: DEFAULT_SUBJECTS,
       slotTemplate: [...CORE_SLOT_TEMPLATE, AI_BLOCK],
+      driveFolderId: null, // cached id of the Google Drive folder used for Single Pager PDFs
     },
     syllabus: SYLLABUS_SEED.map(s => ({ id: uid(), ...s, subtopic: "", studyStatus: "Not Started", revisionStatus: "Not Started", history: [] })),
     classes: [], reading: [], singlePager: [], ncert: [], standardBooks: [],
@@ -444,6 +445,133 @@ function downloadBlob(content, filename, mime) {
   a.href = url; a.download = filename;
   document.body.appendChild(a); a.click(); document.body.removeChild(a);
   setTimeout(() => URL.revokeObjectURL(url), 2000);
+}
+
+/* ============================================================
+   GOOGLE DRIVE INTEGRATION (Single Pager PDF attachments)
+   The PDF itself is never sent to or stored in Supabase — only the Drive
+   file's id and name are kept in the `singlePager` record, and the bytes
+   are fetched from Drive again each time you click Download. Requires
+   VITE_GOOGLE_CLIENT_ID (a public OAuth Web Client ID, not a secret) from
+   a Google Cloud project with the Drive API enabled — see README.
+   ============================================================ */
+const DRIVE_FOLDER_NAME = "UPSC 2027 Command Center - Single Pagers";
+const DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.file";
+
+let gisLoadPromise = null;
+let gisTokenClient = null;
+let cachedDriveToken = null; // { token, expiresAt }
+
+function loadGoogleIdentityScript() {
+  if (gisLoadPromise) return gisLoadPromise;
+  gisLoadPromise = new Promise((resolve, reject) => {
+    if (window.google?.accounts?.oauth2) { resolve(); return; }
+    const script = document.createElement("script");
+    script.src = "https://accounts.google.com/gsi/client";
+    script.async = true;
+    script.defer = true;
+    script.onload = () => resolve();
+    script.onerror = () => reject(new Error("Could not load Google Identity Services — check your connection."));
+    document.head.appendChild(script);
+  });
+  return gisLoadPromise;
+}
+
+// Requests a short-lived Drive access token, reusing a cached one while it's
+// still valid. First use in a browser session opens Google's consent popup
+// (scoped to drive.file — only files this app itself creates); later calls
+// in the same session are silent until the token expires (~1 hour).
+async function getDriveAccessToken() {
+  const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID;
+  if (!clientId) throw new Error("Google Drive isn't configured yet — add VITE_GOOGLE_CLIENT_ID to your .env (see README).");
+  if (cachedDriveToken && cachedDriveToken.expiresAt > Date.now() + 30000) return cachedDriveToken.token;
+  await loadGoogleIdentityScript();
+  if (!gisTokenClient) {
+    gisTokenClient = window.google.accounts.oauth2.initTokenClient({ client_id: clientId, scope: DRIVE_SCOPE, callback: () => {} });
+  }
+  function requestToken(prompt) {
+    return new Promise((resolve, reject) => {
+      gisTokenClient.callback = (resp) => {
+        if (resp.error) { reject(new Error(resp.error_description || resp.error)); return; }
+        cachedDriveToken = { token: resp.access_token, expiresAt: Date.now() + (resp.expires_in || 3600) * 1000 };
+        resolve(resp.access_token);
+      };
+      gisTokenClient.requestAccessToken({ prompt });
+    });
+  }
+  // Try silently first (works once you've granted access in any earlier
+  // session — Google remembers the grant). If nothing was ever granted,
+  // fall back to the interactive consent popup.
+  try {
+    return await requestToken("");
+  } catch {
+    return requestToken("consent");
+  }
+}
+
+async function driveFetch(url, accessToken, options = {}) {
+  const res = await fetch(url, { ...options, headers: { ...(options.headers || {}), Authorization: `Bearer ${accessToken}` } });
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new Error(`Google Drive request failed (${res.status}). ${body.slice(0, 200)}`);
+  }
+  return res;
+}
+
+// Finds (or creates once, then remembers in settings) a single dedicated
+// Drive folder to keep all Single Pager PDFs together rather than scattering
+// them across the user's whole Drive.
+async function ensureDriveFolder(accessToken, db, updateSlice) {
+  if (db.settings.driveFolderId) return db.settings.driveFolderId;
+  const q = encodeURIComponent(`name='${DRIVE_FOLDER_NAME}' and mimeType='application/vnd.google-apps.folder' and trashed=false`);
+  const searchRes = await driveFetch(`https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id,name)`, accessToken);
+  const searchData = await searchRes.json();
+  let folderId = searchData.files && searchData.files[0] && searchData.files[0].id;
+  if (!folderId) {
+    const createRes = await driveFetch("https://www.googleapis.com/drive/v3/files?fields=id", accessToken, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: DRIVE_FOLDER_NAME, mimeType: "application/vnd.google-apps.folder" }),
+    });
+    folderId = (await createRes.json()).id;
+  }
+  updateSlice("settings", prev => ({ ...prev, driveFolderId: folderId }));
+  return folderId;
+}
+
+function buildDriveMultipartBody(metadata, file, boundary) {
+  const metaPart = `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(metadata)}\r\n`;
+  const fileHeader = `--${boundary}\r\nContent-Type: ${file.type || "application/pdf"}\r\n\r\n`;
+  return new Blob([metaPart, fileHeader, file, `\r\n--${boundary}--`]);
+}
+
+// Uploads a new PDF, or (when existingFileId is passed) overwrites the same
+// Drive file in place so re-uploading a corrected single-pager doesn't leave
+// orphaned old copies behind.
+async function uploadSinglePagerFile(db, updateSlice, existingFileId, file) {
+  if (file.type && file.type !== "application/pdf") throw new Error("Please choose a PDF file.");
+  const accessToken = await getDriveAccessToken();
+  const folderId = await ensureDriveFolder(accessToken, db, updateSlice);
+  const boundary = "uccdrive" + uid();
+  const metadata = existingFileId ? { name: file.name } : { name: file.name, parents: [folderId] };
+  const body = buildDriveMultipartBody(metadata, file, boundary);
+  const url = existingFileId
+    ? `https://www.googleapis.com/upload/drive/v3/files/${existingFileId}?uploadType=multipart&fields=id,name`
+    : `https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name`;
+  const res = await driveFetch(url, accessToken, {
+    method: existingFileId ? "PATCH" : "POST",
+    headers: { "Content-Type": `multipart/related; boundary=${boundary}` },
+    body,
+  });
+  const data = await res.json();
+  return { id: data.id, name: data.name };
+}
+
+async function downloadSinglePagerFile(fileId, fileName) {
+  const accessToken = await getDriveAccessToken();
+  const res = await driveFetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`, accessToken);
+  const blob = await res.blob();
+  downloadBlob(blob, fileName || "single-pager.pdf", "application/pdf");
 }
 
 function normalizeSettings(s) {
@@ -611,6 +739,8 @@ function GenericTracker({ records, setRecords, columns, newRecord, emptyMessage,
                     <td key={col.key}>
                       {col.type === "status" ? (
                         <StatusSelect value={rec[col.key]} options={col.options} onChange={v => updateField(rec, col, v, true)} />
+                      ) : col.type === "custom" ? (
+                        col.render(rec, (val, isStatus) => updateField(rec, col, val, isStatus))
                       ) : col.type === "date" ? (
                         <input type="date" className="ucc-input ucc-mono" value={rec[col.key] || ""} onChange={e => updateField(rec, col, e.target.value)} />
                       ) : col.type === "number" ? (
@@ -654,6 +784,66 @@ function GenericTracker({ records, setRecords, columns, newRecord, emptyMessage,
         </tbody>
       </table>
       <button className="ucc-btn" style={{ marginTop: 10 }} onClick={addRecord}><Plus size={14} /> Add row</button>
+    </div>
+  );
+}
+
+// Upload/Download control for a Google-Drive-backed file attachment on one
+// record. The record only ever stores { id, name } (Drive's file id + the
+// original filename) via `onChange` — the PDF bytes themselves go straight
+// to Google Drive over the network and are never written to Supabase.
+// Download re-fetches the bytes from Drive on demand rather than caching them.
+function DriveFileCell({ driveFile, db, updateSlice, onChange }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const fileInputRef = useRef(null);
+
+  async function handleFileSelected(e) {
+    const picked = e.target.files && e.target.files[0];
+    e.target.value = ""; // so selecting the same file again still fires onChange
+    if (!picked) return;
+    setBusy(true); setError("");
+    try {
+      const uploaded = await uploadSinglePagerFile(db, updateSlice, driveFile?.id, picked);
+      onChange(uploaded);
+    } catch (err) {
+      setError(err.message || "Upload failed.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleDownload() {
+    setBusy(true); setError("");
+    try {
+      await downloadSinglePagerFile(driveFile.id, driveFile.name);
+    } catch (err) {
+      setError(err.message || "Download failed.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div>
+      <input ref={fileInputRef} type="file" accept="application/pdf" style={{ display: "none" }} onChange={handleFileSelected} />
+      <div className="ucc-flex wrap">
+        <button type="button" className="ucc-btn ghost" style={{ padding: "3px 8px" }} disabled={busy} onClick={() => fileInputRef.current?.click()}>
+          <Upload size={12} /> {driveFile ? "Replace" : "Upload"}
+        </button>
+        {driveFile && (
+          <button type="button" className="ucc-btn ghost" style={{ padding: "3px 8px" }} disabled={busy} onClick={handleDownload}>
+            <Download size={12} /> Download
+          </button>
+        )}
+      </div>
+      {busy && <div className="ucc-tiny">Working…</div>}
+      {driveFile && !busy && (
+        <div className="ucc-tiny" style={{ maxWidth: 150, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={driveFile.name}>
+          {driveFile.name}
+        </div>
+      )}
+      {error && <div className="ucc-tiny" style={{ color: "var(--red)" }}>{error}</div>}
     </div>
   );
 }
@@ -1569,6 +1759,11 @@ function SinglePagerTab({ db, updateSlice }) {
   return (
     <div className="ucc-card">
       <h3>Single pager notes</h3>
+      {!import.meta.env.VITE_GOOGLE_CLIENT_ID && (
+        <div className="ucc-tiny" style={{ marginBottom: 8 }}>
+          PDF upload/download needs Google Drive configured — add <code>VITE_GOOGLE_CLIENT_ID</code> to your <code>.env</code> (see README).
+        </div>
+      )}
       <GenericTracker
         records={db.singlePager} setRecords={u => updateSlice("singlePager", u)}
         columns={[
@@ -1580,8 +1775,12 @@ function SinglePagerTab({ db, updateSlice }) {
           { key: "standardBooks", label: "Standard Books", placeholder: "NA / ref", width: 130 },
           { key: "writing", label: "Writing", type: "status", options: WRITING_STATUS, width: 110 },
           { key: "status", label: "Status", type: "status", options: SP_STATUS, width: 120 },
+          {
+            key: "driveFile", label: "Single Pager PDF", width: 170, type: "custom",
+            render: (rec, onChange) => <DriveFileCell driveFile={rec.driveFile} db={db} updateSlice={updateSlice} onChange={onChange} />,
+          },
         ]}
-        newRecord={() => ({ date: todayISO(), subject: db.settings.subjects[0] || "", topic: "", classNotes: "", handout: "", ncert: "", standardBooks: "", writing: "Not Started", status: "Not Started" })}
+        newRecord={() => ({ date: todayISO(), subject: db.settings.subjects[0] || "", topic: "", classNotes: "", handout: "", ncert: "", standardBooks: "", writing: "Not Started", status: "Not Started", driveFile: null })}
       />
     </div>
   );
