@@ -174,7 +174,7 @@ const SB_STATUS = ["Not Started", "Reading", "Completed", "Revision"];
 const CA_STATUS = ["To Read", "Read", "Noted"];
 const AI_STATUS = ["Not Started", "In Progress", "Completed"];
 const SKIP_REASONS = ["Time shortage", "Office workload", "Fatigue", "Unexpected work", "Other"];
-const COVERAGE_OPTIONS = ["Prelims Only", "Mains Only", "Prelims + Mains"];
+const COVERAGE_OPTIONS = ["Prelims Only", "Mains Only", "Prelims + Mains", "Interview"];
 const GS_PAPER_OPTIONS = ["GS Paper I", "GS Paper II", "GS Paper III", "GS Paper IV", "Essay", "CSAT", "Optional Paper I", "Optional Paper II", "Personality Test"];
 
 // Maps the day-plan's generic task-status vocabulary onto whatever status
@@ -300,31 +300,31 @@ function applyTrimRules(blocks, availableMinutes) {
 // real subject list on this Settings-managed list — that's what Class
 // Lecture's subject-wise dropdowns key off.
 const SYLLABUS_SEED = [
-  { paper: "Prelims", coverage: "Prelims Only", gsPaper: "GS Paper I", subject: "", topic: "Current Events of National & International Importance" },
-  { paper: "Prelims", coverage: "Prelims Only", gsPaper: "GS Paper I", subject: "History", topic: "History of India & Indian National Movement" },
-  { paper: "Prelims", coverage: "Prelims Only", gsPaper: "GS Paper I", subject: "Geography", topic: "Indian & World Geography" },
-  { paper: "Prelims", coverage: "Prelims Only", gsPaper: "GS Paper I", subject: "Polity", topic: "Indian Polity & Governance" },
-  { paper: "Prelims", coverage: "Prelims Only", gsPaper: "GS Paper I", subject: "Economy", topic: "Economic & Social Development" },
-  { paper: "Prelims", coverage: "Prelims Only", gsPaper: "GS Paper I", subject: "Environment & Ecology", topic: "Environment, Ecology, Biodiversity & Climate Change" },
-  { paper: "Prelims", coverage: "Prelims Only", gsPaper: "GS Paper I", subject: "Science & Technology", topic: "General Science" },
-  { paper: "Prelims", coverage: "Prelims Only", gsPaper: "CSAT", subject: "CSAT", topic: "Comprehension" },
-  { paper: "Prelims", coverage: "Prelims Only", gsPaper: "CSAT", subject: "CSAT", topic: "Logical Reasoning & Analytical Ability" },
-  { paper: "Prelims", coverage: "Prelims Only", gsPaper: "CSAT", subject: "CSAT", topic: "Decision Making & Problem Solving" },
-  { paper: "Prelims", coverage: "Prelims Only", gsPaper: "CSAT", subject: "CSAT", topic: "General Mental Ability / Basic Numeracy / Data Interpretation" },
-  { paper: "Mains", coverage: "Mains Only", gsPaper: "Essay", subject: "Essay", topic: "Essay Paper" },
-  { paper: "Mains", coverage: "Prelims + Mains", gsPaper: "GS Paper I", subject: "Art & Culture", topic: "Indian Heritage & Culture" },
-  { paper: "Mains", coverage: "Prelims + Mains", gsPaper: "GS Paper I", subject: "History", topic: "Indian & World History" },
-  { paper: "Mains", coverage: "Prelims + Mains", gsPaper: "GS Paper I", subject: "Geography", topic: "Geography of the World & Society" },
-  { paper: "Mains", coverage: "Prelims + Mains", gsPaper: "GS Paper II", subject: "Polity", topic: "Governance, Constitution, Polity" },
-  { paper: "Mains", coverage: "Mains Only", gsPaper: "GS Paper II", subject: "Polity", topic: "Social Justice" },
-  { paper: "Mains", coverage: "Mains Only", gsPaper: "GS Paper II", subject: "Polity", topic: "International Relations" },
-  { paper: "Mains", coverage: "Prelims + Mains", gsPaper: "GS Paper III", subject: "Science & Technology", topic: "Technology, Economic Development" },
-  { paper: "Mains", coverage: "Prelims + Mains", gsPaper: "GS Paper III", subject: "Environment & Ecology", topic: "Biodiversity & Environment" },
-  { paper: "Mains", coverage: "Mains Only", gsPaper: "GS Paper III", subject: "", topic: "Security & Disaster Management" },
-  { paper: "Mains", coverage: "Mains Only", gsPaper: "GS Paper IV", subject: "Ethics (GS4)", topic: "Ethics, Integrity & Aptitude" },
-  { paper: "Mains", coverage: "Mains Only", gsPaper: "Optional Paper I", subject: "Tamil Literature", topic: "Tamil Literature — add sections after syllabus import" },
-  { paper: "Mains", coverage: "Mains Only", gsPaper: "Optional Paper II", subject: "Tamil Literature", topic: "Tamil Literature — add sections after syllabus import" },
-  { paper: "Interview", coverage: "Mains Only", gsPaper: "Personality Test", subject: "", topic: "Personality Test" },
+  { coverage: "Prelims Only", gsPaper: "GS Paper I", subject: "", topic: "Current Events of National & International Importance" },
+  { coverage: "Prelims Only", gsPaper: "GS Paper I", subject: "History", topic: "History of India & Indian National Movement" },
+  { coverage: "Prelims Only", gsPaper: "GS Paper I", subject: "Geography", topic: "Indian & World Geography" },
+  { coverage: "Prelims Only", gsPaper: "GS Paper I", subject: "Polity", topic: "Indian Polity & Governance" },
+  { coverage: "Prelims Only", gsPaper: "GS Paper I", subject: "Economy", topic: "Economic & Social Development" },
+  { coverage: "Prelims Only", gsPaper: "GS Paper I", subject: "Environment & Ecology", topic: "Environment, Ecology, Biodiversity & Climate Change" },
+  { coverage: "Prelims Only", gsPaper: "GS Paper I", subject: "Science & Technology", topic: "General Science" },
+  { coverage: "Prelims Only", gsPaper: "CSAT", subject: "CSAT", topic: "Comprehension" },
+  { coverage: "Prelims Only", gsPaper: "CSAT", subject: "CSAT", topic: "Logical Reasoning & Analytical Ability" },
+  { coverage: "Prelims Only", gsPaper: "CSAT", subject: "CSAT", topic: "Decision Making & Problem Solving" },
+  { coverage: "Prelims Only", gsPaper: "CSAT", subject: "CSAT", topic: "General Mental Ability / Basic Numeracy / Data Interpretation" },
+  { coverage: "Mains Only", gsPaper: "Essay", subject: "Essay", topic: "Essay Paper" },
+  { coverage: "Prelims + Mains", gsPaper: "GS Paper I", subject: "Art & Culture", topic: "Indian Heritage & Culture" },
+  { coverage: "Prelims + Mains", gsPaper: "GS Paper I", subject: "History", topic: "Indian & World History" },
+  { coverage: "Prelims + Mains", gsPaper: "GS Paper I", subject: "Geography", topic: "Geography of the World & Society" },
+  { coverage: "Prelims + Mains", gsPaper: "GS Paper II", subject: "Polity", topic: "Governance, Constitution, Polity" },
+  { coverage: "Mains Only", gsPaper: "GS Paper II", subject: "Polity", topic: "Social Justice" },
+  { coverage: "Mains Only", gsPaper: "GS Paper II", subject: "Polity", topic: "International Relations" },
+  { coverage: "Prelims + Mains", gsPaper: "GS Paper III", subject: "Science & Technology", topic: "Technology, Economic Development" },
+  { coverage: "Prelims + Mains", gsPaper: "GS Paper III", subject: "Environment & Ecology", topic: "Biodiversity & Environment" },
+  { coverage: "Mains Only", gsPaper: "GS Paper III", subject: "", topic: "Security & Disaster Management" },
+  { coverage: "Mains Only", gsPaper: "GS Paper IV", subject: "Ethics (GS4)", topic: "Ethics, Integrity & Aptitude" },
+  { coverage: "Mains Only", gsPaper: "Optional Paper I", subject: "Tamil Literature", topic: "Tamil Literature — add sections after syllabus import" },
+  { coverage: "Mains Only", gsPaper: "Optional Paper II", subject: "Tamil Literature", topic: "Tamil Literature — add sections after syllabus import" },
+  { coverage: "Interview", gsPaper: "Personality Test", subject: "", topic: "Personality Test" },
 ];
 
 const STORAGE_KEYS = [
@@ -1473,23 +1473,7 @@ function ReadingTab({ db, updateSlice }) {
   );
 }
 
-const SYLLABUS_PAPERS = ["Prelims", "Mains", "Interview"];
-
 function SyllabusTab({ db, updateSlice }) {
-  // Standard paper groups always render — with their own "Add row" button —
-  // even when a group (or the whole list) is empty. Grouping used to be
-  // derived purely from existing records, which meant a syllabus with zero
-  // items rendered zero groups and there was nowhere to click "Add".
-  const byPaper = useMemo(() => {
-    const m = {};
-    SYLLABUS_PAPERS.forEach(p => { m[p] = []; });
-    db.syllabus.forEach(s => {
-      const key = s.paper || "Other";
-      m[key] = m[key] || [];
-      m[key].push(s);
-    });
-    return m;
-  }, [db.syllabus]);
   const total = db.syllabus.length;
   const done = db.syllabus.filter(s => s.studyStatus === "Completed" || s.studyStatus === "Revised").length;
   return (
@@ -1504,31 +1488,23 @@ function SyllabusTab({ db, updateSlice }) {
           Set <strong>Subject</strong> on each row below — that's what powers the subject-wise Topic/Subtopic dropdowns on the Class Lecture slot in Today's plan. Add or rename subjects on the Settings tab.
         </div>
       </div>
-      {Object.entries(byPaper).map(([paper, items]) => (
-        <div className="ucc-card" key={paper}>
-          <h3>{paper}</h3>
-          <GenericTracker
-            records={items} setRecords={(u) => {
-              const updated = typeof u === "function" ? u(items) : u;
-              updateSlice("syllabus", prev => {
-                const others = prev.filter(s => (s.paper || "Other") !== paper);
-                return [...others, ...updated];
-              });
-            }}
-            columns={[
-              { key: "coverage", label: "Coverage", type: "select", options: COVERAGE_OPTIONS, width: 130 },
-              { key: "gsPaper", label: "GS Paper", type: "select", options: GS_PAPER_OPTIONS, width: 140 },
-              { key: "subject", label: "Subject", type: "select", options: db.settings.subjects, width: 150 },
-              { key: "topic", label: "Topic", width: 240 },
-              { key: "subtopic", label: "Subtopic", width: 180 },
-              { key: "studyStatus", label: "Study Status", type: "status", options: SYLLABUS_STATUS, width: 130 },
-              { key: "revisionStatus", label: "Revision Status", type: "status", options: SYLLABUS_STATUS, width: 130 },
-            ]}
-            newRecord={() => ({ paper, coverage: "", gsPaper: "", subject: db.settings.subjects[0] || "", topic: "", subtopic: "", studyStatus: "Not Started", revisionStatus: "Not Started" })}
-            emptyMessage="No syllabus items yet — click Add row below to add your first topic."
-          />
-        </div>
-      ))}
+      <div className="ucc-card">
+        <h3>All syllabus items</h3>
+        <GenericTracker
+          records={db.syllabus} setRecords={u => updateSlice("syllabus", u)}
+          columns={[
+            { key: "coverage", label: "Coverage", type: "select", options: COVERAGE_OPTIONS, width: 130 },
+            { key: "gsPaper", label: "GS Paper", type: "select", options: GS_PAPER_OPTIONS, width: 140 },
+            { key: "subject", label: "Subject", type: "select", options: db.settings.subjects, width: 150 },
+            { key: "topic", label: "Topic", width: 240 },
+            { key: "subtopic", label: "Subtopic", width: 180 },
+            { key: "studyStatus", label: "Study Status", type: "status", options: SYLLABUS_STATUS, width: 130 },
+            { key: "revisionStatus", label: "Revision Status", type: "status", options: SYLLABUS_STATUS, width: 130 },
+          ]}
+          newRecord={() => ({ coverage: "", gsPaper: "", subject: db.settings.subjects[0] || "", topic: "", subtopic: "", studyStatus: "Not Started", revisionStatus: "Not Started" })}
+          emptyMessage="No syllabus items yet — click Add row below to add your first topic."
+        />
+      </div>
     </div>
   );
 }
@@ -1746,7 +1722,7 @@ function TopicMasterTab({ db }) {
               <div className="ucc-tiny" style={{ marginBottom: 10 }}>{active.subject}</div>
               <TopicSection title="Syllabus">
                 {active.syllabus.length === 0 ? <EmptyState>Not mapped to a syllabus item.</EmptyState> :
-                  active.syllabus.map(s => <div key={s.id} className="ucc-tiny">{s.paper} · <Badge tone={colorFor(s.studyStatus)}>{s.studyStatus}</Badge></div>)}
+                  active.syllabus.map(s => <div key={s.id} className="ucc-tiny">{s.coverage} · <Badge tone={colorFor(s.studyStatus)}>{s.studyStatus}</Badge></div>)}
               </TopicSection>
               <TopicSection title="Classes">
                 {active.classes.length === 0 ? <EmptyState>No classes logged.</EmptyState> :
@@ -1962,6 +1938,14 @@ const IMPORT_TARGETS = {
     aliases: { subject: ["subject"], topic: ["topic"], classNotes: ["class notes"], handout: ["handout"], ncert: ["ncert"], standardBooks: ["standard books"], writing: ["writing"] },
     dupKey: r => normKey(r.subject, r.topic),
   },
+  syllabus: {
+    label: "Syllabus", fields: ["coverage", "gsPaper", "subject", "topic", "subtopic", "studyStatus", "revisionStatus"],
+    aliases: {
+      coverage: ["coverage"], gsPaper: ["gs paper", "gspaper", "paper"], subject: ["subject"], topic: ["topic"],
+      subtopic: ["subtopic", "sub topic"], studyStatus: ["study status", "studystatus"], revisionStatus: ["revision status", "revisionstatus"],
+    },
+    dupKey: r => normKey(r.subject, r.topic, r.subtopic),
+  },
 };
 
 function ImportExportTab({ db, updateSlice }) {
@@ -2030,6 +2014,10 @@ function ImportExportTab({ db, updateSlice }) {
         ["classNotes", "standardMaterial", "ncert", "revision1", "revision2"].forEach(f => { if (!clean[f]) clean[f] = "Yet to Start"; });
       }
       if (target === "classes" && !clean.status) clean.status = "Completed";
+      if (target === "syllabus") {
+        if (!clean.studyStatus) clean.studyStatus = "Not Started";
+        if (!clean.revisionStatus) clean.revisionStatus = "Not Started";
+      }
       toAdd.push(clean);
     });
     updateSlice(target, prev => [...prev, ...toAdd]);
