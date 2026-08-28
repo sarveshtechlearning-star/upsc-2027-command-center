@@ -2217,6 +2217,60 @@ function SettingsTab({ db, updateSlice }) {
         <input className="ucc-input" style={{ maxWidth: 220 }} placeholder="Add subject" value={newSubject} onChange={e => setNewSubject(e.target.value)} />
         <button className="ucc-btn" onClick={() => { if (newSubject.trim()) { patch({ subjects: [...s.subjects, newSubject.trim()] }); setNewSubject(""); } }}><Plus size={13} /> Add</button>
       </div>
+      <DangerZone updateSlice={updateSlice} />
+    </div>
+  );
+}
+
+// Every StorageKey except "settings" — what "Reset all data" wipes back to
+// empty, using each key's genuinely-empty shape (not defaultDB()'s syllabus
+// seed, since a reset should mean *empty*, not *repopulated with the sample
+// curriculum*).
+const CLEARABLE_DATA_KEYS = {
+  syllabus: [], classes: [], reading: [], singlePager: [], ncert: [], standardBooks: [],
+  tamilReading: [], tamilWriting: [], currentAffairs: [], answerWriting: [], aiLearning: [],
+  dailyPlans: {}, dailyReviews: {}, weeklyReviews: {},
+};
+
+function DangerZone({ updateSlice }) {
+  const [open, setOpen] = useState(false);
+  const [confirmText, setConfirmText] = useState("");
+  const [done, setDone] = useState(false);
+
+  function resetAllData() {
+    Object.entries(CLEARABLE_DATA_KEYS).forEach(([key, emptyValue]) => updateSlice(key, () => emptyValue));
+    setOpen(false); setConfirmText(""); setDone(true);
+    setTimeout(() => setDone(false), 5000);
+  }
+
+  return (
+    <div>
+      <div className="ucc-hr" />
+      <h3 style={{ color: "var(--red)" }}>Danger zone</h3>
+      {!open ? (
+        <button className="ucc-btn ghost" style={{ borderColor: "var(--red)", color: "var(--red)" }} onClick={() => setOpen(true)}>
+          <Trash2 size={14} /> Reset all data
+        </button>
+      ) : (
+        <div style={{ border: "1px solid var(--red)", background: "var(--red-soft)", borderRadius: 8, padding: 12 }}>
+          <p className="ucc-tiny">
+            This permanently clears <strong>Syllabus, Classes, Reading, Single Pager, NCERT, Standard Books,
+            Tamil Literature Reading &amp; Writing, Current Affairs, GS Answer Writing, AI Learning, all Daily
+            Plans, End-of-day reviews, and Weekly reviews.</strong> Your Settings (subjects, wake time, slot
+            template) are kept exactly as configured. This cannot be undone — any PDFs already in Google Drive
+            are left untouched, only the app's own data is cleared.
+          </p>
+          <p className="ucc-tiny">Type <strong>RESET</strong> to confirm.</p>
+          <div className="ucc-flex">
+            <input className="ucc-input" style={{ maxWidth: 140 }} value={confirmText} onChange={e => setConfirmText(e.target.value)} placeholder="RESET" />
+            <button className="ucc-btn primary" style={{ background: "var(--red)", borderColor: "var(--red)" }} disabled={confirmText !== "RESET"} onClick={resetAllData}>
+              <Trash2 size={14} /> Confirm reset
+            </button>
+            <button className="ucc-btn ghost" onClick={() => { setOpen(false); setConfirmText(""); }}>Cancel</button>
+          </div>
+        </div>
+      )}
+      {done && <p className="ucc-tiny" style={{ color: "var(--green)" }}>All tracked data cleared — your Settings were kept.</p>}
     </div>
   );
 }
