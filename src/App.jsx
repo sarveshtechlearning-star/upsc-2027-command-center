@@ -20,6 +20,7 @@ const CSS = `
     --green:#2F7A4B; --green-soft:#E1F0E6;
     --red:#B4402A; --red-soft:#F6E1DC;
     --grey:#8B939B; --grey-soft:#ECEDEE;
+    --blue:#2F5FA8; --blue-soft:#DEE7F5;
     --study:#29344A; --office:#7A6A52; --travel:#A08A68; --ai:#B7791F; --break:#D8DBDC;
     --sec-s1:#3E7C74; --sec-s2:#29344A; --sec-s3:#7C5295; --sec-s4:#B0562F;
     --sec-s5:#9C4F6E; --sec-s6:#3B6B94; --sec-s7:#6E7A3A; --sec-custom:#5B6470;
@@ -67,6 +68,7 @@ const CSS = `
   .ucc-badge.amber{background:var(--amber-soft); color:var(--amber);}
   .ucc-badge.red{background:var(--red-soft); color:var(--red);}
   .ucc-badge.grey{background:var(--grey-soft); color:var(--grey);}
+  .ucc-badge.blue{background:var(--blue-soft); color:var(--blue);}
   select.ucc-status{
     border:none; border-radius:20px; padding:3px 22px 3px 9px; font-size:11.5px; font-weight:600;
     cursor:pointer; -webkit-appearance:none; appearance:none;
@@ -78,6 +80,7 @@ const CSS = `
   select.ucc-status.amber{background-color:var(--amber-soft); color:var(--amber);}
   select.ucc-status.red{background-color:var(--red-soft); color:var(--red);}
   select.ucc-status.grey{background-color:var(--grey-soft); color:var(--grey);}
+  select.ucc-status.blue{background-color:var(--blue-soft); color:var(--blue);}
   table.ucc-table{border-collapse:collapse; width:100%; font-size:12.8px;}
   table.ucc-table th{
     text-align:left; font-size:10.5px; text-transform:uppercase; letter-spacing:0.03em;
@@ -159,6 +162,22 @@ const CSS = `
     .ucc-content{padding:16px;}
     table.ucc-table{display:block; overflow-x:auto; white-space:nowrap;}
   }
+  /* Task status toggle buttons — filled with the status's own color when
+     selected, so it's obvious a click registered (see PlanBlock / OfficePlanBlock). */
+  .ucc-status-btn{padding:4px 10px; border-radius:6px; font-size:12px;}
+  .ucc-status-btn.inactive{background:#fff; color:var(--ink-muted); border-color:var(--line-strong);}
+  .ucc-status-btn.neutral{background:var(--grey-soft); color:var(--ink-muted); border-color:var(--grey);}
+  .ucc-status-btn.blue{background:var(--blue-soft); color:var(--blue); border-color:var(--blue);}
+  .ucc-status-btn.green{background:var(--green-soft); color:var(--green); border-color:var(--green);}
+  .ucc-status-btn.amber{background:var(--amber-soft); color:var(--amber); border-color:var(--amber);}
+  .ucc-status-btn.red{background:var(--red-soft); color:var(--red); border-color:var(--red);}
+  /* Weekly report PDF export — print only the .ucc-print-area subtree. */
+  @media print{
+    body *{visibility:hidden;}
+    .ucc-print-area, .ucc-print-area *{visibility:visible;}
+    .ucc-print-area{position:absolute; left:0; top:0; width:100%; padding:0 16px;}
+    .ucc-no-print, .ucc-no-print *{visibility:hidden !important; display:none !important;}
+  }
 `;
 
 /* ============================================================
@@ -194,7 +213,8 @@ function bridgeStatus(taskStatus, targetOptions) {
 }
 
 const STATUS_COLOR = {
-  "Not Started": "neutral", "Yet to Start": "neutral", "To Read": "neutral",
+  "Not Started": "neutral", "To Read": "neutral",
+  "Yet to Start": "blue",
   "In Progress": "amber", "Reading": "amber", "Partially Completed": "amber",
   "Completed": "green", "Done": "green", "Revised": "green", "Strong": "green", "Read": "green", "Noted": "green",
   "Not Needed": "grey", "Not Applicable": "grey", "NA": "grey",
@@ -493,6 +513,27 @@ function StatusSelect({ value, options, onChange }) {
     <select className={`ucc-status ${colorFor(value)}`} value={value || options[0]} onChange={e => onChange(e.target.value)}>
       {options.map(o => <option key={o} value={o}>{o}</option>)}
     </select>
+  );
+}
+
+// Today's-plan task status row: a filled, colored toggle per status (rather
+// than a near-invisible bold/grey tweak) so a click is unmistakably visible —
+// this sets the day-plan block's own status, which feeds the Weekly Review's
+// planned/completed/skipped counts and daily log, and mirrors onto the linked
+// tracker automatically where that link is unambiguous (see getLinkedStatusBridge).
+function TaskStatusButtons({ value, onChange }) {
+  return (
+    <div className="ucc-flex wrap" style={{ marginTop: 6 }}>
+      {TASK_STATUS.map(s => {
+        const active = value === s;
+        return (
+          <button key={s} type="button" className={`ucc-btn ucc-status-btn ${active ? colorFor(s) : "inactive"}`}
+            style={{ fontWeight: active ? 700 : 600 }} aria-pressed={active} onClick={() => onChange(s)}>
+            {s}
+          </button>
+        );
+      })}
+    </div>
   );
 }
 
@@ -1020,12 +1061,8 @@ function OfficePlanBlock({ office, travelTo, travelFro, onSkipAll, onStatusChang
           {travelFro && <span> · Commute (fro): {minutesToTime(travelFro.start)}–{minutesToTime(travelFro.end)} ({travelFro.duration}m)</span>}
         </div>
         <div className="ucc-tiny" style={{ marginBottom: 4 }}>Fixed hours — change in Settings.</div>
-        <div className="ucc-flex wrap">
-          {TASK_STATUS.map(s => (
-            <button key={s} className="ucc-btn ghost" style={{ padding: "3px 8px", fontWeight: office.status === s ? 800 : 600, background: office.status === s ? "var(--grey-soft)" : undefined }}
-              onClick={() => onStatusChange(s)}>{s}</button>
-          ))}
-        </div>
+        <TaskStatusButtons value={office.status} onChange={onStatusChange} />
+        <div className="ucc-tiny" style={{ marginTop: 4 }}>Sets today's status for this block — counted in your Weekly Review.</div>
       </div>
     </div>
   );
@@ -1092,18 +1129,12 @@ function PlanBlock({ block, onUpdate, onMoveUp, onMoveDown, onRemove, db, update
         {block.type !== "break" && (
           <div style={{ marginTop: 6 }}>
             <LinkedTaskInfo link={block.link} db={db} updateSlice={updateSlice} dateISO={dateISO} yesterdayISO={yesterdayISO} onNavigate={onNavigate} />
-            <div className="ucc-flex wrap" style={{ marginTop: 6 }}>
-              {TASK_STATUS.map(s => (
-                <button key={s} className="ucc-btn ghost" style={{ padding: "3px 8px", fontWeight: block.status === s ? 800 : 600, background: block.status === s ? "var(--grey-soft)" : undefined }}
-                  onClick={() => {
-                    onUpdate({ status: s, completedAt: s === "Completed" ? new Date().toISOString() : block.completedAt });
-                    const bridge = getLinkedStatusBridge(block.link, db, updateSlice, dateISO);
-                    if (bridge) bridge.apply(bridgeStatus(s, bridge.options));
-                  }}>
-                  {s}
-                </button>
-              ))}
-            </div>
+            <TaskStatusButtons value={block.status} onChange={s => {
+              onUpdate({ status: s, completedAt: s === "Completed" ? new Date().toISOString() : block.completedAt });
+              const bridge = getLinkedStatusBridge(block.link, db, updateSlice, dateISO);
+              if (bridge) bridge.apply(bridgeStatus(s, bridge.options));
+            }} />
+            <div className="ucc-tiny" style={{ marginTop: 4 }}>Sets this session's status for your Weekly Review — synced to the linked tracker above where that's unambiguous.</div>
           </div>
         )}
       </div>
@@ -1261,17 +1292,37 @@ function LinkedTaskInfo({ link, db, updateSlice, dateISO, yesterdayISO, onNaviga
   return null;
 }
 
-function ClassLectureWidget({ db, updateSlice, dateISO, onNavigate }) {
+const NEW_TOPIC_VALUE = "__new_topic__";
+
+function ClassLectureWidget({ db, updateSlice, dateISO }) {
   const [subject, setSubject] = useState(db.settings.subjects[0] || "");
   const [classNumber, setClassNumber] = useState("");
   const [topic, setTopic] = useState("");
   const [subtopic, setSubtopic] = useState("");
   const [eta, setEta] = useState("");
+  const [addingTopic, setAddingTopic] = useState(false);
+  const [newTopicName, setNewTopicName] = useState("");
   const topicOptions = topicOptionsForSubject(db, subject);
   const subtopicOptions = subtopicOptionsForTopic(db, subject, topic);
 
-  function onSubjectChange(v) { setSubject(v); setTopic(""); setSubtopic(""); }
-  function onTopicChange(v) { setTopic(v); setSubtopic(""); }
+  function onSubjectChange(v) { setSubject(v); setTopic(""); setSubtopic(""); setAddingTopic(false); setNewTopicName(""); }
+  function onTopicChange(v) {
+    if (v === NEW_TOPIC_VALUE) { setAddingTopic(true); setNewTopicName(""); return; }
+    setTopic(v); setSubtopic("");
+  }
+  // Adds a new Syllabus row for this subject right from the Class Lecture
+  // form (mirrors the Syllabus tab's own "Add row" defaults), then selects
+  // it as this class's topic — no more bouncing over to the Syllabus tab first.
+  function confirmNewTopic() {
+    const name = newTopicName.trim();
+    if (!name) { setAddingTopic(false); return; }
+    updateSlice("syllabus", prev => [...prev, {
+      id: uid(), coverage: "", gsPaper: "", subject, topic: name, subtopic: "",
+      studyStatus: "Not Started", revisionStatus: "Not Started", history: [],
+    }]);
+    setTopic(name); setSubtopic(""); setAddingTopic(false); setNewTopicName("");
+  }
+  function cancelNewTopic() { setAddingTopic(false); setNewTopicName(""); }
 
   function markCompleted() {
     if (!topic) { window.alert("Select a topic (added on the Syllabus tab) before marking the class completed."); return; }
@@ -1292,10 +1343,21 @@ function ClassLectureWidget({ db, updateSlice, dateISO, onNavigate }) {
         </select>
         <input className="ucc-input ucc-mono" type="number" inputMode="numeric" placeholder="Class #" value={classNumber}
           onChange={e => setClassNumber(e.target.value.replace(/[^0-9]/g, ""))} />
-        <select className="ucc-select" value={topic} onChange={e => onTopicChange(e.target.value)}>
-          <option value="">{topicOptions.length ? "Select topic…" : "No syllabus topics for this subject yet"}</option>
-          {topicOptions.map(t => <option key={t} value={t}>{t}</option>)}
-        </select>
+        {addingTopic ? (
+          <div className="ucc-flex">
+            <input className="ucc-input" autoFocus placeholder="New topic name" value={newTopicName}
+              onChange={e => setNewTopicName(e.target.value)}
+              onKeyDown={e => { if (e.key === "Enter") confirmNewTopic(); if (e.key === "Escape") cancelNewTopic(); }} />
+            <IconBtn icon={Check} onClick={confirmNewTopic} title="Add topic to Syllabus" />
+            <IconBtn icon={X} onClick={cancelNewTopic} title="Cancel" />
+          </div>
+        ) : (
+          <select className="ucc-select" value={topic} onChange={e => onTopicChange(e.target.value)}>
+            <option value="">Select topic…</option>
+            {topicOptions.map(t => <option key={t} value={t}>{t}</option>)}
+            <option value={NEW_TOPIC_VALUE}>+ New topic</option>
+          </select>
+        )}
         <select className="ucc-select" value={subtopic} onChange={e => setSubtopic(e.target.value)} disabled={!topic}>
           <option value="">{subtopicOptions.length ? "Select subtopic (optional)…" : "—"}</option>
           {subtopicOptions.map(t => <option key={t} value={t}>{t}</option>)}
@@ -1303,12 +1365,6 @@ function ClassLectureWidget({ db, updateSlice, dateISO, onNavigate }) {
         <input className="ucc-input" type="date" placeholder="ETA" value={eta} onChange={e => setEta(e.target.value)} />
         <button className="ucc-btn primary" onClick={markCompleted}><Check size={14} /> Mark class completed</button>
       </div>
-      {topicOptions.length === 0 && (
-        <div className="ucc-tiny" style={{ marginTop: 6 }}>
-          No topics tagged to <strong>{subject}</strong> in the Syllabus yet.{" "}
-          {onNavigate && <button className="ucc-btn ghost" style={{ padding: "2px 6px" }} onClick={() => onNavigate("syllabus")}>Add them on the Syllabus tab →</button>}
-        </div>
-      )}
     </div>
   );
 }
@@ -1826,28 +1882,75 @@ function WeeklyReviewTab({ db, updateSlice }) {
   function setReflection(patch) {
     updateSlice("weeklyReviews", prev => ({ ...prev, [weekOf]: { ...(prev[weekOf] || {}), ...patch } }));
   }
+  // Per-day breakdown for the week: every non-break task with its status,
+  // plus that day's End-of-day review — this is the "log" the daily plan and
+  // end-of-day review otherwise disappear into with no later record of them.
+  const dayLogs = weekDates.map(d => {
+    const plan = db.dailyPlans[d];
+    const rev = db.dailyReviews[d];
+    const tasks = plan ? (plan.blocks || []).filter(b => b.type !== "break") : [];
+    const hasReview = !!(rev && (rev.notes || rev.skipReason));
+    return { date: d, tasks, review: rev, hasContent: tasks.length > 0 || hasReview };
+  });
+  const weekHasContent = dayLogs.some(dl => dl.hasContent);
   return (
-    <div className="ucc-card">
-      <div className="ucc-flex between wrap">
-        <h3>Weekly review</h3>
-        <div className="ucc-flex">
-          <IconBtn icon={ChevronLeft} onClick={() => setWeekOf(w => addDaysISO(w, -7))} title="Previous week" />
-          <span className="ucc-mono ucc-tiny">Week of {weekOf} – {addDaysISO(weekOf, 6)}</span>
-          <IconBtn icon={ChevronRightIcon} onClick={() => setWeekOf(w => addDaysISO(w, 7))} title="Next week" />
+    <div>
+      <div className="ucc-card ucc-no-print">
+        <div className="ucc-flex between wrap">
+          <h3>Weekly review</h3>
+          <div className="ucc-flex">
+            <IconBtn icon={ChevronLeft} onClick={() => setWeekOf(w => addDaysISO(w, -7))} title="Previous week" />
+            <span className="ucc-mono ucc-tiny">Week of {weekOf} – {addDaysISO(weekOf, 6)}</span>
+            <IconBtn icon={ChevronRightIcon} onClick={() => setWeekOf(w => addDaysISO(w, 7))} title="Next week" />
+          </div>
         </div>
       </div>
-      <div className="ucc-statgrid" style={{ margin: "12px 0" }}>
-        <div className="ucc-stat"><div className="n">{planned}</div><div className="l">Planned sessions</div></div>
-        <div className="ucc-stat"><div className="n">{completed}</div><div className="l">Completed</div></div>
-        <div className="ucc-stat"><div className="n">{missed}</div><div className="l">Skipped</div></div>
-        <div className="ucc-stat"><div className="n">{db.classes.filter(c => weekDates.includes(c.date)).length}</div><div className="l">Classes this week</div></div>
-        <div className="ucc-stat"><div className="n">{db.answerWriting.filter(a => weekDates.includes(a.date)).length}</div><div className="l">Answers written</div></div>
-        <div className="ucc-stat"><div className="n">{db.currentAffairs.filter(c => weekDates.includes(c.date)).length}</div><div className="l">Current affairs logged</div></div>
-      </div>
-      <div className="ucc-grid">
-        <div><label className="ucc-tiny">What went well?</label><textarea className="ucc-textarea" rows={3} value={reflection.wellDone} onChange={e => setReflection({ wellDone: e.target.value })} /></div>
-        <div><label className="ucc-tiny">What did not go well?</label><textarea className="ucc-textarea" rows={3} value={reflection.notWell} onChange={e => setReflection({ notWell: e.target.value })} /></div>
-        <div><label className="ucc-tiny">What should change next week?</label><textarea className="ucc-textarea" rows={3} value={reflection.change} onChange={e => setReflection({ change: e.target.value })} /></div>
+
+      <div className="ucc-print-area">
+        <div className="ucc-card">
+          <div className="ucc-flex between wrap">
+            <h3>Week of {weekOf} – {addDaysISO(weekOf, 6)}</h3>
+            <button className="ucc-btn primary ucc-no-print" onClick={() => window.print()}
+              title="Opens your browser's print dialog — choose “Save as PDF” as the destination">
+              <Download size={14} /> Download as PDF
+            </button>
+          </div>
+          <div className="ucc-statgrid" style={{ margin: "12px 0" }}>
+            <div className="ucc-stat"><div className="n">{planned}</div><div className="l">Planned sessions</div></div>
+            <div className="ucc-stat"><div className="n">{completed}</div><div className="l">Completed</div></div>
+            <div className="ucc-stat"><div className="n">{missed}</div><div className="l">Skipped</div></div>
+            <div className="ucc-stat"><div className="n">{db.classes.filter(c => weekDates.includes(c.date)).length}</div><div className="l">Classes this week</div></div>
+            <div className="ucc-stat"><div className="n">{db.answerWriting.filter(a => weekDates.includes(a.date)).length}</div><div className="l">Answers written</div></div>
+            <div className="ucc-stat"><div className="n">{db.currentAffairs.filter(c => weekDates.includes(c.date)).length}</div><div className="l">Current affairs logged</div></div>
+          </div>
+          <div className="ucc-grid">
+            <div><label className="ucc-tiny">What went well?</label><textarea className="ucc-textarea" rows={3} value={reflection.wellDone} onChange={e => setReflection({ wellDone: e.target.value })} /></div>
+            <div><label className="ucc-tiny">What did not go well?</label><textarea className="ucc-textarea" rows={3} value={reflection.notWell} onChange={e => setReflection({ notWell: e.target.value })} /></div>
+            <div><label className="ucc-tiny">What should change next week?</label><textarea className="ucc-textarea" rows={3} value={reflection.change} onChange={e => setReflection({ change: e.target.value })} /></div>
+          </div>
+        </div>
+
+        <div className="ucc-card">
+          <h3>Daily log</h3>
+          {!weekHasContent && <EmptyState>No daily plans or end-of-day reviews logged for this week yet.</EmptyState>}
+          {dayLogs.filter(dl => dl.hasContent).map(dl => (
+            <div key={dl.date} style={{ marginBottom: 14, paddingBottom: 12, borderBottom: "1px solid var(--line)" }}>
+              <div style={{ fontWeight: 700, marginBottom: 6 }}>{fmtDateLong(dl.date)}</div>
+              {dl.tasks.map(t => (
+                <div key={t.id} className="ucc-flex" style={{ marginBottom: 3 }}>
+                  <span className="ucc-tiny" style={{ minWidth: 220 }}>{t.label}</span>
+                  <Badge tone={colorFor(t.skipped ? "Skipped" : (t.status || "Not Started"))}>{t.skipped ? "Skipped" : (t.status || "Not Started")}</Badge>
+                </div>
+              ))}
+              {dl.review && (dl.review.notes || dl.review.skipReason) && (
+                <div style={{ marginTop: 6 }}>
+                  {dl.review.notes && <div className="ucc-tiny"><strong>End-of-day review:</strong> {dl.review.notes}</div>}
+                  {dl.review.skipReason && <div className="ucc-tiny">Skip reason: {dl.review.skipReason}</div>}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
       </div>
     </div>
   );
