@@ -406,30 +406,6 @@ function minutesToTime(mins) {
 }
 function normKey(...parts) { return parts.map(p => String(p || "").trim().toLowerCase()).join("|"); }
 function slugify(s) { return String(s || "").trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "") || "none"; }
-// Distinct topics/subtopics already associated with a subject — powers the
-// subject-scoped datalist dropdowns on Class Lecture entry, ready to line up
-// with the Syllabus tracker once it's populated from the real syllabus.
-function topicOptionsForSubject(db, subject) {
-  const set = new Set();
-  db.syllabus.filter(s => s.subject === subject && s.topic).forEach(s => set.add(s.topic));
-  db.classes.filter(c => c.subject === subject && c.topic).forEach(c => set.add(c.topic));
-  db.reading.filter(r => r.subject === subject && r.topic).forEach(r => set.add(r.topic));
-  return Array.from(set);
-}
-function subtopicOptionsForSubject(db, subject) {
-  const set = new Set();
-  db.syllabus.filter(s => s.subject === subject && s.subtopic).forEach(s => set.add(s.subtopic));
-  db.classes.filter(c => c.subject === subject && c.subtopic).forEach(c => set.add(c.subtopic));
-  return Array.from(set);
-}
-// Narrower than the above: subtopics for one specific topic under a subject —
-// powers the cascading Subtopic dropdown on Class Lecture entry.
-function subtopicOptionsForTopic(db, subject, topic) {
-  const set = new Set();
-  db.syllabus.filter(s => s.subject === subject && s.topic === topic && s.subtopic).forEach(s => set.add(s.subtopic));
-  db.classes.filter(c => c.subject === subject && c.topic === topic && c.subtopic).forEach(c => set.add(c.subtopic));
-  return Array.from(set);
-}
 // Narrowest cascade level: micro-topics already used under one specific
 // subject/topic/subtopic combination — powers the Micro Topic dropdown on
 // the Syllabus tab.
@@ -452,6 +428,21 @@ function findSyllabusId(db, { subject, topic, subtopic }) {
     if (exact) return exact.id;
   }
   return candidates[0].id;
+}
+// Strict topic/subtopic lists scoped to what's actually on the Syllabus tab
+// — the only place (besides Current Affairs, which routes new entries into
+// Syllabus too) new topics/subtopics/micro topics may be created. Every
+// other tracker's topic dropdown reads from these, so nothing but Syllabus
+// data ever appears as a selectable option going forward.
+function syllabusTopicsForSubject(db, subject) {
+  const set = new Set();
+  db.syllabus.filter(s => s.subject === subject && s.topic).forEach(s => set.add(s.topic));
+  return Array.from(set);
+}
+function syllabusSubtopicsForTopic(db, subject, topic) {
+  const set = new Set();
+  db.syllabus.filter(s => s.subject === subject && s.topic === topic && s.subtopic).forEach(s => set.add(s.subtopic));
+  return Array.from(set);
 }
 function weekStartISO(iso) {
   const [y, m, d] = iso.split("-").map(Number);
@@ -478,7 +469,13 @@ function downloadBlob(content, filename, mime) {
    VITE_GOOGLE_CLIENT_ID (a public OAuth Web Client ID, not a secret) from
    a Google Cloud project with the Drive API enabled — see README.
    ============================================================ */
-const DRIVE_FOLDER_NAME = "UPSC 2027 Command Center - Single Pagers";
+const DRIVE_FOLDER_NAMES = {
+  singlePager: "UPSC 2027 Command Center - Single Pagers",
+  answerWriting: "UPSC 2027 Command Center - GS Answer Writing",
+  tamilWriting: "UPSC 2027 Command Center - Tamil Literature Writing",
+  tamilReading: "UPSC 2027 Command Center - Tamil Literature Reading",
+  classes: "UPSC 2027 Command Center - Class Notes",
+};
 const DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.file";
 
 let gisLoadPromise = null;
@@ -542,11 +539,17 @@ async function driveFetch(url, accessToken, options = {}) {
 }
 
 // Finds (or creates once, then remembers in settings) a single dedicated
-// Drive folder to keep all Single Pager PDFs together rather than scattering
-// them across the user's whole Drive.
-async function ensureDriveFolder(accessToken, db, updateSlice) {
-  if (db.settings.driveFolderId) return db.settings.driveFolderId;
-  const q = encodeURIComponent(`name='${DRIVE_FOLDER_NAME}' and mimeType='application/vnd.google-apps.folder' and trashed=false`);
+// Drive folder per tracker, to keep each kind of PDF together rather than
+// scattering everything across the user's whole Drive. `folderKey` is one
+// of DRIVE_FOLDER_NAMES' keys. Falls back to the legacy singular
+// settings.driveFolderId for "singlePager" so existing users' folder isn't
+// duplicated by this change.
+async function ensureDriveFolder(accessToken, db, updateSlice, folderKey) {
+  const folderName = DRIVE_FOLDER_NAMES[folderKey];
+  const existingId = (db.settings.driveFolders && db.settings.driveFolders[folderKey])
+    || (folderKey === "singlePager" ? db.settings.driveFolderId : null);
+  if (existingId) return existingId;
+  const q = encodeURIComponent(`name='${folderName}' and mimeType='application/vnd.google-apps.folder' and trashed=false`);
   const searchRes = await driveFetch(`https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id,name)`, accessToken);
   const searchData = await searchRes.json();
   let folderId = searchData.files && searchData.files[0] && searchData.files[0].id;
@@ -554,11 +557,11 @@ async function ensureDriveFolder(accessToken, db, updateSlice) {
     const createRes = await driveFetch("https://www.googleapis.com/drive/v3/files?fields=id", accessToken, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: DRIVE_FOLDER_NAME, mimeType: "application/vnd.google-apps.folder" }),
+      body: JSON.stringify({ name: folderName, mimeType: "application/vnd.google-apps.folder" }),
     });
     folderId = (await createRes.json()).id;
   }
-  updateSlice("settings", prev => ({ ...prev, driveFolderId: folderId }));
+  updateSlice("settings", prev => ({ ...prev, driveFolders: { ...(prev.driveFolders || {}), [folderKey]: folderId } }));
   return folderId;
 }
 
@@ -569,12 +572,12 @@ function buildDriveMultipartBody(metadata, file, boundary) {
 }
 
 // Uploads a new PDF, or (when existingFileId is passed) overwrites the same
-// Drive file in place so re-uploading a corrected single-pager doesn't leave
+// Drive file in place so re-uploading a corrected document doesn't leave
 // orphaned old copies behind.
-async function uploadSinglePagerFile(db, updateSlice, existingFileId, file) {
+async function uploadDriveFile(db, updateSlice, folderKey, existingFileId, file) {
   if (file.type && file.type !== "application/pdf") throw new Error("Please choose a PDF file.");
   const accessToken = await getDriveAccessToken();
-  const folderId = await ensureDriveFolder(accessToken, db, updateSlice);
+  const folderId = await ensureDriveFolder(accessToken, db, updateSlice, folderKey);
   const boundary = "uccdrive" + uid();
   const metadata = existingFileId ? { name: file.name } : { name: file.name, parents: [folderId] };
   const body = buildDriveMultipartBody(metadata, file, boundary);
@@ -590,11 +593,11 @@ async function uploadSinglePagerFile(db, updateSlice, existingFileId, file) {
   return { id: data.id, name: data.name };
 }
 
-async function downloadSinglePagerFile(fileId, fileName) {
+async function downloadDriveFile(fileId, fileName) {
   const accessToken = await getDriveAccessToken();
   const res = await driveFetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`, accessToken);
   const blob = await res.blob();
-  downloadBlob(blob, fileName || "single-pager.pdf", "application/pdf");
+  downloadBlob(blob, fileName || "document.pdf", "application/pdf");
 }
 
 function normalizeSettings(s) {
@@ -821,12 +824,15 @@ function GenericTracker({ records, setRecords, columns, newRecord, emptyMessage,
 const ADD_NEW_VALUE = "__ucc_add_new__";
 
 // One cell in a chained subject → topic → subtopic → microtopic dropdown.
-// Shows existing values as options, always ends with "+ Add new" (which
-// swaps in a small text input, mirroring the Class Lecture add-topic flow).
-// `disabled` is used to enforce the chain — e.g. Topic stays disabled until
-// Subject is picked. `onSelect` fires for an existing value, `onAddNew`
-// fires with the trimmed typed value when a new one is confirmed.
-function CascadingSelectCell({ value, options, placeholder, disabled, onSelect, onAddNew }) {
+// Shows existing values as options. When `allowAddNew` is true (default)
+// it also ends with "+ Add new" (swaps in a small text input, mirroring
+// the Class Lecture add-topic flow); when false, the dropdown is strictly
+// limited to what's already on the Syllabus tab — used everywhere topics
+// must originate from Syllabus (or Current Affairs) only.
+// `disabled` enforces the chain — e.g. Topic stays disabled until Subject
+// is picked. `onSelect` fires for an existing value, `onAddNew` fires with
+// the trimmed typed value when a new one is confirmed.
+function CascadingSelectCell({ value, options, placeholder, disabled, onSelect, onAddNew, allowAddNew = true }) {
   const [adding, setAdding] = useState(false);
   const [draft, setDraft] = useState("");
 
@@ -856,12 +862,16 @@ function CascadingSelectCell({ value, options, placeholder, disabled, onSelect, 
   // computed option list, so switching to this component never silently
   // hides already-saved data.
   const allOptions = value && !options.includes(value) ? [value, ...options] : options;
+  const noOptionsYet = !disabled && allOptions.length === 0 && !allowAddNew;
   return (
-    <select className="ucc-select" value={value || ""} disabled={disabled} onChange={e => handleChange(e.target.value)}>
-      <option value="">{placeholder}</option>
-      {allOptions.map(o => <option key={o} value={o}>{o}</option>)}
-      <option value={ADD_NEW_VALUE}>+ Add new</option>
-    </select>
+    <div>
+      <select className="ucc-select" value={value || ""} disabled={disabled} onChange={e => handleChange(e.target.value)}>
+        <option value="">{placeholder}</option>
+        {allOptions.map(o => <option key={o} value={o}>{o}</option>)}
+        {allowAddNew && <option value={ADD_NEW_VALUE}>+ Add new</option>}
+      </select>
+      {noOptionsYet && <div className="ucc-tiny" style={{ color: "var(--ink-muted)" }}>None yet — add it on the Syllabus tab first.</div>}
+    </div>
   );
 }
 
@@ -870,7 +880,7 @@ function CascadingSelectCell({ value, options, placeholder, disabled, onSelect, 
 // original filename) via `onChange` — the PDF bytes themselves go straight
 // to Google Drive over the network and are never written to Supabase.
 // Download re-fetches the bytes from Drive on demand rather than caching them.
-function DriveFileCell({ driveFile, db, updateSlice, onChange }) {
+function DriveFileCell({ driveFile, db, updateSlice, onChange, folderKey }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const fileInputRef = useRef(null);
@@ -881,7 +891,7 @@ function DriveFileCell({ driveFile, db, updateSlice, onChange }) {
     if (!picked) return;
     setBusy(true); setError("");
     try {
-      const uploaded = await uploadSinglePagerFile(db, updateSlice, driveFile?.id, picked);
+      const uploaded = await uploadDriveFile(db, updateSlice, folderKey, driveFile?.id, picked);
       onChange(uploaded);
     } catch (err) {
       setError(err.message || "Upload failed.");
@@ -893,7 +903,7 @@ function DriveFileCell({ driveFile, db, updateSlice, onChange }) {
   async function handleDownload() {
     setBusy(true); setError("");
     try {
-      await downloadSinglePagerFile(driveFile.id, driveFile.name);
+      await downloadDriveFile(driveFile.id, driveFile.name);
     } catch (err) {
       setError(err.message || "Download failed.");
     } finally {
@@ -1559,40 +1569,20 @@ function LinkedTaskInfo({ link, db, updateSlice, dateISO, yesterdayISO, onNaviga
   return null;
 }
 
-const NEW_TOPIC_VALUE = "__new_topic__";
-
 function ClassLectureWidget({ db, updateSlice, dateISO }) {
   const [subject, setSubject] = useState(db.settings.subjects[0] || "");
   const [classNumber, setClassNumber] = useState("");
   const [topic, setTopic] = useState("");
   const [subtopic, setSubtopic] = useState("");
   const [eta, setEta] = useState("");
-  const [addingTopic, setAddingTopic] = useState(false);
-  const [newTopicName, setNewTopicName] = useState("");
-  const topicOptions = topicOptionsForSubject(db, subject);
-  const subtopicOptions = subtopicOptionsForTopic(db, subject, topic);
+  const topicOptions = syllabusTopicsForSubject(db, subject);
+  const subtopicOptions = syllabusSubtopicsForTopic(db, subject, topic);
 
-  function onSubjectChange(v) { setSubject(v); setTopic(""); setSubtopic(""); setAddingTopic(false); setNewTopicName(""); }
-  function onTopicChange(v) {
-    if (v === NEW_TOPIC_VALUE) { setAddingTopic(true); setNewTopicName(""); return; }
-    setTopic(v); setSubtopic("");
-  }
-  // Adds a new Syllabus row for this subject right from the Class Lecture
-  // form (mirrors the Syllabus tab's own "Add row" defaults), then selects
-  // it as this class's topic — no more bouncing over to the Syllabus tab first.
-  function confirmNewTopic() {
-    const name = newTopicName.trim();
-    if (!name) { setAddingTopic(false); return; }
-    updateSlice("syllabus", prev => [...prev, {
-      id: uid(), coverage: "", gsPaper: "", subject, topic: name, subtopic: "", microtopic: "",
-      studyStatus: "Not Started", revisionStatus: "Not Started", history: [],
-    }]);
-    setTopic(name); setSubtopic(""); setAddingTopic(false); setNewTopicName("");
-  }
-  function cancelNewTopic() { setAddingTopic(false); setNewTopicName(""); }
+  function onSubjectChange(v) { setSubject(v); setTopic(""); setSubtopic(""); }
+  function onTopicChange(v) { setTopic(v); setSubtopic(""); }
 
   function markCompleted() {
-    if (!topic) { window.alert("Select a topic (added on the Syllabus tab) before marking the class completed."); return; }
+    if (!topic) { window.alert("Select a topic first — new topics are added on the Syllabus tab, not here."); return; }
     const classNum = classNumber || (Math.max(0, ...db.classes.filter(c => c.subject === subject).map(c => Number(c.classNumber) || 0)) + 1);
     // Resolve the stable Syllabus row id for this subject/topic/subtopic so
     // this class (and its auto-created Reading row) stay correctly linked
@@ -1614,21 +1604,10 @@ function ClassLectureWidget({ db, updateSlice, dateISO }) {
         </select>
         <input className="ucc-input ucc-mono" type="number" inputMode="numeric" placeholder="Class #" value={classNumber}
           onChange={e => setClassNumber(e.target.value.replace(/[^0-9]/g, ""))} />
-        {addingTopic ? (
-          <div className="ucc-flex">
-            <input className="ucc-input" autoFocus placeholder="New topic name" value={newTopicName}
-              onChange={e => setNewTopicName(e.target.value)}
-              onKeyDown={e => { if (e.key === "Enter") confirmNewTopic(); if (e.key === "Escape") cancelNewTopic(); }} />
-            <IconBtn icon={Check} onClick={confirmNewTopic} title="Add topic to Syllabus" />
-            <IconBtn icon={X} onClick={cancelNewTopic} title="Cancel" />
-          </div>
-        ) : (
-          <select className="ucc-select" value={topic} onChange={e => onTopicChange(e.target.value)}>
-            <option value="">Select topic…</option>
-            {topicOptions.map(t => <option key={t} value={t}>{t}</option>)}
-            <option value={NEW_TOPIC_VALUE}>+ New topic</option>
-          </select>
-        )}
+        <select className="ucc-select" value={topic} onChange={e => onTopicChange(e.target.value)}>
+          <option value="">{topicOptions.length ? "Select topic…" : "No topics yet — add on Syllabus tab"}</option>
+          {topicOptions.map(t => <option key={t} value={t}>{t}</option>)}
+        </select>
         <select className="ucc-select" value={subtopic} onChange={e => setSubtopic(e.target.value)} disabled={!topic}>
           <option value="">{subtopicOptions.length ? "Select subtopic (optional)…" : "—"}</option>
           {subtopicOptions.map(t => <option key={t} value={t}>{t}</option>)}
@@ -1732,14 +1711,6 @@ function ClassesTab({ db, updateSlice }) {
     db.classes.forEach(c => { m[c.subject] = m[c.subject] || []; m[c.subject].push(c); });
     return m;
   }, [db.classes]);
-  const subjectDatalists = useMemo(() => {
-    const out = [];
-    db.settings.subjects.forEach(subj => {
-      out.push({ id: "topics-" + slugify(subj), options: topicOptionsForSubject(db, subj) });
-      out.push({ id: "subtopics-" + slugify(subj), options: subtopicOptionsForSubject(db, subj) });
-    });
-    return out;
-  }, [db]);
   return (
     <div>
       <div className="ucc-statgrid" style={{ marginBottom: 16 }}>
@@ -1756,20 +1727,52 @@ function ClassesTab({ db, updateSlice }) {
       </div>
       <div className="ucc-card">
         <h3>Class completion tracker</h3>
+        <div className="ucc-tiny" style={{ marginBottom: 8, color: "var(--ink-muted)" }}>
+          Topic and Subtopic are chosen from the Syllabus tab — new topics can't be added here. Add them on Syllabus first if they're missing.
+        </div>
         <GenericTracker
           records={db.classes} setRecords={u => updateSlice("classes", u)}
-          datalists={subjectDatalists}
           columns={[
             { key: "date", label: "Date", type: "date", width: 120 },
-            { key: "subject", label: "Subject", width: 130 },
+            {
+              key: "subject", label: "Subject", width: 140, type: "custom",
+              render: (rec, _onChange, updateRecord) => (
+                <CascadingSelectCell
+                  value={rec.subject} options={db.settings.subjects} placeholder="Select subject…" allowAddNew={false}
+                  onSelect={v => updateRecord({ subject: v, topic: "", subtopic: "", syllabusId: null })}
+                />
+              ),
+            },
             { key: "classNumber", label: "Class #", type: "number", width: 70 },
             { key: "totalClasses", label: "Total Classes", width: 90 },
-            { key: "topic", label: "Topic", width: 180, datalist: rec => "topics-" + slugify(rec.subject) },
-            { key: "subtopic", label: "Subtopic", width: 160, datalist: rec => "subtopics-" + slugify(rec.subject) },
+            {
+              key: "topic", label: "Topic", width: 200, type: "custom",
+              render: (rec, _onChange, updateRecord) => (
+                <CascadingSelectCell
+                  value={rec.topic} options={syllabusTopicsForSubject(db, rec.subject)} allowAddNew={false}
+                  placeholder={rec.subject ? "Select topic…" : "Select subject first"} disabled={!rec.subject}
+                  onSelect={v => updateRecord({ topic: v, subtopic: "", syllabusId: findSyllabusId(db, { subject: rec.subject, topic: v }) })}
+                />
+              ),
+            },
+            {
+              key: "subtopic", label: "Subtopic", width: 200, type: "custom",
+              render: (rec, _onChange, updateRecord) => (
+                <CascadingSelectCell
+                  value={rec.subtopic} options={syllabusSubtopicsForTopic(db, rec.subject, rec.topic)} allowAddNew={false}
+                  placeholder={rec.topic ? "Select subtopic (optional)…" : "Select topic first"} disabled={!rec.topic}
+                  onSelect={v => updateRecord({ subtopic: v, syllabusId: findSyllabusId(db, { subject: rec.subject, topic: rec.topic, subtopic: v }) })}
+                />
+              ),
+            },
             { key: "eta", label: "ETA", type: "date", width: 120 },
             { key: "status", label: "Status", type: "status", options: TASK_STATUS, width: 150 },
+            {
+              key: "driveFile", label: "Class Notes PDF", width: 170, type: "custom",
+              render: (rec, onChange) => <DriveFileCell driveFile={rec.driveFile} db={db} updateSlice={updateSlice} onChange={onChange} folderKey="classes" />,
+            },
           ]}
-          newRecord={() => ({ date: todayISO(), subject: db.settings.subjects[0] || "", classNumber: "", totalClasses: "", topic: "", subtopic: "", eta: "", status: "Not Started", syllabusId: null })}
+          newRecord={() => ({ date: todayISO(), subject: db.settings.subjects[0] || "", classNumber: "", totalClasses: "", topic: "", subtopic: "", eta: "", status: "Not Started", syllabusId: null, driveFile: null })}
         />
       </div>
     </div>
@@ -1781,13 +1784,33 @@ function ReadingTab({ db, updateSlice }) {
     <div className="ucc-card">
       <h3>Reading tracker</h3>
       <p className="ucc-tiny">"Not Needed" items are excluded from completion — they never count against you.</p>
+      <div className="ucc-tiny" style={{ marginBottom: 8, color: "var(--ink-muted)" }}>
+        Topic is chosen from the Syllabus tab — new topics can't be added here.
+      </div>
       <GenericTracker
         records={db.reading} setRecords={u => updateSlice("reading", u)}
         columns={[
           { key: "date", label: "Date", type: "date", width: 110 },
-          { key: "subject", label: "Subject", width: 120 },
+          {
+            key: "subject", label: "Subject", width: 130, type: "custom",
+            render: (rec, _onChange, updateRecord) => (
+              <CascadingSelectCell
+                value={rec.subject} options={db.settings.subjects} placeholder="Select subject…" allowAddNew={false}
+                onSelect={v => updateRecord({ subject: v, topic: "", syllabusId: null })}
+              />
+            ),
+          },
           { key: "classNumber", label: "Class #", type: "number", width: 65 },
-          { key: "topic", label: "Topic", width: 200 },
+          {
+            key: "topic", label: "Topic", width: 200, type: "custom",
+            render: (rec, _onChange, updateRecord) => (
+              <CascadingSelectCell
+                value={rec.topic} options={syllabusTopicsForSubject(db, rec.subject)} allowAddNew={false}
+                placeholder={rec.subject ? "Select topic…" : "Select subject first"} disabled={!rec.subject}
+                onSelect={v => updateRecord({ topic: v, syllabusId: findSyllabusId(db, { subject: rec.subject, topic: v }) })}
+              />
+            ),
+          },
           { key: "classNotes", label: "Class Notes", type: "status", options: READ_STATUS, width: 130 },
           { key: "standardMaterial", label: "Standard Material", type: "status", options: READ_STATUS, width: 130 },
           { key: "ncert", label: "NCERT", type: "status", options: READ_STATUS, width: 130 },
@@ -1841,7 +1864,7 @@ function SyllabusTab({ db, updateSlice }) {
               key: "topic", label: "Topic", width: 200, type: "custom",
               render: (rec, _onChange, updateRecord) => (
                 <CascadingSelectCell
-                  value={rec.topic} options={topicOptionsForSubject(db, rec.subject)}
+                  value={rec.topic} options={syllabusTopicsForSubject(db, rec.subject)}
                   placeholder={rec.subject ? "Select topic…" : "Select subject first"} disabled={!rec.subject}
                   onSelect={v => updateRecord({ topic: v, subtopic: "", microtopic: "" })}
                   onAddNew={name => updateRecord({ topic: name, subtopic: "", microtopic: "" })}
@@ -1852,7 +1875,7 @@ function SyllabusTab({ db, updateSlice }) {
               key: "subtopic", label: "Subtopic", width: 200, type: "custom",
               render: (rec, _onChange, updateRecord) => (
                 <CascadingSelectCell
-                  value={rec.subtopic} options={subtopicOptionsForTopic(db, rec.subject, rec.topic)}
+                  value={rec.subtopic} options={syllabusSubtopicsForTopic(db, rec.subject, rec.topic)}
                   placeholder={rec.topic ? "Select subtopic…" : "Select topic first"} disabled={!rec.topic}
                   onSelect={v => updateRecord({ subtopic: v, microtopic: "" })}
                   onAddNew={name => updateRecord({ subtopic: name, microtopic: "" })}
@@ -1888,11 +1911,31 @@ function SinglePagerTab({ db, updateSlice }) {
           PDF upload/download needs Google Drive configured — add <code>VITE_GOOGLE_CLIENT_ID</code> to your <code>.env</code> (see README).
         </div>
       )}
+      <div className="ucc-tiny" style={{ marginBottom: 8, color: "var(--ink-muted)" }}>
+        Topic is chosen from the Syllabus tab — new topics can't be added here.
+      </div>
       <GenericTracker
         records={db.singlePager} setRecords={u => updateSlice("singlePager", u)}
         columns={[
-          { key: "subject", label: "Subject", width: 120 },
-          { key: "topic", label: "Topic", width: 180 },
+          {
+            key: "subject", label: "Subject", width: 130, type: "custom",
+            render: (rec, _onChange, updateRecord) => (
+              <CascadingSelectCell
+                value={rec.subject} options={db.settings.subjects} placeholder="Select subject…" allowAddNew={false}
+                onSelect={v => updateRecord({ subject: v, topic: "" })}
+              />
+            ),
+          },
+          {
+            key: "topic", label: "Topic", width: 200, type: "custom",
+            render: (rec, _onChange, updateRecord) => (
+              <CascadingSelectCell
+                value={rec.topic} options={syllabusTopicsForSubject(db, rec.subject)} allowAddNew={false}
+                placeholder={rec.subject ? "Select topic…" : "Select subject first"} disabled={!rec.subject}
+                onSelect={v => updateRecord({ topic: v })}
+              />
+            ),
+          },
           { key: "classNotes", label: "Class Notes", placeholder: "e.g. 19 pages", width: 130 },
           { key: "handout", label: "Handout", placeholder: "e.g. Handout 1 - 37p", width: 150 },
           { key: "ncert", label: "NCERT", placeholder: "NA / pages", width: 100 },
@@ -1901,7 +1944,7 @@ function SinglePagerTab({ db, updateSlice }) {
           { key: "status", label: "Status", type: "status", options: SP_STATUS, width: 120 },
           {
             key: "driveFile", label: "Single Pager PDF", width: 170, type: "custom",
-            render: (rec, onChange) => <DriveFileCell driveFile={rec.driveFile} db={db} updateSlice={updateSlice} onChange={onChange} />,
+            render: (rec, onChange) => <DriveFileCell driveFile={rec.driveFile} db={db} updateSlice={updateSlice} onChange={onChange} folderKey="singlePager" />,
           },
         ]}
         newRecord={() => ({ date: todayISO(), subject: db.settings.subjects[0] || "", topic: "", classNotes: "", handout: "", ncert: "", standardBooks: "", writing: "Not Started", status: "Not Started", driveFile: null })}
@@ -1914,14 +1957,34 @@ function NcertTab({ db, updateSlice }) {
   return (
     <div className="ucc-card">
       <h3>NCERT tracker</h3>
+      <div className="ucc-tiny" style={{ marginBottom: 8, color: "var(--ink-muted)" }}>
+        Topic is chosen from the Syllabus tab — new topics can't be added here.
+      </div>
       <GenericTracker
         records={db.ncert} setRecords={u => updateSlice("ncert", u)}
         columns={[
-          { key: "subject", label: "Subject", width: 120 },
+          {
+            key: "subject", label: "Subject", width: 130, type: "custom",
+            render: (rec, _onChange, updateRecord) => (
+              <CascadingSelectCell
+                value={rec.subject} options={db.settings.subjects} placeholder="Select subject…" allowAddNew={false}
+                onSelect={v => updateRecord({ subject: v, topic: "" })}
+              />
+            ),
+          },
           { key: "book", label: "Book", width: 150 },
           { key: "className", label: "Class", width: 80 },
           { key: "chapter", label: "Chapter", width: 140 },
-          { key: "topic", label: "Topic", width: 160 },
+          {
+            key: "topic", label: "Topic", width: 180, type: "custom",
+            render: (rec, _onChange, updateRecord) => (
+              <CascadingSelectCell
+                value={rec.topic} options={syllabusTopicsForSubject(db, rec.subject)} allowAddNew={false}
+                placeholder={rec.subject ? "Select topic…" : "Select subject first"} disabled={!rec.subject}
+                onSelect={v => updateRecord({ topic: v })}
+              />
+            ),
+          },
           { key: "status", label: "Status", type: "status", options: NCERT_STATUS, width: 110 },
           { key: "dateStarted", label: "Started", type: "date", width: 120 },
           { key: "dateCompleted", label: "Completed", type: "date", width: 120 },
@@ -1936,13 +1999,33 @@ function StandardBooksTab({ db, updateSlice }) {
   return (
     <div className="ucc-card">
       <h3>Standard book tracker</h3>
+      <div className="ucc-tiny" style={{ marginBottom: 8, color: "var(--ink-muted)" }}>
+        Topic is chosen from the Syllabus tab — new topics can't be added here.
+      </div>
       <GenericTracker
         records={db.standardBooks} setRecords={u => updateSlice("standardBooks", u)}
         columns={[
           { key: "bookName", label: "Book", width: 150 },
-          { key: "subject", label: "Subject", width: 120 },
+          {
+            key: "subject", label: "Subject", width: 130, type: "custom",
+            render: (rec, _onChange, updateRecord) => (
+              <CascadingSelectCell
+                value={rec.subject} options={db.settings.subjects} placeholder="Select subject…" allowAddNew={false}
+                onSelect={v => updateRecord({ subject: v, topic: "" })}
+              />
+            ),
+          },
           { key: "chapter", label: "Chapter", width: 140 },
-          { key: "topic", label: "Topic", width: 150 },
+          {
+            key: "topic", label: "Topic", width: 160, type: "custom",
+            render: (rec, _onChange, updateRecord) => (
+              <CascadingSelectCell
+                value={rec.topic} options={syllabusTopicsForSubject(db, rec.subject)} allowAddNew={false}
+                placeholder={rec.subject ? "Select topic…" : "Select subject first"} disabled={!rec.subject}
+                onSelect={v => updateRecord({ topic: v })}
+              />
+            ),
+          },
           { key: "pages", label: "Pages", width: 80 },
           { key: "status", label: "Status", type: "status", options: SB_STATUS, width: 110 },
           { key: "startDate", label: "Start", type: "date", width: 120 },
@@ -1956,36 +2039,66 @@ function StandardBooksTab({ db, updateSlice }) {
 
 function TamilTab({ db, updateSlice }) {
   const [sub, setSub] = useState("reading");
+  const topicOptions = syllabusTopicsForSubject(db, "Tamil Literature");
   return (
     <div className="ucc-card">
       <div className="ucc-tabbar">
         <button className={sub === "reading" ? "active" : ""} onClick={() => setSub("reading")}>Reading</button>
         <button className={sub === "writing" ? "active" : ""} onClick={() => setSub("writing")}>Answer Writing</button>
       </div>
+      <div className="ucc-tiny" style={{ margin: "8px 0", color: "var(--ink-muted)" }}>
+        Topic is chosen from the Syllabus tab (Subject: Tamil Literature) — new topics can't be added here.
+      </div>
       {sub === "reading" ? (
         <GenericTracker
           records={db.tamilReading} setRecords={u => updateSlice("tamilReading", u)}
           columns={[
-            { key: "topic", label: "Topic", width: 200 },
+            {
+              key: "topic", label: "Topic", width: 200, type: "custom",
+              render: (rec, _onChange, updateRecord) => (
+                <CascadingSelectCell
+                  value={rec.topic} options={topicOptions} allowAddNew={false}
+                  placeholder={topicOptions.length ? "Select topic…" : "Add Tamil Literature topics on Syllabus tab"}
+                  onSelect={v => updateRecord({ topic: v })}
+                />
+              ),
+            },
             { key: "source", label: "Source", width: 160 },
             { key: "status", label: "Status", type: "status", options: READ_STATUS, width: 120 },
             { key: "revision", label: "Revision", type: "status", options: READ_STATUS, width: 120 },
             { key: "notes", label: "What I've Learned", type: "textarea", width: 220 },
+            {
+              key: "driveFile", label: "PDF", width: 170, type: "custom",
+              render: (rec, onChange) => <DriveFileCell driveFile={rec.driveFile} db={db} updateSlice={updateSlice} onChange={onChange} folderKey="tamilReading" />,
+            },
           ]}
-          newRecord={() => ({ topic: "", source: "", status: "Yet to Start", revision: "Yet to Start", notes: "" })}
+          newRecord={() => ({ topic: "", source: "", status: "Yet to Start", revision: "Yet to Start", notes: "", driveFile: null })}
         />
       ) : (
         <GenericTracker
           records={db.tamilWriting} setRecords={u => updateSlice("tamilWriting", u)}
           columns={[
             { key: "date", label: "Date", type: "date", width: 110 },
-            { key: "topic", label: "Topic", width: 160 },
+            {
+              key: "topic", label: "Topic", width: 160, type: "custom",
+              render: (rec, _onChange, updateRecord) => (
+                <CascadingSelectCell
+                  value={rec.topic} options={topicOptions} allowAddNew={false}
+                  placeholder={topicOptions.length ? "Select topic…" : "Add Tamil Literature topics on Syllabus tab"}
+                  onSelect={v => updateRecord({ topic: v })}
+                />
+              ),
+            },
             { key: "question", label: "Question", type: "textarea", width: 240 },
             { key: "wordLimit", label: "Word Limit", type: "number", width: 90 },
             { key: "selfEvaluation", label: "Self Eval", type: "textarea", width: 180 },
             { key: "status", label: "Status", type: "status", options: TASK_STATUS, width: 140 },
+            {
+              key: "driveFile", label: "Answer PDF", width: 170, type: "custom",
+              render: (rec, onChange) => <DriveFileCell driveFile={rec.driveFile} db={db} updateSlice={updateSlice} onChange={onChange} folderKey="tamilWriting" />,
+            },
           ]}
-          newRecord={() => ({ date: todayISO(), topic: "", question: "", wordLimit: 150, answerWritten: "", selfEvaluation: "", status: "Not Started" })}
+          newRecord={() => ({ date: todayISO(), topic: "", question: "", wordLimit: 150, answerWritten: "", selfEvaluation: "", status: "Not Started", driveFile: null })}
         />
       )}
     </div>
@@ -1996,15 +2109,65 @@ function CurrentAffairsTab({ db, updateSlice }) {
   return (
     <div className="ucc-card">
       <h3>Current affairs</h3>
+      <div className="ucc-tiny" style={{ marginBottom: 8, color: "var(--ink-muted)" }}>
+        Subject/Syllabus Topic/Subtopic are linked to the Syllabus tab. Picking <strong>+ Add new</strong> here adds it to Syllabus too — current affairs is the one other place besides Syllabus a genuinely new topic can be created.
+      </div>
       <GenericTracker
         records={db.currentAffairs} setRecords={u => updateSlice("currentAffairs", u)}
         columns={[
           { key: "date", label: "Date", type: "date", width: 110 },
           { key: "title", label: "Topic / Title", width: 200 },
           { key: "source", label: "Source", width: 130 },
-          { key: "subject", label: "Subject", width: 120 },
-          { key: "subtopic", label: "Subtopic", width: 140 },
-          { key: "relevantSyllabusTopic", label: "Syllabus Topic", width: 160 },
+          {
+            key: "subject", label: "Subject", width: 150, type: "custom",
+            render: (rec, _onChange, updateRecord) => (
+              <CascadingSelectCell
+                value={rec.subject} options={db.settings.subjects} placeholder="Select subject…"
+                onSelect={v => updateRecord({ subject: v, relevantSyllabusTopic: "", subtopic: "" })}
+                onAddNew={name => {
+                  updateSlice("settings", s => (s.subjects.includes(name) ? s : { ...s, subjects: [...s.subjects, name] }));
+                  updateRecord({ subject: name, relevantSyllabusTopic: "", subtopic: "" });
+                }}
+              />
+            ),
+          },
+          {
+            key: "relevantSyllabusTopic", label: "Syllabus Topic", width: 180, type: "custom",
+            render: (rec, _onChange, updateRecord) => (
+              <CascadingSelectCell
+                value={rec.relevantSyllabusTopic} options={syllabusTopicsForSubject(db, rec.subject)}
+                placeholder={rec.subject ? "Select topic…" : "Select subject first"} disabled={!rec.subject}
+                onSelect={v => updateRecord({ relevantSyllabusTopic: v, subtopic: "" })}
+                onAddNew={name => {
+                  // A genuinely new current-affairs topic is added to the
+                  // Syllabus tracker itself (the single source of truth),
+                  // never stored only as free text on this row.
+                  updateSlice("syllabus", prev => [...prev, {
+                    id: uid(), coverage: "", gsPaper: "", subject: rec.subject, topic: name, subtopic: "", microtopic: "",
+                    studyStatus: "Not Started", revisionStatus: "Not Started", history: [],
+                  }]);
+                  updateRecord({ relevantSyllabusTopic: name, subtopic: "" });
+                }}
+              />
+            ),
+          },
+          {
+            key: "subtopic", label: "Subtopic", width: 150, type: "custom",
+            render: (rec, _onChange, updateRecord) => (
+              <CascadingSelectCell
+                value={rec.subtopic} options={syllabusSubtopicsForTopic(db, rec.subject, rec.relevantSyllabusTopic)}
+                placeholder={rec.relevantSyllabusTopic ? "Select subtopic…" : "Select topic first"} disabled={!rec.relevantSyllabusTopic}
+                onSelect={v => updateRecord({ subtopic: v })}
+                onAddNew={name => {
+                  updateSlice("syllabus", prev => [...prev, {
+                    id: uid(), coverage: "", gsPaper: "", subject: rec.subject, topic: rec.relevantSyllabusTopic, subtopic: name, microtopic: "",
+                    studyStatus: "Not Started", revisionStatus: "Not Started", history: [],
+                  }]);
+                  updateRecord({ subtopic: name });
+                }}
+              />
+            ),
+          },
           { key: "prelims", label: "Prelims", type: "select", options: ["Yes", "No"], width: 90 },
           { key: "mains", label: "Mains", type: "select", options: ["Yes", "No"], width: 90 },
           { key: "status", label: "Status", type: "status", options: CA_STATUS, width: 110 },
@@ -2019,19 +2182,45 @@ function AnswerWritingTab({ db, updateSlice }) {
   return (
     <div className="ucc-card">
       <h3>GS answer writing</h3>
+      <div className="ucc-tiny" style={{ marginBottom: 8, color: "var(--ink-muted)" }}>
+        Topic is chosen from the Syllabus tab (matched by GS Paper) — new topics can't be added here.
+      </div>
       <GenericTracker
         records={db.answerWriting} setRecords={u => updateSlice("answerWriting", u)}
         columns={[
           { key: "date", label: "Date", type: "date", width: 110 },
-          { key: "gsPaper", label: "GS Paper", type: "select", options: ["GS1", "GS2", "GS3", "GS4", "Essay"], width: 90 },
-          { key: "topic", label: "Topic", width: 160 },
+          {
+            key: "gsPaper", label: "GS Paper", width: 90, type: "custom",
+            render: (rec, _onChange, updateRecord) => (
+              <select className="ucc-select" value={rec.gsPaper || ""} onChange={e => updateRecord({ gsPaper: e.target.value, topic: "" })}>
+                {["GS1", "GS2", "GS3", "GS4", "Essay"].map(g => <option key={g} value={g}>{g}</option>)}
+              </select>
+            ),
+          },
+          {
+            key: "topic", label: "Topic", width: 180, type: "custom",
+            render: (rec, _onChange, updateRecord) => {
+              const options = Array.from(new Set(db.syllabus.filter(s => s.gsPaper === rec.gsPaper && s.topic).map(s => s.topic)));
+              return (
+                <CascadingSelectCell
+                  value={rec.topic} options={options} allowAddNew={false}
+                  placeholder={options.length ? "Select topic…" : "Set GS Paper on Syllabus topics first"}
+                  onSelect={v => updateRecord({ topic: v })}
+                />
+              );
+            },
+          },
           { key: "question", label: "Question", type: "textarea", width: 240 },
           { key: "wordLimit", label: "Word Limit", type: "number", width: 90 },
           { key: "status", label: "Status", type: "status", options: TASK_STATUS, width: 140 },
           { key: "selfScore", label: "Self Score", width: 80 },
           { key: "improvementNotes", label: "Improvement Notes", type: "textarea", width: 200 },
+          {
+            key: "driveFile", label: "Answer PDF", width: 170, type: "custom",
+            render: (rec, onChange) => <DriveFileCell driveFile={rec.driveFile} db={db} updateSlice={updateSlice} onChange={onChange} folderKey="answerWriting" />,
+          },
         ]}
-        newRecord={() => ({ date: todayISO(), gsPaper: "GS1", topic: "", question: "", wordLimit: 150, answer: "", status: "Not Started", selfScore: "", improvementNotes: "" })}
+        newRecord={() => ({ date: todayISO(), gsPaper: "GS1", topic: "", question: "", wordLimit: 150, answer: "", status: "Not Started", selfScore: "", improvementNotes: "", driveFile: null })}
       />
     </div>
   );
@@ -2445,6 +2634,25 @@ const IMPORT_TARGETS = {
   },
 };
 
+const IMPORT_FIELD_LABELS = {
+  date: "Date", subject: "Subject", totalClasses: "Total Classes", classNumber: "Class Number", eta: "ETA",
+  topic: "Topic", status: "Status", classNotes: "Class Notes", standardMaterial: "Standard Material", ncert: "NCERT",
+  revision1: "Revision 1", revision2: "Revision 2", handout: "Handout", standardBooks: "Standard Books", writing: "Writing",
+  coverage: "Coverage", gsPaper: "GS Paper", subtopic: "Subtopic", microtopic: "Micro Topic",
+  studyStatus: "Study Status", revisionStatus: "Revision Status",
+};
+// A blank workbook with just the header row (friendly labels) for one
+// import target — lets someone fill it in offline in the exact shape the
+// importer expects, rather than guessing column names.
+function downloadImportTemplate(targetKey) {
+  const cfg = IMPORT_TARGETS[targetKey];
+  const headerRow = cfg.fields.map(f => IMPORT_FIELD_LABELS[f] || f);
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.aoa_to_sheet([headerRow]);
+  XLSX.utils.book_append_sheet(wb, ws, cfg.label.slice(0, 31));
+  XLSX.writeFile(wb, `upsc-2027-${targetKey}-template.xlsx`);
+}
+
 function ImportExportTab({ db, updateSlice }) {
   const [file, setFile] = useState(null);
   const [sheetNames, setSheetNames] = useState([]);
@@ -2542,6 +2750,14 @@ function ImportExportTab({ db, updateSlice }) {
       <div className="ucc-card">
         <h3>Import from Excel</h3>
         <p className="ucc-tiny">Upload your existing tracker file. Nothing is saved until you review the preview and click Import.</p>
+        <div className="ucc-tiny" style={{ marginBottom: 6 }}>New to this? Download a blank template below, fill it in, then upload it.</div>
+        <div className="ucc-flex wrap" style={{ marginBottom: 12 }}>
+          {Object.entries(IMPORT_TARGETS).map(([k, v]) => (
+            <button key={k} type="button" className="ucc-btn ghost" style={{ padding: "4px 10px" }} onClick={() => downloadImportTemplate(k)}>
+              <Download size={12} /> {v.label} template
+            </button>
+          ))}
+        </div>
         <div className="ucc-flex wrap" style={{ marginBottom: 10 }}>
           <input type="file" accept=".xlsx,.xls,.csv" onChange={handleFile} />
           {sheetNames.length > 0 && (
