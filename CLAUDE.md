@@ -65,12 +65,34 @@ summary will do.
   a stable `id`); Classes and Reading rows created via the Class Lecture
   flow also carry a `syllabusId` pointing at that row (see
   `findSyllabusId`), so they stay correctly grouped in Topic Master even if
-  the syllabus topic's text is renamed later. Other trackers still join by
-  subject/topic text only — extending `syllabusId` to them is a known,
-  intentionally-deferred follow-up (see PR/commit history), not an
-  oversight.
+  the syllabus topic's text is renamed later.
+- **Topic governance**: Syllabus and Current Affairs are the only two
+  trackers where a genuinely new Topic/Subtopic/Micro Topic can be created
+  (`CascadingSelectCell` with `allowAddNew` true/default). Current
+  Affairs' "+ Add new" writes a real row into the Syllabus tracker rather
+  than storing free text locally. Every other tracker (Classes, Reading,
+  Single Pager, NCERT, Standard Books, Tamil Reading/Writing, GS Answer
+  Writing) renders the same component with `allowAddNew={false}` and reads
+  its options from the strict `syllabusTopicsForSubject` /
+  `syllabusSubtopicsForTopic` helpers — selection only, no creation. AI
+  Learning is the one deliberate exception: it's explicitly personal/
+  outside the UPSC syllabus, so its Topic field stays free text. Keep new
+  topic-entry UI consistent with this pattern rather than adding another
+  ad hoc free-text field.
+- **Google Drive PDFs**: `DriveFileCell` + `uploadDriveFile`/
+  `downloadDriveFile` are generic across trackers — pass a `folderKey`
+  (see `DRIVE_FOLDER_NAMES`) to keep each tracker's PDFs in their own
+  Drive folder. Currently wired up for Single Pager, Classes, GS Answer
+  Writing, and Tamil Reading/Writing. `ensureDriveFolder` falls back to
+  the legacy singular `settings.driveFolderId` only for the `singlePager`
+  key, to avoid creating a duplicate folder for existing users; new
+  folder ids live in `settings.driveFolders[folderKey]`.
 - **Import/export**: `xlsx` for Excel, plus JSON export, applied generically
-  across trackers.
+  across trackers. `IMPORT_TARGETS` currently covers classes, reading,
+  singlePager, and syllabus; `downloadImportTemplate(key)` generates a
+  blank header-only workbook for any of them (surfaced in the
+  Import/Export tab) so a new tracker export always has a matching
+  fill-in-the-blanks template.
 - **Auth**: Supabase email/password, single-user by design.
 - **Icons**: `lucide-react`.
 
