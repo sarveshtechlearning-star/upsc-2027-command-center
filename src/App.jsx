@@ -69,6 +69,15 @@ const CSS = `
   .ucc-badge.red{background:var(--red-soft); color:var(--red);}
   .ucc-badge.grey{background:var(--grey-soft); color:var(--grey);}
   .ucc-badge.blue{background:var(--blue-soft); color:var(--blue);}
+  .ucc-tag{
+    display:inline-flex; align-items:center; gap:4px; padding:2px 6px 2px 9px; border-radius:20px; font-size:11px;
+    font-weight:600; background:var(--blue-soft); color:var(--blue); white-space:nowrap;
+  }
+  .ucc-tag button{
+    display:inline-flex; align-items:center; justify-content:center; border:none; background:transparent;
+    color:inherit; cursor:pointer; padding:2px; opacity:0.7; line-height:0;
+  }
+  .ucc-tag button:hover{opacity:1;}
   select.ucc-status{
     border:none; border-radius:20px; padding:3px 22px 3px 9px; font-size:11.5px; font-weight:600;
     cursor:pointer; -webkit-appearance:none; appearance:none;
@@ -475,6 +484,7 @@ const DRIVE_FOLDER_NAMES = {
   tamilWriting: "UPSC 2027 Command Center - Tamil Literature Writing",
   tamilReading: "UPSC 2027 Command Center - Tamil Literature Reading",
   classes: "UPSC 2027 Command Center - Class Notes",
+  currentAffairs: "UPSC 2027 Command Center - Current Affairs",
 };
 const DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.file";
 
@@ -875,6 +885,39 @@ function CascadingSelectCell({ value, options, placeholder, disabled, onSelect, 
   );
 }
 
+// Multi-select tag picker — e.g. one Class can cover several Micro Topics,
+// unlike Subject/Topic/Subtopic which are single-select. Like
+// CascadingSelectCell, this never creates new values: `options` must come
+// from Syllabus, and a value already picked drops out of the dropdown so it
+// can't be added twice. Tags are removed with the × on each chip.
+function TagMultiSelectCell({ values, options, placeholder, disabled, onChange }) {
+  const tags = values || [];
+  const available = options.filter(o => !tags.includes(o));
+  function addTag(v) { if (v) onChange([...tags, v]); }
+  function removeTag(v) { onChange(tags.filter(t => t !== v)); }
+  return (
+    <div>
+      {tags.length > 0 && (
+        <div className="ucc-flex wrap" style={{ marginBottom: 4 }}>
+          {tags.map(t => (
+            <span className="ucc-tag" key={t}>
+              {t}
+              <button type="button" onClick={() => removeTag(t)} title={`Remove ${t}`} aria-label={`Remove ${t}`}><X size={10} /></button>
+            </span>
+          ))}
+        </div>
+      )}
+      {!disabled && (
+        <select className="ucc-select" value="" disabled={disabled} onChange={e => addTag(e.target.value)}>
+          <option value="">{available.length ? placeholder : "No more to add"}</option>
+          {available.map(o => <option key={o} value={o}>{o}</option>)}
+        </select>
+      )}
+      {disabled && tags.length === 0 && <div className="ucc-tiny" style={{ color: "var(--ink-muted)" }}>{placeholder}</div>}
+    </div>
+  );
+}
+
 // Upload/Download control for a Google-Drive-backed file attachment on one
 // record. The record only ever stores { id, name } (Drive's file id + the
 // original filename) via `onChange` — the PDF bytes themselves go straight
@@ -932,6 +975,33 @@ function DriveFileCell({ driveFile, db, updateSlice, onChange, folderKey }) {
       )}
       {error && <div className="ucc-tiny" style={{ color: "var(--red)" }}>{error}</div>}
     </div>
+  );
+}
+
+// Download-only variant of DriveFileCell for read-only views (Topic Master)
+// that have no updateSlice/upload path — just a link to pull the same file
+// down from Drive on demand.
+function DriveDownloadLink({ driveFile }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  if (!driveFile) return null;
+  async function handleDownload() {
+    setBusy(true); setError("");
+    try {
+      await downloadDriveFile(driveFile.id, driveFile.name);
+    } catch (err) {
+      setError(err.message || "Download failed.");
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <span>
+      <button type="button" className="ucc-btn ghost" style={{ padding: "1px 6px", fontSize: 11 }} disabled={busy} onClick={handleDownload} title={driveFile.name}>
+        <Download size={10} /> {busy ? "…" : "PDF"}
+      </button>
+      {error && <span className="ucc-tiny" style={{ color: "var(--red)" }}> {error}</span>}
+    </span>
   );
 }
 
@@ -1574,12 +1644,15 @@ function ClassLectureWidget({ db, updateSlice, dateISO }) {
   const [classNumber, setClassNumber] = useState("");
   const [topic, setTopic] = useState("");
   const [subtopic, setSubtopic] = useState("");
+  const [microtopics, setMicrotopics] = useState([]);
   const [eta, setEta] = useState("");
   const topicOptions = syllabusTopicsForSubject(db, subject);
   const subtopicOptions = syllabusSubtopicsForTopic(db, subject, topic);
+  const microtopicOptions = microtopicOptionsForSubtopic(db, subject, topic, subtopic);
 
-  function onSubjectChange(v) { setSubject(v); setTopic(""); setSubtopic(""); }
-  function onTopicChange(v) { setTopic(v); setSubtopic(""); }
+  function onSubjectChange(v) { setSubject(v); setTopic(""); setSubtopic(""); setMicrotopics([]); }
+  function onTopicChange(v) { setTopic(v); setSubtopic(""); setMicrotopics([]); }
+  function onSubtopicChange(v) { setSubtopic(v); setMicrotopics([]); }
 
   function markCompleted() {
     if (!topic) { window.alert("Select a topic first — new topics are added on the Syllabus tab, not here."); return; }
@@ -1589,11 +1662,11 @@ function ClassLectureWidget({ db, updateSlice, dateISO }) {
     // even if the syllabus topic's name is edited later.
     const syllabusId = findSyllabusId(db, { subject, topic, subtopic });
     updateSlice("classes", prev => [...prev, {
-      id: uid(), date: dateISO, subject, totalClasses: "", classNumber: classNum, eta, topic, subtopic, syllabusId,
+      id: uid(), date: dateISO, subject, totalClasses: "", classNumber: classNum, eta, topic, subtopic, microtopics, syllabusId,
       status: "Completed", completedAt: new Date().toISOString(), history: [{ field: "Status", from: "(new)", to: "Completed", at: new Date().toISOString() }]
     }]);
     updateSlice("reading", prev => upsertReadingForTopic(prev, subject, topic, classNum, dateISO, syllabusId));
-    setTopic(""); setSubtopic(""); setClassNumber(""); setEta("");
+    setTopic(""); setSubtopic(""); setMicrotopics([]); setClassNumber(""); setEta("");
   }
 
   return (
@@ -1608,12 +1681,19 @@ function ClassLectureWidget({ db, updateSlice, dateISO }) {
           <option value="">{topicOptions.length ? "Select topic…" : "No topics yet — add on Syllabus tab"}</option>
           {topicOptions.map(t => <option key={t} value={t}>{t}</option>)}
         </select>
-        <select className="ucc-select" value={subtopic} onChange={e => setSubtopic(e.target.value)} disabled={!topic}>
+        <select className="ucc-select" value={subtopic} onChange={e => onSubtopicChange(e.target.value)} disabled={!topic}>
           <option value="">{subtopicOptions.length ? "Select subtopic (optional)…" : "—"}</option>
           {subtopicOptions.map(t => <option key={t} value={t}>{t}</option>)}
         </select>
         <input className="ucc-input" type="date" placeholder="ETA" value={eta} onChange={e => setEta(e.target.value)} />
         <button className="ucc-btn primary" onClick={markCompleted}><Check size={14} /> Mark class completed</button>
+      </div>
+      <div style={{ marginTop: 8, maxWidth: 360 }}>
+        <TagMultiSelectCell
+          values={microtopics} options={microtopicOptions}
+          placeholder={subtopic ? "+ Tag a micro topic this class covered" : "Select subtopic to tag micro topics"} disabled={!subtopic}
+          onChange={setMicrotopics}
+        />
       </div>
     </div>
   );
@@ -1728,7 +1808,7 @@ function ClassesTab({ db, updateSlice }) {
       <div className="ucc-card">
         <h3>Class completion tracker</h3>
         <div className="ucc-tiny" style={{ marginBottom: 8, color: "var(--ink-muted)" }}>
-          Topic and Subtopic are chosen from the Syllabus tab — new topics can't be added here. Add them on Syllabus first if they're missing.
+          Topic and Subtopic are chosen from the Syllabus tab — new topics can't be added here. Once a Subtopic is set, tag the specific Micro Topics this class covered.
         </div>
         <GenericTracker
           records={db.classes} setRecords={u => updateSlice("classes", u)}
@@ -1739,7 +1819,7 @@ function ClassesTab({ db, updateSlice }) {
               render: (rec, _onChange, updateRecord) => (
                 <CascadingSelectCell
                   value={rec.subject} options={db.settings.subjects} placeholder="Select subject…" allowAddNew={false}
-                  onSelect={v => updateRecord({ subject: v, topic: "", subtopic: "", syllabusId: null })}
+                  onSelect={v => updateRecord({ subject: v, topic: "", subtopic: "", syllabusId: null, microtopics: [] })}
                 />
               ),
             },
@@ -1751,7 +1831,7 @@ function ClassesTab({ db, updateSlice }) {
                 <CascadingSelectCell
                   value={rec.topic} options={syllabusTopicsForSubject(db, rec.subject)} allowAddNew={false}
                   placeholder={rec.subject ? "Select topic…" : "Select subject first"} disabled={!rec.subject}
-                  onSelect={v => updateRecord({ topic: v, subtopic: "", syllabusId: findSyllabusId(db, { subject: rec.subject, topic: v }) })}
+                  onSelect={v => updateRecord({ topic: v, subtopic: "", microtopics: [], syllabusId: findSyllabusId(db, { subject: rec.subject, topic: v }) })}
                 />
               ),
             },
@@ -1761,7 +1841,17 @@ function ClassesTab({ db, updateSlice }) {
                 <CascadingSelectCell
                   value={rec.subtopic} options={syllabusSubtopicsForTopic(db, rec.subject, rec.topic)} allowAddNew={false}
                   placeholder={rec.topic ? "Select subtopic (optional)…" : "Select topic first"} disabled={!rec.topic}
-                  onSelect={v => updateRecord({ subtopic: v, syllabusId: findSyllabusId(db, { subject: rec.subject, topic: rec.topic, subtopic: v }) })}
+                  onSelect={v => updateRecord({ subtopic: v, microtopics: [], syllabusId: findSyllabusId(db, { subject: rec.subject, topic: rec.topic, subtopic: v }) })}
+                />
+              ),
+            },
+            {
+              key: "microtopics", label: "Micro Topics", width: 200, type: "custom",
+              render: (rec, _onChange, updateRecord) => (
+                <TagMultiSelectCell
+                  values={rec.microtopics} options={microtopicOptionsForSubtopic(db, rec.subject, rec.topic, rec.subtopic)}
+                  placeholder={rec.subtopic ? "+ Add micro topic tag" : "Select subtopic first"} disabled={!rec.subtopic}
+                  onChange={v => updateRecord({ microtopics: v })}
                 />
               ),
             },
@@ -1772,7 +1862,7 @@ function ClassesTab({ db, updateSlice }) {
               render: (rec, onChange) => <DriveFileCell driveFile={rec.driveFile} db={db} updateSlice={updateSlice} onChange={onChange} folderKey="classes" />,
             },
           ]}
-          newRecord={() => ({ date: todayISO(), subject: db.settings.subjects[0] || "", classNumber: "", totalClasses: "", topic: "", subtopic: "", eta: "", status: "Not Started", syllabusId: null, driveFile: null })}
+          newRecord={() => ({ date: todayISO(), subject: db.settings.subjects[0] || "", classNumber: "", totalClasses: "", topic: "", subtopic: "", microtopics: [], eta: "", status: "Not Started", syllabusId: null, driveFile: null })}
         />
       </div>
     </div>
@@ -2171,8 +2261,12 @@ function CurrentAffairsTab({ db, updateSlice }) {
           { key: "prelims", label: "Prelims", type: "select", options: ["Yes", "No"], width: 90 },
           { key: "mains", label: "Mains", type: "select", options: ["Yes", "No"], width: 90 },
           { key: "status", label: "Status", type: "status", options: CA_STATUS, width: 110 },
+          {
+            key: "driveFile", label: "Clipping / PDF", width: 170, type: "custom",
+            render: (rec, onChange) => <DriveFileCell driveFile={rec.driveFile} db={db} updateSlice={updateSlice} onChange={onChange} folderKey="currentAffairs" />,
+          },
         ]}
-        newRecord={() => ({ date: todayISO(), title: "", source: "", subject: "", subtopic: "", relevantSyllabusTopic: "", prelims: "", mains: "", notes: "", status: "To Read" })}
+        newRecord={() => ({ date: todayISO(), title: "", source: "", subject: "", subtopic: "", relevantSyllabusTopic: "", prelims: "", mains: "", notes: "", status: "To Read", driveFile: null })}
       />
     </div>
   );
@@ -2310,7 +2404,11 @@ function TopicMasterTab({ db }) {
               </TopicSection>
               <TopicSection title="Classes">
                 {active.classes.length === 0 ? <EmptyState>No classes logged.</EmptyState> :
-                  active.classes.map(c => <div key={c.id} className="ucc-tiny">{c.date} — Class {c.classNumber} <Badge tone={colorFor(c.status)}>{c.status}</Badge></div>)}
+                  active.classes.map(c => (
+                    <div key={c.id} className="ucc-tiny" style={{ marginBottom: 4 }}>
+                      {c.date} — Class {c.classNumber} <Badge tone={colorFor(c.status)}>{c.status}</Badge> <DriveDownloadLink driveFile={c.driveFile} />
+                    </div>
+                  ))}
               </TopicSection>
               <TopicSection title="Reading & Revision">
                 {active.reading.length === 0 ? <EmptyState>No reading record.</EmptyState> :
@@ -2326,15 +2424,27 @@ function TopicMasterTab({ db }) {
               </TopicSection>
               <TopicSection title="Single pager">
                 {active.singlePager.length === 0 ? <EmptyState>Not started.</EmptyState> :
-                  active.singlePager.map(s => <div key={s.id} className="ucc-tiny">Writing: <Badge tone={colorFor(s.writing)}>{s.writing}</Badge> · Overall: <Badge tone={colorFor(s.status)}>{s.status}</Badge></div>)}
+                  active.singlePager.map(s => (
+                    <div key={s.id} className="ucc-tiny" style={{ marginBottom: 4 }}>
+                      Writing: <Badge tone={colorFor(s.writing)}>{s.writing}</Badge> · Overall: <Badge tone={colorFor(s.status)}>{s.status}</Badge> <DriveDownloadLink driveFile={s.driveFile} />
+                    </div>
+                  ))}
               </TopicSection>
               <TopicSection title="Current affairs">
                 {active.currentAffairs.length === 0 ? <EmptyState>No related entries.</EmptyState> :
-                  active.currentAffairs.map(c => <div key={c.id} className="ucc-tiny">{c.date} — {c.title}</div>)}
+                  active.currentAffairs.map(c => (
+                    <div key={c.id} className="ucc-tiny" style={{ marginBottom: 4 }}>
+                      {c.date} — {c.title} <DriveDownloadLink driveFile={c.driveFile} />
+                    </div>
+                  ))}
               </TopicSection>
               <TopicSection title="Answer writing">
                 {active.answerWriting.length === 0 ? <EmptyState>No related answers.</EmptyState> :
-                  active.answerWriting.map(a => <div key={a.id} className="ucc-tiny">{a.date} — {a.gsPaper} <Badge tone={colorFor(a.status)}>{a.status}</Badge></div>)}
+                  active.answerWriting.map(a => (
+                    <div key={a.id} className="ucc-tiny" style={{ marginBottom: 4 }}>
+                      {a.date} — {a.gsPaper} <Badge tone={colorFor(a.status)}>{a.status}</Badge> <DriveDownloadLink driveFile={a.driveFile} />
+                    </div>
+                  ))}
               </TopicSection>
             </div>
           )}
