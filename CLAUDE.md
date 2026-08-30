@@ -82,24 +82,26 @@ summary will do.
   — a read-only popover over the record's existing `history` array (already
   populated by `type: "status"` column edits). It's a pure UI addition, not
   a new data source; don't wire up separate audit logging.
-- **Today's Planner is now view + status only, not an editing surface.**
-  `LinkedTaskInfo` renders read-only summaries of each linked tracker's
-  today's-date entries — it does not create or edit tracker records
-  in-place (the old embedded add/edit widgets — `ClassLectureWidget`,
-  `TodayListWidget`, `QuickPickWidget`, `InlineAddForm` — were removed).
-  Actual data entry always happens on the tracker's own tab.
-  `TaskStatusButtons` is hardcoded to the 5-value `TASK_STATUS` set for
-  every block; don't reintroduce a per-link status vocabulary. For the
-  links in `GATED_LINK_TABS` (`PlanBlock`) — classLecture, tamilWriting,
-  currentAffairs, gsWriting, aiLearning — clicking "Completed" calls
-  `onNavigate` to that tracker's tab instead of setting status directly;
-  a `useEffect` in `TodayTab` then flips the block to Completed once a
-  same-day qualifying record actually exists there. Links without a
-  reliable same-day signal (prevClass, tamilReading, gsReading, office,
-  custom) keep the old direct, immediate click-to-set behavior — don't
-  add them to `GATED_LINK_TABS` unless their tracker gains a reliable
-  per-day completion signal (a `date` field plus a status that can reach
-  "Completed").
+- **Today's Planner is an hourly journal, not a status tracker or an
+  editing surface.** Each plan block (`PlanBlock`/`OfficePlanBlock`) shows
+  its time range, duration, and label, plus a free-text `journal` field
+  ("what did you actually do in this slot") — that's it. There is no
+  per-block status control anymore (`TaskStatusButtons`,
+  `GATED_LINK_TABS`, the completion-detecting `useEffect`, and
+  `LinkedTaskInfo` were all removed as a unit — don't reintroduce a
+  status vocabulary or a "click Completed to navigate" flow here; that
+  whole approach was tried and explicitly replaced by the journal). The
+  earlier embedded add/edit widgets (`ClassLectureWidget`,
+  `TodayListWidget`, `QuickPickWidget`, `InlineAddForm`) are also gone —
+  actual tracker data entry (topics, PDFs, marks, etc.) always happens on
+  that tracker's own tab; the planner is only for the quick per-hour note.
+  `block.status`/`completedAt` still exist on already-stored plans for
+  backward compatibility but are not read or written anywhere new — don't
+  build features on them. Weekly Review's stats and per-day breakdown
+  (`WeeklyReviewTab`) are journal-based to match: "Logged" counts blocks
+  with non-empty `journal` text, "Skipped" counts `block.skipped`, and the
+  per-day list shows each block's real start/end (via `computePlanTimes`,
+  since the stored plan only has `duration`) alongside its journal text.
 - **Topic governance**: Syllabus and Current Affairs are the only two
   trackers where a genuinely new Topic/Subtopic/Micro Topic can be created
   (`CascadingSelectCell` with `allowAddNew` true/default). Current
