@@ -126,6 +126,16 @@ summary will do.
   `TagMultiSelectCell` (same "select only" rule, scoped to the row's
   Subtopic). Keep new topic-entry UI consistent with this pattern rather
   than adding another ad hoc free-text field.
+- **Source Identified (Syllabus tab)** is read-only and fully computed —
+  never add a way to set it by hand. `isSourceIdentifiedForMicrotopic(db,
+  subject, topic, subtopic, microtopic)` returns true if that exact
+  micro topic appears in Classes (one of a class's `microtopics` tags),
+  NCERT, or Standard Books; false if it doesn't, and the Syllabus row's
+  render shows "—" when the row has no Micro Topic set at all (nothing to
+  check). If a future tracker gains its own micro-topic field, consider
+  whether "source identified" should also look there — but don't silently
+  skip updating this helper if you add such a field, since a resource
+  that exists but doesn't show up here would look mis-flagged.
 - **Google Drive PDFs**: `DriveFileCell` + `uploadDriveFile`/
   `downloadDriveFile` are generic across trackers — pass a `folderKey`
   (see `DRIVE_FOLDER_NAMES`) to keep each tracker's PDFs in their own
@@ -137,11 +147,17 @@ summary will do.
   `DriveDownloadLink` is the read-only variant used in Topic Master, which
   has no `updateSlice` to support uploading.
 - **Import/export**: `xlsx` for Excel, plus JSON export, applied generically
-  across trackers. `IMPORT_TARGETS` currently covers classes, reading,
-  singlePager, and syllabus; `downloadImportTemplate(key)` generates a
-  blank header-only workbook for any of them (surfaced in the
-  Import/Export tab) so a new tracker export always has a matching
-  fill-in-the-blanks template.
+  across trackers. `IMPORT_TARGETS` covers every tracker (Classes, Reading,
+  Single Pager, Syllabus, NCERT, Standard Books, Tamil Reading, Tamil
+  Writing, Current Affairs, GS Answer Writing, AI Learning) — when a
+  tracker's columns change, update its `IMPORT_TARGETS` entry and
+  `IMPORT_FIELD_LABELS` in the same change, or the template/import will
+  silently drift from the real schema. `downloadImportTemplate(key)`
+  generates a blank header-only workbook for any of them (surfaced in the
+  Import/Export tab), so a new tracker needs a matching entry added here
+  too. Classes' `microtopics` is a tag array — import only accepts a
+  single Micro Topic column and seeds it as the row's first tag; there's
+  no bulk multi-tag import.
 - **Auth**: Supabase email/password, single-user by design.
 - **Icons**: `lucide-react`.
 
