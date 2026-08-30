@@ -670,27 +670,6 @@ function StatusSelect({ value, options, onChange }) {
   );
 }
 
-// Today's-plan task status row: a filled, colored toggle per status (rather
-// than a near-invisible bold/grey tweak) so a click is unmistakably visible —
-// this sets the day-plan block's own status, which feeds the Weekly Review's
-// planned/completed/skipped counts and daily log. For gated links (see
-// GATED_LINK_TABS in PlanBlock), clicking Completed navigates to the linked
-// tracker instead of setting status directly.
-function TaskStatusButtons({ value, onChange }) {
-  return (
-    <div className="ucc-flex wrap" style={{ marginTop: 6 }}>
-      {TASK_STATUS.map(s => {
-        const active = value === s;
-        return (
-          <button key={s} type="button" className={`ucc-btn ucc-status-btn ${active ? colorFor(s) : "inactive"}`}
-            style={{ fontWeight: active ? 700 : 600 }} aria-pressed={active} onClick={() => onChange(s)}>
-            {s}
-          </button>
-        );
-      })}
-    </div>
-  );
-}
 
 function EmptyState({ children }) {
   return <div className="ucc-empty">{children}</div>;
@@ -1092,7 +1071,7 @@ function initDayPlan(dateISO, settings, dayType) {
     dayType: dt,
     breakNote,
     droppedLabels,
-    blocks: blocks.map(b => ({ ...b, status: "Not Started", skipped: false, completedAt: null })),
+    blocks: blocks.map(b => ({ ...b, status: "Not Started", skipped: false, completedAt: null, journal: "" })),
   };
 }
 
@@ -1107,8 +1086,8 @@ function regeneratePlan(prevPlan, wakeTime, dayType, settings) {
   const merged = blocks.map(b => {
     const prev = prevById.get(b.id);
     return prev
-      ? { ...b, status: prev.status, completedAt: prev.completedAt, skipped: false }
-      : { ...b, status: "Not Started", completedAt: null, skipped: false };
+      ? { ...b, status: prev.status, completedAt: prev.completedAt, skipped: false, journal: prev.journal || "" }
+      : { ...b, status: "Not Started", completedAt: null, skipped: false, journal: "" };
   });
   const customBlocks = (prevPlan.blocks || []).filter(b => b.custom);
   return { ...prevPlan, wakeTime, dayType, breakNote, droppedLabels, blocks: [...merged, ...customBlocks] };
@@ -1228,7 +1207,7 @@ function TodayTab({ db, updateSlice, onNavigate }) {
   }
   function addCustomBlock() {
     setPlan(p => ({
-      ...p, blocks: [...p.blocks, { id: uid(), label: "Custom task", type: "study", link: "custom", duration: 30, status: "Not Started", skipped: false, custom: true }]
+      ...p, blocks: [...p.blocks, { id: uid(), label: "Custom task", type: "study", link: "custom", duration: 30, status: "Not Started", skipped: false, journal: "", custom: true }]
     }));
   }
   function removeBlock(id) {
@@ -1238,28 +1217,6 @@ function TodayTab({ db, updateSlice, onNavigate }) {
   const { wakeMinutes, endMinutes, blocks: timedBlocks } = computePlanTimes(plan);
   const sleepMinutes = parseTimeToMinutes(settings.sleepTime);
   const overflow = endMinutes - sleepMinutes;
-
-  // Blocks whose "Completed" can be objectively verified against the linked
-  // tracker's own data for today (see GATED_LINK_TABS/PlanBlock) rather than
-  // taken on trust — this effect is what actually flips them to Completed
-  // once a qualifying entry exists, since clicking the button itself only
-  // navigates to the tracker for these links.
-  useEffect(() => {
-    const checks = {
-      classLecture: () => db.classes.some(c => c.date === dateISO && c.status === "Completed"),
-      tamilWriting: () => db.tamilWriting.some(t => t.date === dateISO && t.status === "Completed"),
-      currentAffairs: () => db.currentAffairs.some(c => c.date === dateISO),
-      gsWriting: () => db.answerWriting.some(a => a.date === dateISO && a.status === "Completed"),
-      aiLearning: () => db.aiLearning.some(a => a.date === dateISO && a.status === "Completed"),
-    };
-    plan.blocks.forEach(b => {
-      const check = checks[b.link];
-      if (check && b.status !== "Completed" && check()) {
-        updateBlock(b.id, { status: "Completed", completedAt: new Date().toISOString() });
-      }
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [db.classes, db.tamilWriting, db.currentAffairs, db.answerWriting, db.aiLearning, dateISO, plan.blocks]);
 
   const pending = useMemo(() => computePendingTasks(db), [db]);
   const revisionDue = pending.filter(p => p.cat === "Revision due");
@@ -1319,6 +1276,7 @@ function TodayTab({ db, updateSlice, onNavigate }) {
 
       <div className="ucc-card">
         <h3>Today's plan</h3>
+        <p className="ucc-tiny" style={{ marginTop: -4 }}>A quick hourly journal — jot a line on what you actually did in each slot. Detailed logging (topics, PDFs, marks) stays on each tracker's own tab.</p>
         {timedBlocks.map((b, i) => {
           if (b.id === "travelTo" || b.id === "travelFro") return null; // shown inside the merged Office card
           if (b.id === "office") {
@@ -1331,20 +1289,14 @@ function TodayTab({ db, updateSlice, onNavigate }) {
                   if (travelTo) updateBlock("travelTo", { skipped: val });
                   if (travelFro) updateBlock("travelFro", { skipped: val });
                 }}
-                onStatusChange={s => {
-                  const completedAt = s === "Completed" ? new Date().toISOString() : b.completedAt;
-                  updateBlock("office", { status: s, completedAt });
-                  if (travelTo) updateBlock("travelTo", { status: s });
-                  if (travelFro) updateBlock("travelFro", { status: s });
-                }} />
+                onJournalChange={v => updateBlock("office", { journal: v })} />
             );
           }
           return (
             <PlanBlock key={b.id} block={b} onUpdate={patch => updateBlock(b.id, patch)}
               onMoveUp={i > 0 ? () => moveBlock(b.id, -1) : null}
               onMoveDown={i < timedBlocks.length - 1 ? () => moveBlock(b.id, 1) : null}
-              onRemove={b.custom ? () => removeBlock(b.id) : null}
-              db={db} dateISO={dateISO} yesterdayISO={yISO} onNavigate={onNavigate} />
+              onRemove={b.custom ? () => removeBlock(b.id) : null} />
           );
         })}
         <button className="ucc-btn" onClick={addCustomBlock}><Plus size={14} /> Add custom task</button>
@@ -1393,7 +1345,7 @@ function TodayTab({ db, updateSlice, onNavigate }) {
         <h3>End-of-day review</h3>
         <div className="ucc-grid">
           <div>
-            <label className="ucc-tiny">What did I complete / partially complete / skip — and why?</label>
+            <label className="ucc-tiny">Overall reflection on the day (the hourly journal above has the details)</label>
             <textarea className="ucc-textarea" rows={3} value={review.notes} onChange={e => setReview({ notes: e.target.value })} placeholder="A few honest lines — this tracker shows discipline, not performance." />
           </div>
           <div>
@@ -1421,55 +1373,39 @@ function SummaryCard({ title, count, children, onTitleClick }) {
   );
 }
 
-function OfficePlanBlock({ office, travelTo, travelFro, onSkipAll, onStatusChange }) {
+function OfficePlanBlock({ office, travelTo, travelFro, onSkipAll, onJournalChange }) {
   const skipped = office.skipped;
   const start = (travelTo || office).start;
   const end = (travelFro || office).end;
+  const duration = (travelTo ? travelTo.duration : 0) + office.duration + (travelFro ? travelFro.duration : 0);
   return (
     <div className={`ucc-planblock ${skipped ? "skipped" : ""}`}>
-      <div className="time ucc-mono ucc-tiny">{skipped ? "skipped" : `${minutesToTime(start)} – ${minutesToTime(end)}`}</div>
+      <div className="time ucc-mono ucc-tiny">
+        {skipped ? "skipped" : `${minutesToTime(start)} – ${minutesToTime(end)}`}
+        <div className="ucc-tiny" style={{ marginTop: 4 }}>{duration} min</div>
+      </div>
       <div className="body">
         <div className="ucc-flex between wrap">
           <strong>Office Work{travelTo ? " (incl. commute)" : ""}</strong>
           <label className="ucc-tiny"><input type="checkbox" checked={skipped} onChange={e => onSkipAll(e.target.checked)} /> Skip</label>
         </div>
-        <div className="ucc-tiny" style={{ margin: "4px 0" }}>
+        <div className="ucc-tiny" style={{ margin: "4px 0", color: "var(--ink-muted)" }}>
           {travelTo && <span>Commute (to): {minutesToTime(travelTo.start)}–{minutesToTime(travelTo.end)} ({travelTo.duration}m) · </span>}
           <span>Office: {minutesToTime(office.start)}–{minutesToTime(office.end)} ({office.duration}m)</span>
           {travelFro && <span> · Commute (fro): {minutesToTime(travelFro.start)}–{minutesToTime(travelFro.end)} ({travelFro.duration}m)</span>}
+          {" · "}Fixed hours — change in Settings.
         </div>
-        <div className="ucc-tiny" style={{ marginBottom: 4 }}>Fixed hours — change in Settings.</div>
-        <TaskStatusButtons value={office.status} onChange={onStatusChange} />
-        <div className="ucc-tiny" style={{ marginTop: 4 }}>Sets today's status for this block — counted in your Weekly Review.</div>
+        {!skipped && (
+          <textarea className="ucc-textarea" rows={2} style={{ marginTop: 4 }}
+            placeholder="What's worth noting about today's office block? (optional)"
+            value={office.journal || ""} onChange={e => onJournalChange(e.target.value)} />
+        )}
       </div>
     </div>
   );
 }
 
-// Finds the single, unambiguous tracker record a plan block's status buttons
-// should write through to (so picking "Completed" etc. here shows up on the
-// Reading / Tamil / Current Affairs / GS Answer Writing / AI Learning pages
-// instead of only changing the day-plan's own copy of the status). Returns
-// null when there's no linked record, or more than one and it'd be a guess
-// which one the person means — in that case the button only affects the
-// day-plan block itself, same as before.
-// Links whose "Completed" status can be objectively verified against the
-// linked tracker's own dated data for today (see the useEffect in TodayTab),
-// rather than just trusted at face value. For these, clicking Completed
-// navigates to that tracker instead of setting the block's status directly
-// — it only flips to Completed once a qualifying entry actually exists
-// there. Links not listed here (prevClass, tamilReading, gsReading, office,
-// custom) have no reliable "done today" signal to check against, so they
-// keep the direct, immediate click-to-set behavior.
-const GATED_LINK_TABS = {
-  classLecture: "classes",
-  tamilWriting: "tamil",
-  currentAffairs: "currentAffairs",
-  gsWriting: "answerWriting",
-  aiLearning: "aiLearning",
-};
-
-function PlanBlock({ block, onUpdate, onMoveUp, onMoveDown, onRemove, db, dateISO, yesterdayISO, onNavigate }) {
+function PlanBlock({ block, onUpdate, onMoveUp, onMoveDown, onRemove }) {
   return (
     <div className={`ucc-planblock ${block.skipped ? "skipped" : ""}`}>
       <div className="time ucc-mono ucc-tiny">
@@ -1489,111 +1425,14 @@ function PlanBlock({ block, onUpdate, onMoveUp, onMoveDown, onRemove, db, dateIS
             {onRemove && <IconBtn icon={Trash2} onClick={onRemove} title="Remove" danger />}
           </div>
         </div>
-        {block.type !== "break" && (
-          <div style={{ marginTop: 6 }}>
-            <LinkedTaskInfo link={block.link} db={db} dateISO={dateISO} yesterdayISO={yesterdayISO} />
-            <TaskStatusButtons value={block.status} onChange={s => {
-              const gatedTab = GATED_LINK_TABS[block.link];
-              if (s === "Completed" && gatedTab) {
-                onNavigate(gatedTab);
-                return; // status stays as-is — it flips to Completed automatically once logged there
-              }
-              onUpdate({ status: s, completedAt: s === "Completed" ? new Date().toISOString() : block.completedAt });
-            }} />
-            <div className="ucc-tiny" style={{ marginTop: 4 }}>
-              {GATED_LINK_TABS[block.link]
-                ? "Not Started/In Progress/Partially Completed/Skipped set this block directly. Completed instead takes you to log the actual entry — it switches on its own once that's done."
-                : "Sets this session's status for your Weekly Review."}
-            </div>
-          </div>
+        {block.type !== "break" && !block.skipped && (
+          <textarea className="ucc-textarea" rows={2} style={{ marginTop: 6 }}
+            placeholder="What did you actually do in this slot? (a line or two is plenty)"
+            value={block.journal || ""} onChange={e => onUpdate({ journal: e.target.value })} />
         )}
       </div>
     </div>
   );
-}
-
-function LinkedTaskInfo({ link, db, dateISO, yesterdayISO }) {
-  if (link === "prevClass") {
-    // Just the single most recently completed class before today — not every
-    // pending item, and not strictly "yesterday" (in case a day was skipped).
-    const latest = db.classes
-      .filter(c => c.status === "Completed" && c.date < dateISO)
-      .sort((a, b) => (b.date + (b.completedAt || "")).localeCompare(a.date + (a.completedAt || "")))[0];
-    if (!latest) return <EmptyState>No completed class to review yet.</EmptyState>;
-    const readingKey = normKey(latest.subject, latest.topic);
-    const r = db.reading.find(x => normKey(x.subject, x.topic) === readingKey);
-    const sp = db.singlePager.find(x => normKey(x.subject, x.topic) === readingKey);
-    return (
-      <div className="ucc-tiny">
-        Review <strong>{latest.subject} — Class {latest.classNumber}: {latest.topic}</strong>
-        {latest.date !== yesterdayISO && <span style={{ marginLeft: 6 }}>(from {latest.date})</span>}
-        <div style={{ marginTop: 4 }}>
-          Class Notes: <Badge tone={colorFor(r ? r.classNotes : "Yet to Start")}>{r ? r.classNotes : "Yet to Start"}</Badge>{" "}
-          Standard Material: <Badge tone={colorFor(r ? r.standardMaterial : "Yet to Start")}>{r ? r.standardMaterial : "Yet to Start"}</Badge>{" "}
-          NCERT: <Badge tone={colorFor(r ? r.ncert : "Yet to Start")}>{r ? r.ncert : "Yet to Start"}</Badge>{" "}
-          Single Pager: <Badge tone={colorFor(sp ? sp.status : "Not Started")}>{sp ? sp.status : "Not Started"}</Badge>
-        </div>
-        <div style={{ marginTop: 4, color: "var(--ink-muted)" }}>Update these on the Topic Completion / Single Pager tabs.</div>
-      </div>
-    );
-  }
-  if (link === "classLecture") {
-    const todays = db.classes.filter(c => c.date === dateISO);
-    return todays.length === 0
-      ? <EmptyState>No class logged for today yet — log it on the Classes tab.</EmptyState>
-      : <div>{todays.map(c => <div key={c.id} className="ucc-tiny" style={{ marginBottom: 4 }}>{c.subject} — Class {c.classNumber}: {c.topic} <Badge tone={colorFor(c.status)}>{c.status}</Badge></div>)}</div>;
-  }
-  if (link === "tamilReading") {
-    return <EmptyState>Log today's Tamil Literature reading on the Tamil Literature tab.</EmptyState>;
-  }
-  if (link === "tamilWriting") {
-    const todays = db.tamilWriting.filter(t => t.date === dateISO);
-    return todays.length === 0
-      ? <EmptyState>No Tamil answer-writing task logged for today.</EmptyState>
-      : <div>{todays.map(t => <div key={t.id} className="ucc-tiny" style={{ marginBottom: 4 }}>{t.topic} <Badge tone={colorFor(t.status)}>{t.status}</Badge></div>)}</div>;
-  }
-  if (link === "currentAffairs") {
-    const todays = db.currentAffairs.filter(c => c.date === dateISO);
-    return todays.length === 0
-      ? <EmptyState>No current affairs added for today.</EmptyState>
-      : <div>{todays.map(c => <div key={c.id} className="ucc-tiny" style={{ marginBottom: 4 }}>{c.title || "(untitled)"}{c.source ? ` — ${c.source}` : ""}</div>)}</div>;
-  }
-  if (link === "gsReading") {
-    // Any topic with pending reference reading — no longer requires Class
-    // Notes to already be "Completed", so a freshly logged class shows up
-    // here right away (it starts as "In Progress").
-    const pend = db.reading.filter(r => (r.standardMaterial !== "Completed" && r.standardMaterial !== "Not Needed") || (r.ncert !== "Completed" && r.ncert !== "Not Needed")).slice(0, 3);
-    if (pend.length === 0) return <EmptyState>No pending GS reading identified. Add reading records in the Topic Completion tracker.</EmptyState>;
-    return (
-      <div>
-        {pend.map(r => (
-          <div key={r.id} className="ucc-tiny" style={{ marginBottom: 4 }}>
-            <strong>{r.subject} — {r.topic}</strong>{" "}
-            {r.standardMaterial !== "Completed" && r.standardMaterial !== "Not Needed" && (
-              <span>Read Standard Material <Badge tone={colorFor(r.standardMaterial)}>{r.standardMaterial}</Badge></span>
-            )}
-            {r.ncert !== "Completed" && r.ncert !== "Not Needed" && (
-              <span style={{ marginLeft: 6 }}>NCERT <Badge tone={colorFor(r.ncert)}>{r.ncert}</Badge></span>
-            )}
-          </div>
-        ))}
-      </div>
-    );
-  }
-  if (link === "gsWriting") {
-    const todays = db.answerWriting.filter(a => a.date === dateISO);
-    return todays.length === 0
-      ? <EmptyState>No GS answer-writing target set for today.</EmptyState>
-      : <div>{todays.map(a => <div key={a.id} className="ucc-tiny" style={{ marginBottom: 4 }}>{a.gsPaper || "GS"} — {a.topic} <Badge tone={colorFor(a.status)}>{a.status}</Badge></div>)}</div>;
-  }
-  if (link === "aiLearning") {
-    const todays = db.aiLearning.filter(a => a.date === dateISO);
-    return todays.length === 0
-      ? <EmptyState>No AI learning topic logged for today.</EmptyState>
-      : <div>{todays.map(a => <div key={a.id} className="ucc-tiny" style={{ marginBottom: 4 }}>{a.topic || "(untitled)"} <Badge tone={colorFor(a.status)}>{a.status}</Badge></div>)}</div>;
-  }
-  if (link === "office") return <div className="ucc-tiny">Fixed block — no linked tracker.</div>;
-  return null;
 }
 
 /* ============================================================
@@ -2416,27 +2255,29 @@ function WeeklyReviewTab({ db, updateSlice }) {
   const [weekOf, setWeekOf] = useState(weekStartISO(todayISO()));
   const weekDates = Array.from({ length: 7 }, (_, i) => addDaysISO(weekOf, i));
   const plans = weekDates.map(d => db.dailyPlans[d]).filter(Boolean);
-  let planned = 0, completed = 0, missed = 0;
+  let planned = 0, logged = 0, missed = 0;
   plans.forEach(p => (p.blocks || []).forEach(b => {
     if (b.type === "break") return;
-    if (b.skipped) return;
     planned++;
-    if (b.status === "Completed") completed++;
-    else if (b.status === "Skipped") missed++;
+    if (b.skipped) missed++;
+    else if ((b.journal || "").trim()) logged++;
   }));
   const reflection = db.weeklyReviews[weekOf] || { wellDone: "", notWell: "", change: "" };
   function setReflection(patch) {
     updateSlice("weeklyReviews", prev => ({ ...prev, [weekOf]: { ...(prev[weekOf] || {}), ...patch } }));
   }
-  // Per-day breakdown for the week: every non-break task with its status,
-  // plus that day's End-of-day review — this is the "log" the daily plan and
-  // end-of-day review otherwise disappear into with no later record of them.
+  // Per-day breakdown for the week: every non-break block with its real
+  // start/end time (computePlanTimes, since the plan itself only stores
+  // duration) and journal entry, plus that day's End-of-day review — this
+  // is the hourly journal, viewable both per-day (Today tab) and per-week
+  // (here).
   const dayLogs = weekDates.map(d => {
     const plan = db.dailyPlans[d];
     const rev = db.dailyReviews[d];
-    const tasks = plan ? (plan.blocks || []).filter(b => b.type !== "break") : [];
+    const tasks = plan ? computePlanTimes(plan).blocks.filter(b => b.type !== "break") : [];
     const hasReview = !!(rev && (rev.notes || rev.skipReason));
-    return { date: d, tasks, review: rev, hasContent: tasks.length > 0 || hasReview };
+    const hasJournal = tasks.some(t => (t.journal || "").trim());
+    return { date: d, tasks, review: rev, hasContent: tasks.length > 0 || hasReview || hasJournal };
   });
   const weekHasContent = dayLogs.some(dl => dl.hasContent);
   return (
@@ -2463,7 +2304,7 @@ function WeeklyReviewTab({ db, updateSlice }) {
           </div>
           <div className="ucc-statgrid" style={{ margin: "12px 0" }}>
             <div className="ucc-stat"><div className="n">{planned}</div><div className="l">Planned sessions</div></div>
-            <div className="ucc-stat"><div className="n">{completed}</div><div className="l">Completed</div></div>
+            <div className="ucc-stat"><div className="n">{logged}</div><div className="l">Logged</div></div>
             <div className="ucc-stat"><div className="n">{missed}</div><div className="l">Skipped</div></div>
             <div className="ucc-stat"><div className="n">{db.classes.filter(c => weekDates.includes(c.date)).length}</div><div className="l">Classes this week</div></div>
             <div className="ucc-stat"><div className="n">{db.answerWriting.filter(a => weekDates.includes(a.date)).length}</div><div className="l">Answers written</div></div>
@@ -2477,15 +2318,23 @@ function WeeklyReviewTab({ db, updateSlice }) {
         </div>
 
         <div className="ucc-card">
-          <h3>Daily log</h3>
-          {!weekHasContent && <EmptyState>No daily plans or end-of-day reviews logged for this week yet.</EmptyState>}
+          <h3>Hourly journal</h3>
+          {!weekHasContent && <EmptyState>No daily plans or journal entries logged for this week yet.</EmptyState>}
           {dayLogs.filter(dl => dl.hasContent).map(dl => (
             <div key={dl.date} style={{ marginBottom: 14, paddingBottom: 12, borderBottom: "1px solid var(--line)" }}>
               <div style={{ fontWeight: 700, marginBottom: 6 }}>{fmtDateLong(dl.date)}</div>
               {dl.tasks.map(t => (
-                <div key={t.id} className="ucc-flex" style={{ marginBottom: 3 }}>
-                  <span className="ucc-tiny" style={{ minWidth: 220 }}>{t.label}</span>
-                  <Badge tone={colorFor(t.skipped ? "Skipped" : (t.status || "Not Started"))}>{t.skipped ? "Skipped" : (t.status || "Not Started")}</Badge>
+                <div key={t.id} style={{ marginBottom: 6 }}>
+                  <div className="ucc-flex wrap" style={{ gap: 6 }}>
+                    <span className="ucc-tiny ucc-mono" style={{ minWidth: 110 }}>{minutesToTime(t.start)}–{minutesToTime(t.end)} ({t.duration}m)</span>
+                    <span className="ucc-tiny" style={{ fontWeight: 600 }}>{t.label}</span>
+                    {t.skipped && <Badge tone="grey">Skipped</Badge>}
+                  </div>
+                  {!t.skipped && (
+                    <div className="ucc-tiny" style={{ color: (t.journal || "").trim() ? "var(--ink)" : "var(--ink-muted)", marginTop: 2 }}>
+                      {(t.journal || "").trim() || "— no journal entry —"}
+                    </div>
+                  )}
                 </div>
               ))}
               {dl.review && (dl.review.notes || dl.review.skipReason) && (
