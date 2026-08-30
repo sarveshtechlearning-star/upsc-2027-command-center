@@ -1071,7 +1071,7 @@ function initDayPlan(dateISO, settings, dayType) {
     dayType: dt,
     breakNote,
     droppedLabels,
-    blocks: blocks.map(b => ({ ...b, status: "Not Started", skipped: false, completedAt: null, journal: "" })),
+    blocks: blocks.map(b => ({ ...b, status: "Not Started", skipped: false, skipReason: "", completedAt: null, journal: "" })),
   };
 }
 
@@ -1086,8 +1086,8 @@ function regeneratePlan(prevPlan, wakeTime, dayType, settings) {
   const merged = blocks.map(b => {
     const prev = prevById.get(b.id);
     return prev
-      ? { ...b, status: prev.status, completedAt: prev.completedAt, skipped: false, journal: prev.journal || "" }
-      : { ...b, status: "Not Started", completedAt: null, skipped: false, journal: "" };
+      ? { ...b, status: prev.status, completedAt: prev.completedAt, skipped: false, skipReason: "", journal: prev.journal || "" }
+      : { ...b, status: "Not Started", completedAt: null, skipped: false, skipReason: "", journal: "" };
   });
   const customBlocks = (prevPlan.blocks || []).filter(b => b.custom);
   return { ...prevPlan, wakeTime, dayType, breakNote, droppedLabels, blocks: [...merged, ...customBlocks] };
@@ -1207,7 +1207,7 @@ function TodayTab({ db, updateSlice, onNavigate }) {
   }
   function addCustomBlock() {
     setPlan(p => ({
-      ...p, blocks: [...p.blocks, { id: uid(), label: "Custom task", type: "study", link: "custom", duration: 30, status: "Not Started", skipped: false, journal: "", custom: true }]
+      ...p, blocks: [...p.blocks, { id: uid(), label: "Custom task", type: "study", link: "custom", duration: 30, status: "Not Started", skipped: false, skipReason: "", journal: "", custom: true }]
     }));
   }
   function removeBlock(id) {
@@ -1227,11 +1227,6 @@ function TodayTab({ db, updateSlice, onNavigate }) {
   const todayAnswers = db.answerWriting.filter(a => a.date === dateISO);
   const todayCA = db.currentAffairs.filter(c => c.date === dateISO);
   const syllabusDone = db.syllabus.filter(s => s.studyStatus === "Completed" || s.studyStatus === "Revised").length;
-  const review = db.dailyReviews[dateISO] || { notes: "", skipReason: "" };
-
-  function setReview(patch) {
-    updateSlice("dailyReviews", prev => ({ ...prev, [dateISO]: { ...(prev[dateISO] || {}), ...patch } }));
-  }
 
   return (
     <div>
@@ -1284,10 +1279,15 @@ function TodayTab({ db, updateSlice, onNavigate }) {
             const travelFro = timedBlocks.find(x => x.id === "travelFro");
             return (
               <OfficePlanBlock key="office-group" office={b} travelTo={travelTo} travelFro={travelFro}
-                onSkipAll={val => {
-                  updateBlock("office", { skipped: val });
-                  if (travelTo) updateBlock("travelTo", { skipped: val });
-                  if (travelFro) updateBlock("travelFro", { skipped: val });
+                onSkipAll={reason => {
+                  updateBlock("office", { skipped: true, skipReason: reason });
+                  if (travelTo) updateBlock("travelTo", { skipped: true, skipReason: reason });
+                  if (travelFro) updateBlock("travelFro", { skipped: true, skipReason: reason });
+                }}
+                onUnskipAll={() => {
+                  updateBlock("office", { skipped: false, skipReason: "" });
+                  if (travelTo) updateBlock("travelTo", { skipped: false, skipReason: "" });
+                  if (travelFro) updateBlock("travelFro", { skipped: false, skipReason: "" });
                 }}
                 onJournalChange={v => updateBlock("office", { journal: v })} />
             );
@@ -1340,23 +1340,6 @@ function TodayTab({ db, updateSlice, onNavigate }) {
           <div className="ucc-tiny">{db.singlePager.filter(s => s.status === "Completed").length} single pagers completed</div>
         </SummaryCard>
       </div>
-
-      <div className="ucc-card">
-        <h3>End-of-day review</h3>
-        <div className="ucc-grid">
-          <div>
-            <label className="ucc-tiny">Overall reflection on the day (the hourly journal above has the details)</label>
-            <textarea className="ucc-textarea" rows={3} value={review.notes} onChange={e => setReview({ notes: e.target.value })} placeholder="A few honest lines — this tracker shows discipline, not performance." />
-          </div>
-          <div>
-            <label className="ucc-tiny">If something was skipped, reason (optional)</label>
-            <select className="ucc-select" value={review.skipReason} onChange={e => setReview({ skipReason: e.target.value })}>
-              <option value="">—</option>
-              {SKIP_REASONS.map(r => <option key={r} value={r}>{r}</option>)}
-            </select>
-          </div>
-        </div>
-      </div>
     </div>
   );
 }
@@ -1373,7 +1356,43 @@ function SummaryCard({ title, count, children, onTitleClick }) {
   );
 }
 
-function OfficePlanBlock({ office, travelTo, travelFro, onSkipAll, onJournalChange }) {
+// Skip checkbox for a plan block, with a reason required up front: checking
+// it opens a small popover of SKIP_REASONS (same list the old end-of-day
+// review used) instead of immediately marking it skipped — onSkip only
+// fires once a reason is picked. Unchecking (already skipped -> not) needs
+// no reason, so it fires onUnskip directly.
+function SkipToggle({ skipped, skipReason, onSkip, onUnskip }) {
+  const [open, setOpen] = useState(false);
+  if (skipped) {
+    return (
+      <span className="ucc-tiny">
+        Skipped{skipReason ? `: ${skipReason}` : ""}{" "}
+        <button type="button" className="ucc-btn ghost" style={{ padding: "1px 6px", fontSize: 11 }} onClick={onUnskip}>Undo</button>
+      </span>
+    );
+  }
+  return (
+    <div style={{ position: "relative", display: "inline-block" }}>
+      <label className="ucc-tiny"><input type="checkbox" checked={false} onChange={() => setOpen(true)} /> Skip</label>
+      {open && (
+        <div style={{
+          position: "absolute", zIndex: 30, top: "100%", right: 0, marginTop: 4, background: "#fff",
+          border: "1px solid var(--line-strong)", borderRadius: 6, padding: 8, minWidth: 190,
+          boxShadow: "0 4px 14px rgba(0,0,0,0.14)",
+        }}>
+          <div className="ucc-tiny" style={{ marginBottom: 6, fontWeight: 600 }}>Reason for skipping?</div>
+          {SKIP_REASONS.map(r => (
+            <button key={r} type="button" className="ucc-btn ghost" style={{ display: "block", width: "100%", textAlign: "left", marginBottom: 3, padding: "4px 8px" }}
+              onClick={() => { onSkip(r); setOpen(false); }}>{r}</button>
+          ))}
+          <button type="button" className="ucc-btn ghost" style={{ marginTop: 2, padding: "2px 6px", fontSize: 11 }} onClick={() => setOpen(false)}>Cancel</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function OfficePlanBlock({ office, travelTo, travelFro, onSkipAll, onUnskipAll, onJournalChange }) {
   const skipped = office.skipped;
   const start = (travelTo || office).start;
   const end = (travelFro || office).end;
@@ -1387,7 +1406,7 @@ function OfficePlanBlock({ office, travelTo, travelFro, onSkipAll, onJournalChan
       <div className="body">
         <div className="ucc-flex between wrap">
           <strong>Office Work{travelTo ? " (incl. commute)" : ""}</strong>
-          <label className="ucc-tiny"><input type="checkbox" checked={skipped} onChange={e => onSkipAll(e.target.checked)} /> Skip</label>
+          <SkipToggle skipped={skipped} skipReason={office.skipReason} onSkip={r => onSkipAll(r)} onUnskip={onUnskipAll} />
         </div>
         <div className="ucc-tiny" style={{ margin: "4px 0", color: "var(--ink-muted)" }}>
           {travelTo && <span>Commute (to): {minutesToTime(travelTo.start)}–{minutesToTime(travelTo.end)} ({travelTo.duration}m) · </span>}
@@ -1421,7 +1440,9 @@ function PlanBlock({ block, onUpdate, onMoveUp, onMoveDown, onRemove }) {
           <div className="ucc-flex">
             {onMoveUp && <IconBtn icon={ChevronUp} onClick={onMoveUp} title="Move up" />}
             {onMoveDown && <IconBtn icon={ChevronDown} onClick={onMoveDown} title="Move down" />}
-            <label className="ucc-tiny"><input type="checkbox" checked={block.skipped} onChange={e => onUpdate({ skipped: e.target.checked })} /> Skip</label>
+            <SkipToggle skipped={block.skipped} skipReason={block.skipReason}
+              onSkip={r => onUpdate({ skipped: true, skipReason: r })}
+              onUnskip={() => onUpdate({ skipped: false, skipReason: "" })} />
             {onRemove && <IconBtn icon={Trash2} onClick={onRemove} title="Remove" danger />}
           </div>
         </div>
@@ -2268,16 +2289,14 @@ function WeeklyReviewTab({ db, updateSlice }) {
   }
   // Per-day breakdown for the week: every non-break block with its real
   // start/end time (computePlanTimes, since the plan itself only stores
-  // duration) and journal entry, plus that day's End-of-day review — this
-  // is the hourly journal, viewable both per-day (Today tab) and per-week
-  // (here).
+  // duration), its journal entry, and — if skipped — the reason picked at
+  // skip time. This is the hourly journal, viewable both per-day (Today
+  // tab) and per-week (here).
   const dayLogs = weekDates.map(d => {
     const plan = db.dailyPlans[d];
-    const rev = db.dailyReviews[d];
     const tasks = plan ? computePlanTimes(plan).blocks.filter(b => b.type !== "break") : [];
-    const hasReview = !!(rev && (rev.notes || rev.skipReason));
     const hasJournal = tasks.some(t => (t.journal || "").trim());
-    return { date: d, tasks, review: rev, hasContent: tasks.length > 0 || hasReview || hasJournal };
+    return { date: d, tasks, hasContent: tasks.length > 0 || hasJournal };
   });
   const weekHasContent = dayLogs.some(dl => dl.hasContent);
   return (
@@ -2328,7 +2347,7 @@ function WeeklyReviewTab({ db, updateSlice }) {
                   <div className="ucc-flex wrap" style={{ gap: 6 }}>
                     <span className="ucc-tiny ucc-mono" style={{ minWidth: 110 }}>{minutesToTime(t.start)}–{minutesToTime(t.end)} ({t.duration}m)</span>
                     <span className="ucc-tiny" style={{ fontWeight: 600 }}>{t.label}</span>
-                    {t.skipped && <Badge tone="grey">Skipped</Badge>}
+                    {t.skipped && <Badge tone="grey">Skipped{t.skipReason ? `: ${t.skipReason}` : ""}</Badge>}
                   </div>
                   {!t.skipped && (
                     <div className="ucc-tiny" style={{ color: (t.journal || "").trim() ? "var(--ink)" : "var(--ink-muted)", marginTop: 2 }}>
@@ -2337,12 +2356,6 @@ function WeeklyReviewTab({ db, updateSlice }) {
                   )}
                 </div>
               ))}
-              {dl.review && (dl.review.notes || dl.review.skipReason) && (
-                <div style={{ marginTop: 6 }}>
-                  {dl.review.notes && <div className="ucc-tiny"><strong>End-of-day review:</strong> {dl.review.notes}</div>}
-                  {dl.review.skipReason && <div className="ucc-tiny">Skip reason: {dl.review.skipReason}</div>}
-                </div>
-              )}
             </div>
           ))}
         </div>
