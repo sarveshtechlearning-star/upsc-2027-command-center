@@ -50,10 +50,10 @@ summary will do.
 ## 4. Existing architecture (current, as of this document)
 
 - **Frontend**: React 18 + Vite. Almost all UI/feature logic lives in the
-  single `src/App.jsx` file (daily planner, class tracker, reading tracker,
-  syllabus, single pagers, NCERT, standard books, Tamil literature, current
-  affairs, GS answer writing, AI learning, topic master, search, weekly
-  review). `src/main.jsx` is the entry point.
+  single `src/App.jsx` file (daily planner, class tracker, topic completion
+  (formerly "Reading"), syllabus, single pagers, NCERT, standard books,
+  Tamil literature, current affairs, GS answer writing, AI learning, topic
+  master, search, weekly review). `src/main.jsx` is the entry point.
 - **Backend**: Supabase (Postgres + Auth) via `src/supabaseClient.js`,
   configured with `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY`.
 - **Data model**: a single `kv_store` table (`user_id`, `key`, `value
@@ -66,6 +66,40 @@ summary will do.
   flow also carry a `syllabusId` pointing at that row (see
   `findSyllabusId`), so they stay correctly grouped in Topic Master even if
   the syllabus topic's text is renamed later.
+- **Tracker schemas are intentionally lean, not uniform** — several
+  trackers had status/date columns removed because they weren't being
+  kept current (NCERT and Standard Books are now pure reference lists:
+  Subject/Topic/Subtopic/Micro Topic/Book/Chapter(/Pages), no status or
+  dates; Tamil Reading dropped Status/Revision). Don't reflexively add a
+  status or date field back onto these — that removal was deliberate.
+  Single Pager's Class Notes/Handout/NCERT/Standard Books are a simple
+  `INCLUSION_OPTIONS` ("Included"/"Not Included") select, not a progress
+  status. Before adding a field to any tracker, check its current column
+  list in the relevant `*Tab` function rather than assuming parity with
+  similar-sounding fields elsewhere.
+- **"Log" column**: most trackers end with a `LogButton` cell
+  (`{ key: "log", ... render: rec => <LogButton history={rec.history} /> }`)
+  — a read-only popover over the record's existing `history` array (already
+  populated by `type: "status"` column edits). It's a pure UI addition, not
+  a new data source; don't wire up separate audit logging.
+- **Today's Planner is now view + status only, not an editing surface.**
+  `LinkedTaskInfo` renders read-only summaries of each linked tracker's
+  today's-date entries — it does not create or edit tracker records
+  in-place (the old embedded add/edit widgets — `ClassLectureWidget`,
+  `TodayListWidget`, `QuickPickWidget`, `InlineAddForm` — were removed).
+  Actual data entry always happens on the tracker's own tab.
+  `TaskStatusButtons` is hardcoded to the 5-value `TASK_STATUS` set for
+  every block; don't reintroduce a per-link status vocabulary. For the
+  links in `GATED_LINK_TABS` (`PlanBlock`) — classLecture, tamilWriting,
+  currentAffairs, gsWriting, aiLearning — clicking "Completed" calls
+  `onNavigate` to that tracker's tab instead of setting status directly;
+  a `useEffect` in `TodayTab` then flips the block to Completed once a
+  same-day qualifying record actually exists there. Links without a
+  reliable same-day signal (prevClass, tamilReading, gsReading, office,
+  custom) keep the old direct, immediate click-to-set behavior — don't
+  add them to `GATED_LINK_TABS` unless their tracker gains a reliable
+  per-day completion signal (a `date` field plus a status that can reach
+  "Completed").
 - **Topic governance**: Syllabus and Current Affairs are the only two
   trackers where a genuinely new Topic/Subtopic/Micro Topic can be created
   (`CascadingSelectCell` with `allowAddNew` true/default). Current
@@ -76,17 +110,21 @@ summary will do.
   its options from the strict `syllabusTopicsForSubject` /
   `syllabusSubtopicsForTopic` helpers — selection only, no creation. AI
   Learning is the one deliberate exception: it's explicitly personal/
-  outside the UPSC syllabus, so its Topic field stays free text. Keep new
-  topic-entry UI consistent with this pattern rather than adding another
-  ad hoc free-text field.
+  outside the UPSC syllabus, so its Topic field stays free text. Classes
+  additionally supports tagging multiple Micro Topics per row via
+  `TagMultiSelectCell` (same "select only" rule, scoped to the row's
+  Subtopic). Keep new topic-entry UI consistent with this pattern rather
+  than adding another ad hoc free-text field.
 - **Google Drive PDFs**: `DriveFileCell` + `uploadDriveFile`/
   `downloadDriveFile` are generic across trackers — pass a `folderKey`
   (see `DRIVE_FOLDER_NAMES`) to keep each tracker's PDFs in their own
   Drive folder. Currently wired up for Single Pager, Classes, GS Answer
-  Writing, and Tamil Reading/Writing. `ensureDriveFolder` falls back to
-  the legacy singular `settings.driveFolderId` only for the `singlePager`
-  key, to avoid creating a duplicate folder for existing users; new
-  folder ids live in `settings.driveFolders[folderKey]`.
+  Writing, Tamil Reading/Writing, and Current Affairs. `ensureDriveFolder`
+  falls back to the legacy singular `settings.driveFolderId` only for the
+  `singlePager` key, to avoid creating a duplicate folder for existing
+  users; new folder ids live in `settings.driveFolders[folderKey]`.
+  `DriveDownloadLink` is the read-only variant used in Topic Master, which
+  has no `updateSlice` to support uploading.
 - **Import/export**: `xlsx` for Excel, plus JSON export, applied generically
   across trackers. `IMPORT_TARGETS` currently covers classes, reading,
   singlePager, and syllabus; `downloadImportTemplate(key)` generates a
