@@ -443,6 +443,21 @@ function syllabusSubtopicsForTopic(db, subject, topic) {
   db.syllabus.filter(s => s.subject === subject && s.topic === topic && s.subtopic).forEach(s => set.add(s.subtopic));
   return Array.from(set);
 }
+// Read-only, auto-computed "have I identified a source for this micro
+// topic" check (Syllabus tab's Source Identified column) — never stored or
+// user-editable. Yes if this exact subject/topic/subtopic/micro topic shows
+// up in Classes (as one of its micro-topic tags), NCERT, or Standard Books;
+// No otherwise. No micro topic on the row at all means there's nothing to
+// check yet, so callers should treat that as its own "—" state.
+function isSourceIdentifiedForMicrotopic(db, subject, topic, subtopic, microtopic) {
+  if (!microtopic) return false;
+  const key = normKey(subject, topic, subtopic, microtopic);
+  const inClasses = db.classes.some(c => (c.microtopics || []).some(m => normKey(c.subject, c.topic, c.subtopic, m) === key));
+  if (inClasses) return true;
+  const inNcert = db.ncert.some(n => normKey(n.subject, n.topic, n.subtopic, n.microtopic) === key);
+  if (inNcert) return true;
+  return db.standardBooks.some(s => normKey(s.subject, s.topic, s.subtopic, s.microtopic) === key);
+}
 function weekStartISO(iso) {
   const [y, m, d] = iso.split("-").map(Number);
   const dt = new Date(y, m - 1, d);
@@ -1622,6 +1637,9 @@ function SyllabusTab({ db, updateSlice }) {
         <div className="ucc-tiny" style={{ marginTop: 6, color: "var(--ink-muted)" }}>
           <strong>Subject → Topic → Subtopic → Micro Topic</strong> are linked — pick each in order, or choose <strong>+ Add new</strong> to type one in. These also power the subject-wise dropdowns on the Class Lecture slot in Today's plan. New subjects are added to the shared list on the Settings tab automatically.
         </div>
+        <div className="ucc-tiny" style={{ marginTop: 6, color: "var(--ink-muted)" }}>
+          <strong>Source Identified</strong> is read-only — it's Yes automatically once this exact Micro Topic appears in Classes, NCERT, or Standard Books, and No (or — with no Micro Topic set) otherwise.
+        </div>
       </div>
       <div className="ucc-card">
         <h3>All syllabus items</h3>
@@ -1677,6 +1695,14 @@ function SyllabusTab({ db, updateSlice }) {
                   onAddNew={name => updateRecord({ microtopic: name })}
                 />
               ),
+            },
+            {
+              key: "sourceIdentified", label: "Source Identified", width: 130, type: "custom",
+              render: rec => rec.microtopic
+                ? <Badge tone={isSourceIdentifiedForMicrotopic(db, rec.subject, rec.topic, rec.subtopic, rec.microtopic) ? "green" : "grey"}>
+                    {isSourceIdentifiedForMicrotopic(db, rec.subject, rec.topic, rec.subtopic, rec.microtopic) ? "Yes" : "No"}
+                  </Badge>
+                : <span className="ucc-tiny" style={{ color: "var(--ink-muted)" }}>—</span>,
             },
           ]}
           newRecord={() => ({ coverage: "", gsPaper: "", subject: "", topic: "", subtopic: "", microtopic: "", studyStatus: "Not Started", revisionStatus: "Not Started" })}
@@ -2489,10 +2515,10 @@ function DangerZone({ updateSlice }) {
    ============================================================ */
 const IMPORT_TARGETS = {
   classes: {
-    label: "Classes", fields: ["date", "subject", "classNumber", "topic", "subtopic", "eta", "status"],
+    label: "Classes", fields: ["date", "subject", "classNumber", "topic", "subtopic", "microtopic", "eta", "status"],
     aliases: {
       date: ["date"], subject: ["subject"], classNumber: ["class", "today's class number", "class number", "classno", "class no"],
-      topic: ["topic"], subtopic: ["subtopic", "sub topic"], eta: ["eta"], status: ["status"],
+      topic: ["topic"], subtopic: ["subtopic", "sub topic"], microtopic: ["microtopic", "micro topic"], eta: ["eta"], status: ["status"],
     },
     dupKey: r => normKey(r.subject, r.topic, r.classNumber),
   },
@@ -2524,6 +2550,66 @@ const IMPORT_TARGETS = {
     },
     dupKey: r => normKey(r.subject, r.topic, r.subtopic, r.microtopic),
   },
+  ncert: {
+    label: "NCERT",
+    fields: ["subject", "topic", "subtopic", "microtopic", "book", "chapter"],
+    aliases: {
+      subject: ["subject"], topic: ["topic"], subtopic: ["subtopic", "sub topic"], microtopic: ["microtopic", "micro topic"],
+      book: ["book"], chapter: ["chapter"],
+    },
+    dupKey: r => normKey(r.subject, r.topic, r.subtopic, r.microtopic, r.book, r.chapter),
+  },
+  standardBooks: {
+    label: "Standard Books",
+    fields: ["subject", "topic", "subtopic", "microtopic", "bookName", "chapter", "pages"],
+    aliases: {
+      subject: ["subject"], topic: ["topic"], subtopic: ["subtopic", "sub topic"], microtopic: ["microtopic", "micro topic"],
+      bookName: ["book", "book name"], chapter: ["chapter"], pages: ["pages"],
+    },
+    dupKey: r => normKey(r.subject, r.topic, r.subtopic, r.microtopic, r.bookName, r.chapter),
+  },
+  tamilReading: {
+    label: "Tamil Reading",
+    fields: ["topic", "source", "notes"],
+    aliases: { topic: ["topic"], source: ["source"], notes: ["notes", "what i've learned", "what ive learned"] },
+    dupKey: r => normKey(r.topic, r.source),
+  },
+  tamilWriting: {
+    label: "Tamil Writing",
+    fields: ["date", "topic", "question", "wordLimit", "selfEvaluation", "marksScored", "marksMax", "status"],
+    aliases: {
+      date: ["date"], topic: ["topic"], question: ["question"], wordLimit: ["word limit", "wordlimit"],
+      selfEvaluation: ["remarks summary", "self eval", "selfevaluation"], marksScored: ["marks scored", "scored"],
+      marksMax: ["max marks", "maximum marks", "marksmax"], status: ["status"],
+    },
+    dupKey: r => normKey(r.date, r.topic),
+  },
+  currentAffairs: {
+    label: "Current Affairs",
+    fields: ["date", "title", "source", "subject", "relevantSyllabusTopic", "subtopic", "microtopic"],
+    aliases: {
+      date: ["date"], title: ["topic / title", "title"], source: ["source"], subject: ["subject"],
+      relevantSyllabusTopic: ["topic", "syllabus topic", "relevant syllabus topic"],
+      subtopic: ["subtopic", "sub topic"], microtopic: ["microtopic", "micro topic"],
+    },
+    dupKey: r => normKey(r.date, r.title),
+  },
+  answerWriting: {
+    label: "GS Answer Writing",
+    fields: ["date", "gsPaper", "topic", "question", "wordLimit", "status", "selfScore", "improvementNotes"],
+    aliases: {
+      date: ["date"], gsPaper: ["gs paper", "gspaper"], topic: ["topic"], question: ["question"],
+      wordLimit: ["word limit", "wordlimit"], status: ["status"], selfScore: ["self score", "score"],
+      improvementNotes: ["improvement notes", "notes"],
+    },
+    dupKey: r => normKey(r.date, r.gsPaper, r.topic),
+  },
+  aiLearning: {
+    label: "AI Learning",
+    fields: ["date", "topic", "duration", "status", "notes"],
+    aliases: { date: ["date"], topic: ["topic"], duration: ["duration", "duration (min)"], status: ["status"], notes: ["notes"] },
+    dupKey: r => normKey(r.date, r.topic),
+  },
 };
 
 const IMPORT_FIELD_LABELS = {
@@ -2533,6 +2619,11 @@ const IMPORT_FIELD_LABELS = {
   handout: "Handout", standardBooks: "Standard Books",
   coverage: "Coverage", gsPaper: "GS Paper", subtopic: "Subtopic", microtopic: "Micro Topic",
   studyStatus: "Study Status", revisionStatus: "Revision Status",
+  book: "Book", chapter: "Chapter", bookName: "Book", pages: "Pages",
+  source: "Source", notes: "Notes", question: "Question", wordLimit: "Word Limit",
+  selfEvaluation: "Remarks Summary", marksScored: "Marks Scored", marksMax: "Max Marks",
+  title: "Topic / Title", relevantSyllabusTopic: "Topic", duration: "Duration (min)",
+  selfScore: "Self Score", improvementNotes: "Improvement Notes",
 };
 // A blank workbook with just the header row (friendly labels) for one
 // import target — lets someone fill it in offline in the exact shape the
@@ -2616,7 +2707,14 @@ function ImportExportTab({ db, updateSlice }) {
         if (!clean.status) clean.status = "Not Started";
         if (!clean.revision) clean.revision = "Yet to Start";
       }
-      if (target === "classes" && !clean.status) clean.status = "Completed";
+      if (target === "classes") {
+        if (!clean.status) clean.status = "Completed";
+        // Classes tags multiple micro topics; a plain import column can only
+        // give us one, so it becomes the sole starting tag (more can be
+        // added on the Classes tab afterwards).
+        clean.microtopics = clean.microtopic ? [clean.microtopic] : [];
+        delete clean.microtopic;
+      }
       if (target === "classes" || target === "reading") {
         clean.syllabusId = findSyllabusId(db, { subject: clean.subject, topic: clean.topic, subtopic: clean.subtopic });
       }
@@ -2624,6 +2722,12 @@ function ImportExportTab({ db, updateSlice }) {
         if (!clean.studyStatus) clean.studyStatus = "Not Started";
         if (!clean.revisionStatus) clean.revisionStatus = "Not Started";
       }
+      if (target === "tamilWriting" && !clean.status) clean.status = "Not Started";
+      if (target === "currentAffairs") {
+        clean.driveFile = null;
+      }
+      if (target === "answerWriting" && !clean.status) clean.status = "Not Started";
+      if (target === "aiLearning" && !clean.status) clean.status = "Not Started";
       toAdd.push(clean);
     });
     updateSlice(target, prev => [...prev, ...toAdd]);
