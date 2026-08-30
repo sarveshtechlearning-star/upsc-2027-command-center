@@ -102,6 +102,15 @@ summary will do.
   with non-empty `journal` text, "Skipped" counts `block.skipped`, and the
   per-day list shows each block's real start/end (via `computePlanTimes`,
   since the stored plan only has `duration`) alongside its journal text.
+  There is no separate end-of-day review anymore (`db.dailyReviews` stays
+  defined in the data model/reset flow for old stored data, but nothing
+  reads or writes it) — skip reasons live per-block instead: checking a
+  block's Skip box opens a small popover (`SkipToggle`) listing
+  `SKIP_REASONS`, and `onSkip` only fires (setting `skipped: true,
+  skipReason`) once one is picked; unchecking (`onUnskip`) needs no reason
+  and clears both fields directly. Don't reintroduce a single daily-level
+  reflection/skip-reason field — that was tried and explicitly replaced by
+  per-block reasons.
 - **Topic governance**: Syllabus and Current Affairs are the only two
   trackers where a genuinely new Topic/Subtopic/Micro Topic can be created
   (`CascadingSelectCell` with `allowAddNew` true/default). Current
