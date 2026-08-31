@@ -62,10 +62,22 @@ summary will do.
   normalized relational tables — cross-tracker relationships are mostly
   resolved in client-side JS, not SQL joins. The Syllabus tracker is the
   hierarchy anchor (Subject → Topic → Subtopic → Micro Topic, each row with
-  a stable `id`); Classes and Reading rows created via the Class Lecture
-  flow also carry a `syllabusId` pointing at that row (see
-  `findSyllabusId`), so they stay correctly grouped in Topic Master even if
-  the syllabus topic's text is renamed later.
+  a stable `id`). Every tracker that links to a Syllabus row — Classes,
+  Reading, NCERT, Standard Books, Single Pager, Current Affairs — carries a
+  `syllabusId` (`findSyllabusId`), resolved fresh every time its own
+  Subject/Topic/Subtopic/Micro Topic selects change. This is what lets
+  Source Identified, the Dashboard, and Topic Master stay correctly linked
+  even after a Syllabus row's text is edited later — **all three of those
+  match by id first and only fall back to text for records saved before
+  this existed. If you add a new tracker with its own micro-topic-level
+  link to Syllabus, give it a syllabusId the same way, or it'll quietly
+  reintroduce the exact fragility this was built to close.** Classes is
+  the one exception worth remembering: it tags *multiple* Micro Topics per
+  row (`microtopics`), so a single `syllabusId` can't represent that — each
+  tag instead stores a Syllabus row id directly (see
+  `syllabusRowOptionsForSubtopic` / `TagMultiSelectCell`), with older
+  plain-text tags (written before ids existed) still displaying correctly
+  via a fallback lookup.
 - **Tracker schemas are intentionally lean, not uniform** — several
   trackers had status/date columns removed because they weren't being
   kept current (NCERT and Standard Books are now pure reference lists:
@@ -128,14 +140,15 @@ summary will do.
   than adding another ad hoc free-text field.
 - **Source Identified (Syllabus tab)** is read-only and fully computed —
   never add a way to set it by hand. `isSourceIdentifiedForMicrotopic(db,
-  subject, topic, subtopic, microtopic)` returns true if that exact
-  micro topic appears in Classes (one of a class's `microtopics` tags),
-  NCERT, or Standard Books; false if it doesn't, and the Syllabus row's
-  render shows "—" when the row has no Micro Topic set at all (nothing to
-  check). If a future tracker gains its own micro-topic field, consider
-  whether "source identified" should also look there — but don't silently
-  skip updating this helper if you add such a field, since a resource
-  that exists but doesn't show up here would look mis-flagged.
+  syllabusRow)` takes the whole row (not separate fields) so it can match
+  on `syllabusId` first, falling back to text for older records; true if
+  that micro topic appears in Classes (one of a class's `microtopics`
+  tags), NCERT, or Standard Books; false if it doesn't, and the Syllabus
+  row's render shows "—" when the row has no Micro Topic set at all
+  (nothing to check). If a future tracker gains its own micro-topic field,
+  consider whether "source identified" should also look there — but don't
+  silently skip updating this helper if you add such a field, since a
+  resource that exists but doesn't show up here would look mis-flagged.
 - **Dashboard tab** (`DashboardTab`, separate from the `Dashboard`
   top-level app-shell component of the same-ish name — don't confuse the
   two) is read-only, computed from existing data, no new user input:
@@ -168,6 +181,36 @@ summary will do.
     (the shared GS1–4/Essay list, also used by Answer Writing's own
     dropdown) and a single Tamil Writing total (Tamil has no "paper"
     concept to split by).
+- **Topic Master** is keyed on the full Subject/Topic/Subtopic/Micro Topic
+  path, not just Subject+Topic — one entry per **Syllabus row** (every
+  syllabus row is a distinct topic-master entry, since Syllabus is already
+  the authoritative hierarchy). `classMatchesSyllabusRow` /
+  `recMatchesSyllabusRow` match via `syllabusId` first, text as fallback —
+  same rule as Source Identified and the Dashboard. Tamil and GS Answer
+  Writing don't carry a Subtopic/Micro Topic themselves, so they attach at
+  the Topic level and can legitimately appear under several Micro Topic
+  rows that share one Topic — that's expected, not a bug. The sidebar has
+  a text filter (`query`) since the row count scales with how finely the
+  syllabus has been broken down; don't remove it even if it looks
+  unnecessary with a small dataset.
+- **"Log" is a single, built-in mechanism — don't add a second one.**
+  `GenericTracker` already renders a history expand/collapse control for
+  every table automatically (whatever `columns` you pass), driven by each
+  record's own `history` array. An earlier session added a duplicate
+  per-tab `{ key: "log", ... }` column with a popover (`LogButton`) without
+  realizing this — that was a mistake, now removed. If a table's changes
+  aren't showing up in the log, the fix is to populate `history` on that
+  field's edits (see how `type: "status"` columns already do it in
+  `GenericTracker`), not to add another log UI.
+- **Deleting a Syllabus row warns if other trackers still reference it.**
+  `GenericTracker` accepts an optional `confirmRemove(record)` prop
+  returning the confirm-dialog message; Syllabus uses it with
+  `countSyllabusRowReferences` to warn (with a count) before deleting a row
+  that Classes/Reading/NCERT/Standard Books/Single Pager/Current Affairs
+  still point to. It still allows the delete — this is a warning, not a
+  block. Other trackers don't have an equivalent yet; if that becomes worth
+  doing, reuse the same `confirmRemove` prop rather than inventing another
+  pattern.
 - **Google Drive PDFs**: `DriveFileCell` + `uploadDriveFile`/
   `downloadDriveFile` are generic across trackers — pass a `folderKey`
   (see `DRIVE_FOLDER_NAMES`) to keep each tracker's PDFs in their own
