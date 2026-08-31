@@ -6,7 +6,7 @@ import {
   Newspaper, PenTool, Brain, Search as SearchIcon, BarChart3,
   Settings as SettingsIcon, Upload, Download, ChevronUp, ChevronDown,
   Plus, Trash2, History, Check, AlertTriangle, Clock, ChevronLeft,
-  ChevronRight as ChevronRightIcon, X, LogOut
+  ChevronRight as ChevronRightIcon, X, LogOut, LayoutDashboard
 } from "lucide-react";
 
 /* ============================================================
@@ -195,6 +195,7 @@ const CSS = `
 const READ_STATUS = ["Yet to Start", "In Progress", "Completed", "Not Needed"];
 const SYLLABUS_STATUS = ["Not Started", "In Progress", "Completed", "Revised", "Strong", "Weak"];
 const TASK_STATUS = ["Not Started", "In Progress", "Completed", "Partially Completed", "Skipped"];
+const GS_PAPERS = ["GS1", "GS2", "GS3", "GS4", "Essay"];
 const SP_STATUS = ["Not Started", "In Progress", "Completed"];
 const INCLUSION_OPTIONS = ["Included", "Not Included"];
 const CA_STATUS = ["To Read", "Read", "Noted"];
@@ -356,6 +357,7 @@ function defaultDB() {
       officeHoursFixed: 6,
       travelHoursEachWay: 1,
       subjects: DEFAULT_SUBJECTS,
+      totalClassesBySubject: {}, // { [subject]: totalClasses } — optional, set on Settings to unlock the Dashboard's per-subject completion %
       slotTemplate: [...CORE_SLOT_TEMPLATE, AI_BLOCK],
       driveFolderId: null, // cached id of the Google Drive folder used for Single Pager PDFs
     },
@@ -688,6 +690,35 @@ function StatusSelect({ value, options, onChange }) {
 
 function EmptyState({ children }) {
   return <div className="ucc-empty">{children}</div>;
+}
+
+// Small dependency-free pie chart (CSS conic-gradient, no charting library)
+// for the Dashboard. `segments`: [{ label, value, color }].
+function PieChart({ segments, size = 140 }) {
+  const total = segments.reduce((sum, s) => sum + s.value, 0);
+  let cursor = 0;
+  const stops = segments.map(seg => {
+    const startPct = total ? (cursor / total) * 100 : 0;
+    cursor += seg.value;
+    const endPct = total ? (cursor / total) * 100 : 0;
+    return `${seg.color} ${startPct}% ${endPct}%`;
+  }).join(", ");
+  return (
+    <div className="ucc-flex" style={{ gap: 18, alignItems: "center", flexWrap: "wrap" }}>
+      <div style={{
+        width: size, height: size, borderRadius: "50%", flexShrink: 0,
+        background: total ? `conic-gradient(${stops})` : "var(--grey-soft)",
+      }} title={total ? undefined : "No data yet"} />
+      <div>
+        {segments.map(seg => (
+          <div key={seg.label} className="ucc-flex" style={{ gap: 6, marginBottom: 4 }}>
+            <span style={{ width: 10, height: 10, borderRadius: "50%", background: seg.color, display: "inline-block", flexShrink: 0 }} />
+            <span className="ucc-tiny">{seg.label}: {seg.value}{total ? ` (${Math.round((seg.value / total) * 100)}%)` : ""}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 function IconBtn({ icon: Icon, onClick, title, danger }) {
@@ -1140,6 +1171,20 @@ function readingCompletionPct(rec) {
   if (applicable.length === 0) return 100;
   const done = applicable.filter(f => rec[f] === "Completed").length;
   return Math.round((done / applicable.length) * 100);
+}
+
+// Dashboard-only completion score for ONE micro topic, on a 0..1 scale with
+// partial credit (a topic with notes+NCERT done but revision pending scores
+// 0.6, not 0). Deliberately separate from readingCompletionPct above (which
+// powers Today's "pending reading" list and excludes revision on purpose,
+// since a topic should drop off that list after first read) — this one is
+// purpose-built for whole-syllabus progress and includes both revisions.
+const TOPIC_COMPLETION_FIELDS = ["classNotes", "standardMaterial", "ncert", "singlePager", "revision1", "revision2"];
+function topicCompletionScore(readingRec) {
+  const applicable = TOPIC_COMPLETION_FIELDS.filter(f => !readingRec || readingRec[f] !== "Not Needed");
+  if (applicable.length === 0) return 1;
+  const done = applicable.filter(f => readingRec && readingRec[f] === "Completed").length;
+  return done / applicable.length;
 }
 
 function computePendingTasks(db) {
@@ -2080,7 +2125,7 @@ function AnswerWritingTab({ db, updateSlice }) {
             key: "gsPaper", label: "GS Paper", width: 90, type: "custom",
             render: (rec, _onChange, updateRecord) => (
               <select className="ucc-select" value={rec.gsPaper || ""} onChange={e => updateRecord({ gsPaper: e.target.value, topic: "" })}>
-                {["GS1", "GS2", "GS3", "GS4", "Essay"].map(g => <option key={g} value={g}>{g}</option>)}
+                {GS_PAPERS.map(g => <option key={g} value={g}>{g}</option>)}
               </select>
             ),
           },
@@ -2135,6 +2180,118 @@ function AiLearningTab({ db, updateSlice }) {
 /* ============================================================
    TOPIC MASTER PAGE
    ============================================================ */
+function DashboardTab({ db }) {
+  const settings = db.settings;
+
+  // Source Mapping % and Overall Topic Completion % — both computed at
+  // Micro Topic level, using every Syllabus row that has one set as the
+  // denominator (per the request: "based on the syllabus on microtopics
+  // level"). Rows with no Micro Topic yet aren't counted either way.
+  const microtopicRows = useMemo(() => db.syllabus.filter(s => s.microtopic), [db.syllabus]);
+  const sourceIdentifiedCount = useMemo(
+    () => microtopicRows.filter(s => isSourceIdentifiedForMicrotopic(db, s.subject, s.topic, s.subtopic, s.microtopic)).length,
+    [db, microtopicRows]
+  );
+  const sourceMappingPct = microtopicRows.length ? Math.round((sourceIdentifiedCount / microtopicRows.length) * 100) : null;
+
+  const readingByKey = useMemo(() => {
+    const m = new Map();
+    db.reading.forEach(r => m.set(normKey(r.subject, r.topic, r.subtopic, r.microtopic), r));
+    return m;
+  }, [db.reading]);
+  const topicCompletionPct = useMemo(() => {
+    if (microtopicRows.length === 0) return null;
+    const scores = microtopicRows.map(s => topicCompletionScore(readingByKey.get(normKey(s.subject, s.topic, s.subtopic, s.microtopic))));
+    return Math.round((scores.reduce((a, b) => a + b, 0) / scores.length) * 100);
+  }, [microtopicRows, readingByKey]);
+
+  // Classes completed by subject — Completed class# vs. that subject's
+  // Total Classes (Settings tab). Subjects with no Total set are skipped
+  // entirely, since "no total" isn't the same as "0% done".
+  const classProgressBySubject = useMemo(() => {
+    const totals = settings.totalClassesBySubject || {};
+    return settings.subjects
+      .filter(subj => totals[subj] != null && totals[subj] > 0)
+      .map(subj => {
+        const total = totals[subj];
+        const completedNumbers = db.classes.filter(c => c.subject === subj && c.status === "Completed").map(c => Number(c.classNumber) || 0);
+        const latest = completedNumbers.length ? Math.max(...completedNumbers) : 0;
+        return { subject: subj, latest, total, pct: Math.min(100, Math.round((latest / total) * 100)) };
+      });
+  }, [settings.subjects, settings.totalClassesBySubject, db.classes]);
+
+  // Overall class status pie: Completed / In Progress / Not Completed
+  // (Not Started + Partially Completed + Skipped, bucketed together).
+  const classStatusCounts = useMemo(() => {
+    const counts = { Completed: 0, "In Progress": 0, "Not Completed": 0 };
+    db.classes.forEach(c => {
+      if (c.status === "Completed") counts.Completed++;
+      else if (c.status === "In Progress") counts["In Progress"]++;
+      else counts["Not Completed"]++;
+    });
+    return counts;
+  }, [db.classes]);
+
+  const gsCounts = GS_PAPERS.map(p => ({ paper: p, count: db.answerWriting.filter(a => a.gsPaper === p).length }));
+  const tamilWritingCount = db.tamilWriting.length;
+
+  return (
+    <div>
+      <div className="ucc-statgrid" style={{ marginBottom: 16 }}>
+        <div className="ucc-stat">
+          <div className="n">{sourceMappingPct === null ? "—" : `${sourceMappingPct}%`}</div>
+          <div className="l">Source mapping ({sourceIdentifiedCount}/{microtopicRows.length} micro topics)</div>
+        </div>
+        <div className="ucc-stat">
+          <div className="n">{topicCompletionPct === null ? "—" : `${topicCompletionPct}%`}</div>
+          <div className="l">Overall topic completion ({microtopicRows.length} micro topics)</div>
+        </div>
+      </div>
+      {microtopicRows.length === 0 && (
+        <div className="ucc-card">
+          <EmptyState>No Syllabus rows have a Micro Topic set yet — add some on the Syllabus tab to see these percentages.</EmptyState>
+        </div>
+      )}
+
+      <div className="ucc-card">
+        <h3>Classes completed by subject</h3>
+        <p className="ucc-tiny">Latest completed class # vs. that subject's Total Classes (set on the Settings tab). Subjects with no total set aren't shown here.</p>
+        {classProgressBySubject.length === 0 ? (
+          <EmptyState>No subjects have a Total Classes set yet — add one on the Settings tab and it'll show up here.</EmptyState>
+        ) : (
+          <div className="ucc-statgrid">
+            {classProgressBySubject.map(cp => (
+              <div className="ucc-stat" key={cp.subject}>
+                <div className="n">{cp.pct}%</div>
+                <div className="l">{cp.subject} — {cp.latest} of {cp.total}</div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className="ucc-card">
+        <h3>Classes — overall status</h3>
+        <PieChart segments={[
+          { label: "Completed", value: classStatusCounts.Completed, color: "var(--green)" },
+          { label: "In Progress", value: classStatusCounts["In Progress"], color: "var(--amber)" },
+          { label: "Not Completed", value: classStatusCounts["Not Completed"], color: "var(--grey)" },
+        ]} />
+      </div>
+
+      <div className="ucc-card">
+        <h3>Answers written</h3>
+        <div className="ucc-statgrid">
+          {gsCounts.map(g => (
+            <div className="ucc-stat" key={g.paper}><div className="n">{g.count}</div><div className="l">{g.paper}</div></div>
+          ))}
+          <div className="ucc-stat"><div className="n">{tamilWritingCount}</div><div className="l">Tamil Literature</div></div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function TopicMasterTab({ db }) {
   const syllabusById = useMemo(() => {
     const m = new Map();
@@ -2441,13 +2598,35 @@ function SettingsTab({ db, updateSlice }) {
       </table>
       <div className="ucc-hr" />
       <h3>Subjects</h3>
-      <div className="ucc-pill-row" style={{ marginBottom: 8 }}>
-        {s.subjects.map(sub => (
-          <span key={sub} className="ucc-badge neutral">{sub}
-            <button className="ucc-btn ghost" style={{ padding: "0 0 0 6px", border: "none" }} onClick={() => patch({ subjects: s.subjects.filter(x => x !== sub) })}><X size={11} /></button>
-          </span>
-        ))}
-      </div>
+      <p className="ucc-tiny">Total Classes is optional — set it once per subject to see that subject's class-completion % on the Dashboard.</p>
+      <table className="ucc-table" style={{ marginBottom: 8 }}>
+        <thead><tr><th>Subject</th><th>Total Classes</th><th></th></tr></thead>
+        <tbody>
+          {s.subjects.map(sub => (
+            <tr key={sub}>
+              <td>{sub}</td>
+              <td>
+                <input type="number" min="0" className="ucc-input ucc-mono" style={{ width: 90 }} placeholder="—"
+                  value={(s.totalClassesBySubject || {})[sub] ?? ""}
+                  onChange={e => {
+                    const next = { ...(s.totalClassesBySubject || {}) };
+                    const raw = e.target.value;
+                    if (raw === "") delete next[sub]; else next[sub] = Number(raw);
+                    patch({ totalClassesBySubject: next });
+                  }} />
+              </td>
+              <td>
+                <button className="ucc-btn ghost" style={{ padding: "0 0 0 6px", border: "none" }}
+                  onClick={() => {
+                    const next = { ...(s.totalClassesBySubject || {}) };
+                    delete next[sub];
+                    patch({ subjects: s.subjects.filter(x => x !== sub), totalClassesBySubject: next });
+                  }}><X size={11} /></button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
       <div className="ucc-flex">
         <input className="ucc-input" style={{ maxWidth: 220 }} placeholder="Add subject" value={newSubject} onChange={e => setNewSubject(e.target.value)} />
         <button className="ucc-btn" onClick={() => { if (newSubject.trim()) { patch({ subjects: [...s.subjects, newSubject.trim()] }); setNewSubject(""); } }}><Plus size={13} /> Add</button>
@@ -2825,6 +3004,7 @@ function ImportExportTab({ db, updateSlice }) {
    ============================================================ */
 const TABS = [
   { id: "today", label: "Today", icon: Home },
+  { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
   { id: "classes", label: "Classes", icon: Layers },
   { id: "reading", label: "Topic Completion", icon: BookOpen },
   { id: "syllabus", label: "Syllabus", icon: Library },
@@ -2859,6 +3039,7 @@ function Dashboard({ session }) {
 
   let body = null;
   if (tab === "today") body = <TodayTab db={db} updateSlice={updateSlice} onNavigate={setTab} />;
+  else if (tab === "dashboard") body = <DashboardTab db={db} />;
   else if (tab === "classes") body = <ClassesTab db={db} updateSlice={updateSlice} />;
   else if (tab === "reading") body = <ReadingTab db={db} updateSlice={updateSlice} />;
   else if (tab === "syllabus") body = <SyllabusTab db={db} updateSlice={updateSlice} />;
