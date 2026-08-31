@@ -136,6 +136,38 @@ summary will do.
   whether "source identified" should also look there — but don't silently
   skip updating this helper if you add such a field, since a resource
   that exists but doesn't show up here would look mis-flagged.
+- **Dashboard tab** (`DashboardTab`, separate from the `Dashboard`
+  top-level app-shell component of the same-ish name — don't confuse the
+  two) is read-only, computed from existing data, no new user input:
+  - **Source mapping %** and **overall topic completion %** are both
+    computed at Micro Topic level, using every Syllabus row with a Micro
+    Topic set as the denominator — rows without one aren't counted in
+    either. Source mapping reuses `isSourceIdentifiedForMicrotopic`.
+    Topic completion uses `topicCompletionScore` (0..1 partial credit per
+    micro topic across Class Notes/Standard Material/NCERT/Single
+    Pager/Revision 1/Revision 2 — "Not Needed" fields excluded from that
+    micro topic's own denominator, matching `readingCompletionPct`'s
+    convention), averaged across all micro topics. This is a deliberately
+    different, more complete metric than `readingCompletionPct` (which
+    excludes revision and powers Today's "pending reading" list) — don't
+    merge the two or "simplify" by reusing one for the other's purpose.
+  - **Classes completed by subject**: latest *Completed* class# vs. that
+    subject's Total Classes, which lives in
+    `settings.totalClassesBySubject` (a plain `{ [subject]: number }` map,
+    set on the Settings tab — deliberately not a per-class-row field,
+    since that was tried before and removed for being redundant/
+    error-prone). A subject only appears here once its total is set;
+    "no total set" and "0% done" are treated as different things.
+  - **Classes — overall status** pie chart buckets every class's status
+    into exactly three groups: Completed, In Progress, and Not Completed
+    (Not Started + Partially Completed + Skipped, combined). `PieChart` is
+    a small dependency-free component (CSS `conic-gradient`, no charting
+    library) — reuse it for future charts rather than adding a chart
+    dependency for a simple pie/donut.
+  - **Answers written**: plain counts, GS Answer Writing by `GS_PAPERS`
+    (the shared GS1–4/Essay list, also used by Answer Writing's own
+    dropdown) and a single Tamil Writing total (Tamil has no "paper"
+    concept to split by).
 - **Google Drive PDFs**: `DriveFileCell` + `uploadDriveFile`/
   `downloadDriveFile` are generic across trackers — pass a `folderKey`
   (see `DRIVE_FOLDER_NAMES`) to keep each tracker's PDFs in their own
