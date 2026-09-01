@@ -202,7 +202,6 @@ const CA_STATUS = ["To Read", "Read", "Noted"];
 const CA_SOURCES = ["The Hindu", "Indian Express", "PIB", "Other"];
 const AI_STATUS = ["Not Started", "In Progress", "Completed"];
 const SKIP_REASONS = ["Time shortage", "Office workload", "Fatigue", "Unexpected work", "Other"];
-const COVERAGE_OPTIONS = ["Prelims Only", "Mains Only", "Prelims + Mains", "Interview"];
 const GS_PAPER_OPTIONS = ["GS Paper I", "GS Paper II", "GS Paper III", "GS Paper IV", "Essay", "CSAT", "Optional Paper I", "Optional Paper II", "Personality Test"];
 
 // Maps the day-plan's generic task-status vocabulary onto whatever status
@@ -259,7 +258,11 @@ function defaultDayType(dateISO) { return isWeekendISO(dateISO) ? "Weekend" : "W
 // Builds the full candidate block list for a given day type, before any trimming.
 function buildBaseBlocks(dayType, settings) {
   const byId = Object.fromEntries((settings.slotTemplate || CORE_SLOT_TEMPLATE).map(b => [b.id, b]));
-  let blocks = CORE_SLOT_TEMPLATE.map(b => ({ ...b, duration: (byId[b.id] || b).duration }));
+  const slotsEnabled = settings.slotsEnabled || {};
+  const isSlotEnabled = id => slotsEnabled[id] !== false;
+  let blocks = CORE_SLOT_TEMPLATE
+    .filter(b => (b.type === "break" ? isSlotEnabled(b.pairFor) : isSlotEnabled(b.id)))
+    .map(b => ({ ...b, duration: (byId[b.id] || b).duration }));
   if (dayType === "WFO") {
     const travel = Math.round((settings.travelHoursEachWay ?? 1) * 60);
     const office = Math.round((settings.officeHoursFixed ?? 6) * 60);
@@ -270,8 +273,10 @@ function buildBaseBlocks(dayType, settings) {
     const office = Math.round((settings.officeHoursFixed ?? 6) * 60);
     blocks.push({ id: "office", label: "Office Work", type: "office", link: "office", duration: office, removable: false });
   }
-  const aiDefault = byId.ai || AI_BLOCK;
-  blocks.push({ ...AI_BLOCK, duration: aiDefault.duration });
+  if (isSlotEnabled("ai")) {
+    const aiDefault = byId.ai || AI_BLOCK;
+    blocks.push({ ...AI_BLOCK, duration: aiDefault.duration });
+  }
   return blocks;
 }
 
@@ -311,36 +316,36 @@ function applyTrimRules(blocks, availableMinutes) {
 
 
 // Detailed subtopics intentionally left for the user to add / import from the real syllabus PDF.
-// "gsPaper" + "coverage" capture the exam structure; "subject" is left blank
+// "gsPaper" captures the exam structure; "subject" is left blank
 // (except where obvious, e.g. the optional) so it can be assigned from the
 // real subject list on this Settings-managed list — that's what Class
 // Lecture's subject-wise dropdowns key off.
 const SYLLABUS_SEED = [
-  { coverage: "Prelims Only", gsPaper: "GS Paper I", subject: "", topic: "Current Events of National & International Importance" },
-  { coverage: "Prelims Only", gsPaper: "GS Paper I", subject: "History", topic: "History of India & Indian National Movement" },
-  { coverage: "Prelims Only", gsPaper: "GS Paper I", subject: "Geography", topic: "Indian & World Geography" },
-  { coverage: "Prelims Only", gsPaper: "GS Paper I", subject: "Polity", topic: "Indian Polity & Governance" },
-  { coverage: "Prelims Only", gsPaper: "GS Paper I", subject: "Economy", topic: "Economic & Social Development" },
-  { coverage: "Prelims Only", gsPaper: "GS Paper I", subject: "Environment & Ecology", topic: "Environment, Ecology, Biodiversity & Climate Change" },
-  { coverage: "Prelims Only", gsPaper: "GS Paper I", subject: "Science & Technology", topic: "General Science" },
-  { coverage: "Prelims Only", gsPaper: "CSAT", subject: "CSAT", topic: "Comprehension" },
-  { coverage: "Prelims Only", gsPaper: "CSAT", subject: "CSAT", topic: "Logical Reasoning & Analytical Ability" },
-  { coverage: "Prelims Only", gsPaper: "CSAT", subject: "CSAT", topic: "Decision Making & Problem Solving" },
-  { coverage: "Prelims Only", gsPaper: "CSAT", subject: "CSAT", topic: "General Mental Ability / Basic Numeracy / Data Interpretation" },
-  { coverage: "Mains Only", gsPaper: "Essay", subject: "Essay", topic: "Essay Paper" },
-  { coverage: "Prelims + Mains", gsPaper: "GS Paper I", subject: "Art & Culture", topic: "Indian Heritage & Culture" },
-  { coverage: "Prelims + Mains", gsPaper: "GS Paper I", subject: "History", topic: "Indian & World History" },
-  { coverage: "Prelims + Mains", gsPaper: "GS Paper I", subject: "Geography", topic: "Geography of the World & Society" },
-  { coverage: "Prelims + Mains", gsPaper: "GS Paper II", subject: "Polity", topic: "Governance, Constitution, Polity" },
-  { coverage: "Mains Only", gsPaper: "GS Paper II", subject: "Polity", topic: "Social Justice" },
-  { coverage: "Mains Only", gsPaper: "GS Paper II", subject: "Polity", topic: "International Relations" },
-  { coverage: "Prelims + Mains", gsPaper: "GS Paper III", subject: "Science & Technology", topic: "Technology, Economic Development" },
-  { coverage: "Prelims + Mains", gsPaper: "GS Paper III", subject: "Environment & Ecology", topic: "Biodiversity & Environment" },
-  { coverage: "Mains Only", gsPaper: "GS Paper III", subject: "", topic: "Security & Disaster Management" },
-  { coverage: "Mains Only", gsPaper: "GS Paper IV", subject: "Ethics (GS4)", topic: "Ethics, Integrity & Aptitude" },
-  { coverage: "Mains Only", gsPaper: "Optional Paper I", subject: "Tamil Literature", topic: "Tamil Literature — add sections after syllabus import" },
-  { coverage: "Mains Only", gsPaper: "Optional Paper II", subject: "Tamil Literature", topic: "Tamil Literature — add sections after syllabus import" },
-  { coverage: "Interview", gsPaper: "Personality Test", subject: "", topic: "Personality Test" },
+  { gsPaper: "GS Paper I", subject: "", topic: "Current Events of National & International Importance" },
+  { gsPaper: "GS Paper I", subject: "History", topic: "History of India & Indian National Movement" },
+  { gsPaper: "GS Paper I", subject: "Geography", topic: "Indian & World Geography" },
+  { gsPaper: "GS Paper I", subject: "Polity", topic: "Indian Polity & Governance" },
+  { gsPaper: "GS Paper I", subject: "Economy", topic: "Economic & Social Development" },
+  { gsPaper: "GS Paper I", subject: "Environment & Ecology", topic: "Environment, Ecology, Biodiversity & Climate Change" },
+  { gsPaper: "GS Paper I", subject: "Science & Technology", topic: "General Science" },
+  { gsPaper: "CSAT", subject: "CSAT", topic: "Comprehension" },
+  { gsPaper: "CSAT", subject: "CSAT", topic: "Logical Reasoning & Analytical Ability" },
+  { gsPaper: "CSAT", subject: "CSAT", topic: "Decision Making & Problem Solving" },
+  { gsPaper: "CSAT", subject: "CSAT", topic: "General Mental Ability / Basic Numeracy / Data Interpretation" },
+  { gsPaper: "Essay", subject: "Essay", topic: "Essay Paper" },
+  { gsPaper: "GS Paper I", subject: "Art & Culture", topic: "Indian Heritage & Culture" },
+  { gsPaper: "GS Paper I", subject: "History", topic: "Indian & World History" },
+  { gsPaper: "GS Paper I", subject: "Geography", topic: "Geography of the World & Society" },
+  { gsPaper: "GS Paper II", subject: "Polity", topic: "Governance, Constitution, Polity" },
+  { gsPaper: "GS Paper II", subject: "Polity", topic: "Social Justice" },
+  { gsPaper: "GS Paper II", subject: "Polity", topic: "International Relations" },
+  { gsPaper: "GS Paper III", subject: "Science & Technology", topic: "Technology, Economic Development" },
+  { gsPaper: "GS Paper III", subject: "Environment & Ecology", topic: "Biodiversity & Environment" },
+  { gsPaper: "GS Paper III", subject: "", topic: "Security & Disaster Management" },
+  { gsPaper: "GS Paper IV", subject: "Ethics (GS4)", topic: "Ethics, Integrity & Aptitude" },
+  { gsPaper: "Optional Paper I", subject: "Tamil Literature", topic: "Tamil Literature — add sections after syllabus import" },
+  { gsPaper: "Optional Paper II", subject: "Tamil Literature", topic: "Tamil Literature — add sections after syllabus import" },
+  { gsPaper: "Personality Test", subject: "", topic: "Personality Test" },
 ];
 
 const STORAGE_KEYS = [
@@ -358,6 +363,7 @@ function defaultDB() {
       travelHoursEachWay: 1,
       subjects: DEFAULT_SUBJECTS,
       totalClassesBySubject: {}, // { [subject]: totalClasses } — optional, set on Settings to unlock the Dashboard's per-subject completion %
+      slotsEnabled: {}, // { [slotId]: false } — sections turned off entirely skip the daily plan; unset/true means included
       slotTemplate: [...CORE_SLOT_TEMPLATE, AI_BLOCK],
       driveFolderId: null, // cached id of the Google Drive folder used for Single Pager PDFs
     },
@@ -765,6 +771,7 @@ function IconBtn({ icon: Icon, onClick, title, danger }) {
    ============================================================ */
 function GenericTracker({ records, setRecords, columns, newRecord, emptyMessage, dense, datalists, confirmRemove }) {
   const [expanded, setExpanded] = useState(() => new Set());
+  const [filters, setFilters] = useState({});
 
   function updateField(rec, col, val, isStatus) {
     setRecords(prev => prev.map(r => {
@@ -796,6 +803,7 @@ function GenericTracker({ records, setRecords, columns, newRecord, emptyMessage,
   function addRecord() {
     const rec = { id: uid(), history: [], ...newRecord() };
     setRecords(prev => [...prev, rec]);
+    setFilters({}); // otherwise the new (mostly blank) row can vanish behind an active filter
   }
 
   function toggleExpand(id) {
@@ -806,9 +814,54 @@ function GenericTracker({ records, setRecords, columns, newRecord, emptyMessage,
     });
   }
 
+  // A column gets a filter control only when its stored value is a plain
+  // string/number/boolean on at least one record — array fields (e.g.
+  // Classes' microtopics tags) and object fields (e.g. driveFile) are left
+  // unfilterable rather than guessed at. Columns with many distinct or long
+  // values (free-text fields like Question/Notes) get a substring-search
+  // box instead of a dropdown, since a dropdown of 40 unique sentences
+  // isn't useful.
+  const filterConfig = useMemo(() => {
+    const cfg = {};
+    columns.forEach(col => {
+      const values = new Set();
+      let hasComplexValue = false;
+      records.forEach(r => {
+        const v = r[col.key];
+        if (v === null || v === undefined || v === "") return;
+        if (Array.isArray(v) || typeof v === "object") { hasComplexValue = true; return; }
+        values.add(String(v));
+      });
+      if (hasComplexValue || values.size === 0) { cfg[col.key] = null; return; }
+      const arr = Array.from(values);
+      const useText = arr.length > 15 || arr.some(v => v.length > 30);
+      cfg[col.key] = { type: useText ? "text" : "select", options: arr.sort() };
+    });
+    return cfg;
+  }, [records, columns]);
+
+  const hasActiveFilters = Object.values(filters).some(v => v);
+  const filteredRecords = useMemo(() => {
+    if (!hasActiveFilters) return records;
+    return records.filter(rec => columns.every(col => {
+      const f = filters[col.key];
+      if (!f) return true;
+      const val = rec[col.key];
+      const cfg = filterConfig[col.key];
+      if (cfg && cfg.type === "select") return String(val ?? "") === f;
+      return String(val ?? "").toLowerCase().includes(f.toLowerCase());
+    }));
+  }, [records, columns, filters, hasActiveFilters, filterConfig]);
+
   return (
     <div style={{ overflowX: "auto" }}>
       {(datalists || []).map(dl => <datalist id={dl.id} key={dl.id}>{dl.options.map(o => <option key={o} value={o} />)}</datalist>)}
+      {hasActiveFilters && (
+        <div className="ucc-flex between" style={{ marginBottom: 6 }}>
+          <span className="ucc-tiny">Showing {filteredRecords.length} of {records.length}</span>
+          <button type="button" className="ucc-btn ghost" style={{ padding: "2px 8px" }} onClick={() => setFilters({})}><X size={11} /> Clear filters</button>
+        </div>
+      )}
       <table className="ucc-table">
         <thead>
           <tr>
@@ -816,12 +869,36 @@ function GenericTracker({ records, setRecords, columns, newRecord, emptyMessage,
             <th style={{ width: 60 }}>Log</th>
             <th style={{ width: 40 }}></th>
           </tr>
+          <tr>
+            {columns.map(col => {
+              const cfg = filterConfig[col.key];
+              return (
+                <th key={col.key} style={{ fontWeight: 400, paddingTop: 2, paddingBottom: 4 }}>
+                  {cfg && (cfg.type === "select" ? (
+                    <select className="ucc-select" style={{ fontSize: 11, padding: "2px 4px", width: "100%" }}
+                      value={filters[col.key] || ""} onChange={e => setFilters(f => ({ ...f, [col.key]: e.target.value }))}>
+                      <option value="">All</option>
+                      {cfg.options.map(o => <option key={o} value={o}>{o}</option>)}
+                    </select>
+                  ) : (
+                    <input type="text" className="ucc-input" style={{ fontSize: 11, padding: "2px 4px", width: "100%" }}
+                      placeholder="Filter…" value={filters[col.key] || ""} onChange={e => setFilters(f => ({ ...f, [col.key]: e.target.value }))} />
+                  ))}
+                </th>
+              );
+            })}
+            <th></th>
+            <th></th>
+          </tr>
         </thead>
         <tbody>
           {records.length === 0 && (
             <tr><td colSpan={columns.length + 2}><EmptyState>{emptyMessage || "No records yet. Add your first one below."}</EmptyState></td></tr>
           )}
-          {records.map(rec => {
+          {records.length > 0 && filteredRecords.length === 0 && (
+            <tr><td colSpan={columns.length + 2}><EmptyState>No rows match the current filters.</EmptyState></td></tr>
+          )}
+          {filteredRecords.map(rec => {
             const histCount = (rec.history || []).length;
             return (
               <React.Fragment key={rec.id}>
@@ -1274,6 +1351,29 @@ function TodayTab({ db, updateSlice, onNavigate }) {
       return { ...p, blocks };
     });
   }
+  // Office/commute render as one merged card (see the "office" branch in the
+  // render below), so moving it has to shift travelTo+office+travelFro as a
+  // contiguous group past one adjacent block, rather than swapping a single
+  // id like moveBlock does — otherwise the group would silently fall apart.
+  function moveOfficeGroup(dir) {
+    setPlan(p => {
+      const blocks = [...p.blocks];
+      const groupIds = ["travelTo", "office", "travelFro"].filter(id => blocks.some(b => b.id === id));
+      if (groupIds.length === 0) return p;
+      const indices = groupIds.map(id => blocks.findIndex(b => b.id === id)).sort((a, b) => a - b);
+      const first = indices[0], last = indices[indices.length - 1];
+      const groupBlocks = blocks.slice(first, last + 1);
+      if (dir === -1) {
+        if (first === 0) return p;
+        const before = blocks[first - 1];
+        return { ...p, blocks: [...blocks.slice(0, first - 1), ...groupBlocks, before, ...blocks.slice(last + 1)] };
+      } else {
+        if (last === blocks.length - 1) return p;
+        const after = blocks[last + 1];
+        return { ...p, blocks: [...blocks.slice(0, first), after, ...groupBlocks, ...blocks.slice(last + 2)] };
+      }
+    });
+  }
   function addCustomBlock() {
     setPlan(p => ({
       ...p, blocks: [...p.blocks, { id: uid(), label: "Custom task", type: "study", link: "custom", duration: 30, status: "Not Started", skipped: false, skipReason: "", journal: "", custom: true }]
@@ -1346,6 +1446,11 @@ function TodayTab({ db, updateSlice, onNavigate }) {
           if (b.id === "office") {
             const travelTo = timedBlocks.find(x => x.id === "travelTo");
             const travelFro = timedBlocks.find(x => x.id === "travelFro");
+            const groupIndices = ["travelTo", "office", "travelFro"]
+              .map(id => timedBlocks.findIndex(x => x.id === id))
+              .filter(idx => idx !== -1);
+            const firstIdx = Math.min(...groupIndices);
+            const lastIdx = Math.max(...groupIndices);
             return (
               <OfficePlanBlock key="office-group" office={b} travelTo={travelTo} travelFro={travelFro}
                 onSkipAll={reason => {
@@ -1358,7 +1463,10 @@ function TodayTab({ db, updateSlice, onNavigate }) {
                   if (travelTo) updateBlock("travelTo", { skipped: false, skipReason: "" });
                   if (travelFro) updateBlock("travelFro", { skipped: false, skipReason: "" });
                 }}
-                onJournalChange={v => updateBlock("office", { journal: v })} />
+                onJournalChange={v => updateBlock("office", { journal: v })}
+                onDurationChange={(blockId, duration) => updateBlock(blockId, { duration })}
+                onMoveUp={firstIdx > 0 ? () => moveOfficeGroup(-1) : null}
+                onMoveDown={lastIdx < timedBlocks.length - 1 ? () => moveOfficeGroup(1) : null} />
             );
           }
           return (
@@ -1461,7 +1569,7 @@ function SkipToggle({ skipped, skipReason, onSkip, onUnskip }) {
   );
 }
 
-function OfficePlanBlock({ office, travelTo, travelFro, onSkipAll, onUnskipAll, onJournalChange }) {
+function OfficePlanBlock({ office, travelTo, travelFro, onSkipAll, onUnskipAll, onJournalChange, onDurationChange, onMoveUp, onMoveDown }) {
   const skipped = office.skipped;
   const start = (travelTo || office).start;
   const end = (travelFro || office).end;
@@ -1475,13 +1583,32 @@ function OfficePlanBlock({ office, travelTo, travelFro, onSkipAll, onUnskipAll, 
       <div className="body">
         <div className="ucc-flex between wrap">
           <strong>Office Work{travelTo ? " (incl. commute)" : ""}</strong>
-          <SkipToggle skipped={skipped} skipReason={office.skipReason} onSkip={r => onSkipAll(r)} onUnskip={onUnskipAll} />
+          <div className="ucc-flex">
+            {onMoveUp && <IconBtn icon={ChevronUp} onClick={onMoveUp} title="Move up" />}
+            {onMoveDown && <IconBtn icon={ChevronDown} onClick={onMoveDown} title="Move down" />}
+            <SkipToggle skipped={skipped} skipReason={office.skipReason} onSkip={r => onSkipAll(r)} onUnskip={onUnskipAll} />
+          </div>
         </div>
         <div className="ucc-tiny" style={{ margin: "4px 0", color: "var(--ink-muted)" }}>
-          {travelTo && <span>Commute (to): {minutesToTime(travelTo.start)}–{minutesToTime(travelTo.end)} ({travelTo.duration}m) · </span>}
-          <span>Office: {minutesToTime(office.start)}–{minutesToTime(office.end)} ({office.duration}m)</span>
-          {travelFro && <span> · Commute (fro): {minutesToTime(travelFro.start)}–{minutesToTime(travelFro.end)} ({travelFro.duration}m)</span>}
-          {" · "}Fixed hours — change in Settings.
+          Default durations come from Settings — adjust here for just today.
+        </div>
+        <div className="ucc-flex wrap" style={{ gap: 14, marginBottom: 4 }}>
+          {travelTo && (
+            <label className="ucc-tiny">Commute (to)
+              <input type="number" className="ucc-input ucc-mono" style={{ width: 60, marginLeft: 6 }} value={travelTo.duration}
+                onChange={e => onDurationChange("travelTo", Number(e.target.value))} /> min
+            </label>
+          )}
+          <label className="ucc-tiny">Office
+            <input type="number" className="ucc-input ucc-mono" style={{ width: 60, marginLeft: 6 }} value={office.duration}
+              onChange={e => onDurationChange("office", Number(e.target.value))} /> min
+          </label>
+          {travelFro && (
+            <label className="ucc-tiny">Commute (fro)
+              <input type="number" className="ucc-input ucc-mono" style={{ width: 60, marginLeft: 6 }} value={travelFro.duration}
+                onChange={e => onDurationChange("travelFro", Number(e.target.value))} /> min
+            </label>
+          )}
         </div>
         {!skipped && (
           <textarea className="ucc-textarea" rows={2} style={{ marginTop: 4 }}
@@ -1705,7 +1832,6 @@ function SyllabusTab({ db, updateSlice }) {
               : `Delete ${label}? This cannot be undone.`;
           }}
           columns={[
-            { key: "coverage", label: "Coverage", type: "select", options: COVERAGE_OPTIONS, width: 130 },
             { key: "gsPaper", label: "GS Paper", type: "select", options: GS_PAPER_OPTIONS, width: 140 },
             {
               key: "subject", label: "Subject", width: 160, type: "custom",
@@ -1764,7 +1890,7 @@ function SyllabusTab({ db, updateSlice }) {
                 : <span className="ucc-tiny" style={{ color: "var(--ink-muted)" }}>—</span>,
             },
           ]}
-          newRecord={() => ({ coverage: "", gsPaper: "", subject: "", topic: "", subtopic: "", microtopic: "", studyStatus: "Not Started", revisionStatus: "Not Started" })}
+          newRecord={() => ({ gsPaper: "", subject: "", topic: "", subtopic: "", microtopic: "", studyStatus: "Not Started", revisionStatus: "Not Started" })}
           emptyMessage="No syllabus items yet — click Add row below to add your first topic."
         />
       </div>
@@ -2069,7 +2195,7 @@ function CurrentAffairsTab({ db, updateSlice }) {
                   // captured directly — no need to re-search for it.
                   const newId = uid();
                   updateSlice("syllabus", prev => [...prev, {
-                    id: newId, coverage: "", gsPaper: "", subject: rec.subject, topic: name, subtopic: "", microtopic: "",
+                    id: newId, gsPaper: "", subject: rec.subject, topic: name, subtopic: "", microtopic: "",
                     studyStatus: "Not Started", revisionStatus: "Not Started", history: [],
                   }]);
                   updateRecord({ relevantSyllabusTopic: name, subtopic: "", microtopic: "", syllabusId: newId });
@@ -2087,7 +2213,7 @@ function CurrentAffairsTab({ db, updateSlice }) {
                 onAddNew={name => {
                   const newId = uid();
                   updateSlice("syllabus", prev => [...prev, {
-                    id: newId, coverage: "", gsPaper: "", subject: rec.subject, topic: rec.relevantSyllabusTopic, subtopic: name, microtopic: "",
+                    id: newId, gsPaper: "", subject: rec.subject, topic: rec.relevantSyllabusTopic, subtopic: name, microtopic: "",
                     studyStatus: "Not Started", revisionStatus: "Not Started", history: [],
                   }]);
                   updateRecord({ subtopic: name, microtopic: "", syllabusId: newId });
@@ -2105,7 +2231,7 @@ function CurrentAffairsTab({ db, updateSlice }) {
                 onAddNew={name => {
                   const newId = uid();
                   updateSlice("syllabus", prev => [...prev, {
-                    id: newId, coverage: "", gsPaper: "", subject: rec.subject, topic: rec.relevantSyllabusTopic, subtopic: rec.subtopic, microtopic: name,
+                    id: newId, gsPaper: "", subject: rec.subject, topic: rec.relevantSyllabusTopic, subtopic: rec.subtopic, microtopic: name,
                     studyStatus: "Not Started", revisionStatus: "Not Started", history: [],
                   }]);
                   updateRecord({ microtopic: name, syllabusId: newId });
@@ -2395,7 +2521,7 @@ function TopicMasterTab({ db, onNavigate }) {
             <div style={{ flex: 1, minWidth: 0 }}>
               <h3 style={{ fontSize: 16, textTransform: "none", letterSpacing: 0, color: "var(--ink)" }}>{breadcrumb(active.row)}</h3>
               <div className="ucc-tiny" style={{ marginBottom: 10 }}>
-                {active.row.coverage} {active.row.gsPaper && `· ${active.row.gsPaper}`} · <Badge tone={colorFor(active.row.studyStatus)}>{active.row.studyStatus}</Badge>
+                {active.row.gsPaper && `${active.row.gsPaper} · `}<Badge tone={colorFor(active.row.studyStatus)}>{active.row.studyStatus}</Badge>
                 {" "}· Source Identified: <Badge tone={isSourceIdentifiedForMicrotopic(db, active.row) ? "green" : "grey"}>{active.row.microtopic ? (isSourceIdentifiedForMicrotopic(db, active.row) ? "Yes" : "No") : "—"}</Badge>
               </div>
               <TopicSection title="Classes">
@@ -2641,23 +2767,30 @@ function SettingsTab({ db, updateSlice }) {
       </div>
       <div className="ucc-hr" />
       <h3>Default daily slot template</h3>
-      <p className="ucc-tiny">Study slots, breaks, and AI learning — their default duration before any day-fit trimming happens. Office and commute time come from the fixed hours above instead. Changes here set the default for new days — days you've already opened keep their own snapshot until you change wake time or day type.</p>
+      <p className="ucc-tiny">Study slots, breaks, and AI learning — their default duration before any day-fit trimming happens, and whether they're generated at all. Office and commute time come from the fixed hours above instead. Changes here set the default for new days — days you've already opened keep their own snapshot until you change wake time or day type.</p>
       <table className="ucc-table">
-        <thead><tr><th>Slot</th><th>Type</th><th>Default duration (min)</th></tr></thead>
+        <thead><tr><th>Enabled</th><th>Slot</th><th>Type</th><th>Default duration (min)</th></tr></thead>
         <tbody>
-          {s.slotTemplate.map((b, i) => (
-            <tr key={b.id}>
-              <td>{b.label}</td>
-              <td><Badge tone="neutral">{b.type}</Badge></td>
-              <td>
-                <input type="number" className="ucc-input ucc-mono" style={{ width: 80 }} value={b.duration}
-                  onChange={e => {
-                    const dur = Number(e.target.value);
-                    patch({ slotTemplate: s.slotTemplate.map((x, xi) => xi === i ? { ...x, duration: dur } : x) });
-                  }} />
-              </td>
-            </tr>
-          ))}
+          {s.slotTemplate.map((b, i) => {
+            const enabled = (s.slotsEnabled || {})[b.id] !== false;
+            return (
+              <tr key={b.id} style={{ opacity: enabled ? 1 : 0.55 }}>
+                <td>
+                  <input type="checkbox" checked={enabled}
+                    onChange={e => patch({ slotsEnabled: { ...(s.slotsEnabled || {}), [b.id]: e.target.checked } })} />
+                </td>
+                <td>{b.label}</td>
+                <td><Badge tone="neutral">{b.type}</Badge></td>
+                <td>
+                  <input type="number" className="ucc-input ucc-mono" style={{ width: 80 }} value={b.duration} disabled={!enabled}
+                    onChange={e => {
+                      const dur = Number(e.target.value);
+                      patch({ slotTemplate: s.slotTemplate.map((x, xi) => xi === i ? { ...x, duration: dur } : x) });
+                    }} />
+                </td>
+              </tr>
+            );
+          })}
         </tbody>
       </table>
       <div className="ucc-hr" />
@@ -2785,9 +2918,9 @@ const IMPORT_TARGETS = {
     dupKey: r => normKey(r.subject, r.topic),
   },
   syllabus: {
-    label: "Syllabus", fields: ["coverage", "gsPaper", "subject", "topic", "subtopic", "microtopic", "studyStatus", "revisionStatus"],
+    label: "Syllabus", fields: ["gsPaper", "subject", "topic", "subtopic", "microtopic", "studyStatus", "revisionStatus"],
     aliases: {
-      coverage: ["coverage"], gsPaper: ["gs paper", "gspaper", "paper"], subject: ["subject"], topic: ["topic"],
+      gsPaper: ["gs paper", "gspaper", "paper"], subject: ["subject"], topic: ["topic"],
       subtopic: ["subtopic", "sub topic"], microtopic: ["microtopic", "micro topic"],
       studyStatus: ["study status", "studystatus"], revisionStatus: ["revision status", "revisionstatus"],
     },
@@ -2860,7 +2993,7 @@ const IMPORT_FIELD_LABELS = {
   topic: "Topic", status: "Status", classNotes: "Class Notes", standardMaterial: "Standard Material", ncert: "NCERT",
   singlePager: "Single Pager", revision: "Revision", revision1: "Revision 1", revision2: "Revision 2",
   handout: "Handout", standardBooks: "Standard Books",
-  coverage: "Coverage", gsPaper: "GS Paper", subtopic: "Subtopic", microtopic: "Micro Topic",
+  gsPaper: "GS Paper", subtopic: "Subtopic", microtopic: "Micro Topic",
   studyStatus: "Study Status", revisionStatus: "Revision Status",
   book: "Book", chapter: "Chapter", bookName: "Book", pages: "Pages",
   source: "Source", notes: "Notes", question: "Question", wordLimit: "Word Limit",
