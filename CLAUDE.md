@@ -235,6 +235,41 @@ summary will do.
   no bulk multi-tag import.
 - **Auth**: Supabase email/password, single-user by design.
 - **Icons**: `lucide-react`.
+- **Syllabus has no "Coverage" (Prelims Only/Mains Only/etc.) field anymore**
+  — removed by request, including from `SYLLABUS_SEED`, the Syllabus
+  import template, and Topic Master's display. Don't reintroduce it as
+  part of some other change without checking this was intentional.
+- **Daily plan sections can be turned off entirely**, not just
+  auto-trimmed when a day is short on time. `settings.slotsEnabled` is a
+  `{ [slotId]: false }` map (unset/true = included), edited via a checkbox
+  per row in the same Settings table that sets each slot's default
+  duration. `buildBaseBlocks` filters both the slot and its paired break
+  out before the day-type/trim logic ever sees them — this is a separate,
+  earlier gate than `REMOVAL_ORDER`/`applyTrimRules`, not a replacement
+  for it. A disabled slot never appears in newly-generated plans; it does
+  not touch days already created.
+- **Column-level filtering lives once, in `GenericTracker`** — every
+  tracker and Syllabus gets it automatically since they all render through
+  it; don't add a separate per-tab filter implementation. It introspects
+  each column's actual stored values at render time (no per-column filter
+  config needed): a column becomes a dropdown of its distinct existing
+  values, a substring-search box if those values are numerous or long
+  (free-text fields like Question/Notes), or unfilterable if the stored
+  value is an array or object (Classes' `microtopics` tags, `driveFile`).
+  If you add a column whose value is an array/object and it should be
+  filterable, that needs deliberate handling here, not an assumption that
+  it'll "just work" like the primitive-valued columns do.
+- **The Office/commute block in Today's Planner is one merged card
+  covering up to three underlying blocks** (`travelTo`, `office`,
+  `travelFro` — one or three of these depending on WFH/WFO/Weekend).
+  Reordering it can't reuse `moveBlock` (which swaps one id with its
+  neighbor) since that would let the group fall apart — use
+  `moveOfficeGroup(dir)` instead, which moves the whole contiguous run
+  past one adjacent block at a time, same granularity as everything else.
+  Each of the three durations is independently editable per day (like
+  every other block's duration) via `onDurationChange`, not fixed to the
+  Settings default — Settings only supplies the value for newly-generated
+  days.
 
 This section should be kept up to date when the architecture materially
 changes (see Section 12). Don't restate it in full for every task — only
