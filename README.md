@@ -86,6 +86,51 @@ If this isn't configured, the rest of the app works exactly as before —
 you'll just see a note on the Single Pager tab and Upload will show an
 error if clicked.
 
+## 6. (Optional) Automatic weekly review email
+
+A Vercel Cron Job (`vercel.json`) calls `api/weekly-review-email.js` every
+Saturday at 14:30 UTC (20:00 IST — adjust the `schedule` in `vercel.json`,
+which is always UTC, if that's not your timezone) to email a summary of
+the past 7 days. This needs its own backend function since the rest of the
+app is a static frontend talking directly to Supabase — nothing runs on a
+schedule without one.
+
+1. Sign up at [resend.com](https://resend.com) — **use the email address
+   you want the weekly review sent to as your account email.** Resend's
+   free sandbox sender (`onboarding@resend.dev`) can only deliver to the
+   address you signed up with until you verify your own domain; using that
+   address for your Resend account sidesteps needing a domain at all.
+2. Resend dashboard -> **API Keys -> Create API Key**. Copy it.
+3. In Supabase: **Project Settings -> API -> service_role** key (the
+   secret one, not `anon`). This bypasses Row Level Security — the
+   function has no logged-in session to satisfy RLS with, and since this
+   app is single-user by design it just reads every row. Never expose this
+   key client-side.
+4. In Vercel: **Project Settings -> Environment Variables**, add (all
+   server-only — do **not** prefix any of these with `VITE_`, or they'll
+   ship in the client bundle):
+   - `CRON_SECRET` — any random string (Vercel sends this back as
+     `Authorization: Bearer <value>` on every cron invocation, which the
+     function checks to make sure the request is really from Vercel).
+   - `SUPABASE_SERVICE_ROLE_KEY` — from step 3.
+   - `RESEND_API_KEY` — from step 2.
+   - `WEEKLY_REVIEW_EMAIL_TO` — the recipient address.
+   - `EMAIL_FROM` (optional) — defaults to Resend's sandbox sender.
+5. Redeploy so Vercel picks up `vercel.json` and registers the cron job
+   (visible under the project's **Cron Jobs** tab once deployed).
+6. To test without waiting for Saturday, send the same request Vercel's
+   cron would:
+   ```
+   curl -X POST https://<your-deployment>.vercel.app/api/weekly-review-email \
+     -H "Authorization: Bearer <your CRON_SECRET>"
+   ```
+   A `{"ok":true}` response means the email sent. This hits the exact same
+   code path the scheduled job uses — there's no separate "test mode".
+
+The email content right now is a placeholder (a simple counts summary) —
+see `api/weekly-review-email.js`'s `buildWeeklyEmailHtml` to change what it
+sends.
+
 ## Notes
 
 - Fonts are loaded from Google Fonts in `index.html`; if you're offline

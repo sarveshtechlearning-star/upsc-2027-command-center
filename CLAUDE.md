@@ -289,6 +289,28 @@ summary will do.
   single Micro Topic column and seeds it as the row's first tag; there's
   no bulk multi-tag import.
 - **Auth**: Supabase email/password, single-user by design.
+- **This app has one piece of real backend now — don't assume it's still
+  "static frontend + Supabase directly" everywhere.** `api/` (Vercel
+  Functions, zero-config — any file there becomes a serverless endpoint
+  regardless of the frontend being Vite, not Next.js) + `vercel.json`
+  (cron config) exist solely for the automatic weekly review email
+  (`api/weekly-review-email.js`), triggered every Saturday per
+  `vercel.json`'s `schedule` (always UTC — convert from whatever timezone
+  the person actually wants). Everything else in the app is still 100%
+  client-side. This function authenticates its caller by checking
+  `Authorization: Bearer <CRON_SECRET>` (Vercel sends this automatically
+  on cron invocations; the same header works for manual testing — there's
+  no separate test mode, a manual call sends a real email through the
+  same path). It uses `SUPABASE_SERVICE_ROLE_KEY` (bypasses RLS — no
+  logged-in session exists at 8pm on a schedule, and since the app is
+  single-user by design it just reads every `kv_store` row unfiltered)
+  and `RESEND_API_KEY` to send via Resend. All of these — plus
+  `WEEKLY_REVIEW_EMAIL_TO` and optional `EMAIL_FROM` — are server-only
+  env vars and must never be prefixed with `VITE_`, or they'd be inlined
+  into the client bundle. The email content (`buildWeeklyEmailHtml`) is a
+  placeholder pending a separate conversation about what it should
+  actually contain — check it hasn't silently stayed a placeholder before
+  assuming this feature is "done."
 - **Icons**: `lucide-react`.
 - **Syllabus has no "Coverage" (Prelims Only/Mains Only/etc.) field anymore**
   — removed by request, including from `SYLLABUS_SEED`, the Syllabus

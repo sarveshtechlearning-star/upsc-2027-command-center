@@ -1,0 +1,8 @@
+{
+  "crons": [
+    {
+      "path": "/api/weekly-review-email",
+      "schedule": "30 14 * * 6"
+    }
+  ]
+}
