@@ -6,7 +6,7 @@ import {
   Newspaper, PenTool, Brain, Search as SearchIcon, BarChart3,
   Settings as SettingsIcon, Upload, Download, ChevronUp, ChevronDown,
   Plus, Trash2, History, Check, AlertTriangle, Clock, ChevronLeft,
-  ChevronRight as ChevronRightIcon, X, LogOut, LayoutDashboard, Copy
+  ChevronRight as ChevronRightIcon, X, LogOut, LayoutDashboard, Copy, Pencil, Lock
 } from "lucide-react";
 
 /* ============================================================
@@ -221,6 +221,32 @@ const DEFAULT_SUBJECTS = [
   "Polity", "Economy", "Geography", "History", "Art & Culture", "Environment & Ecology",
   "Science & Technology", "Ethics (GS4)", "Tamil Literature", "Current Affairs", "Essay", "CSAT"
 ];
+// Standard UPSC Mains GS-paper mapping, used only as a fallback (see
+// defaultGsPaperForSubject) — Tamil Literature, Current Affairs, and CSAT
+// are deliberately left unmapped, since none of them corresponds to a
+// single GS paper.
+const SUBJECT_TO_GS_PAPER = {
+  "Polity": "GS2", "Economy": "GS3", "Geography": "GS1", "History": "GS1",
+  "Art & Culture": "GS1", "Environment & Ecology": "GS3", "Science & Technology": "GS3",
+  "Ethics (GS4)": "GS4", "Essay": "Essay",
+};
+// Guesses the right GS Paper for a Syllabus row auto-created from Classes/
+// NCERT/Standard Books/Current Affairs' "+ Add new" flows, so it doesn't
+// start out blank. Prefers whatever GS Paper the user has already been
+// using for this subject elsewhere in Syllabus (most-common value wins) —
+// this respects the user's own convention and works even for custom
+// subjects the hardcoded map below doesn't know about — and only falls
+// back to the standard mapping when there's no existing data for the
+// subject yet.
+function defaultGsPaperForSubject(db, subject) {
+  const counts = {};
+  db.syllabus.forEach(s => {
+    if (s.subject === subject && s.gsPaper) counts[s.gsPaper] = (counts[s.gsPaper] || 0) + 1;
+  });
+  const mostCommon = Object.entries(counts).sort((a, b) => b[1] - a[1])[0];
+  if (mostCommon) return mostCommon[0];
+  return SUBJECT_TO_GS_PAPER[subject] || "";
+}
 
 // Core study slots + their paired breaks. "removable" + "priority" govern the
 // auto-trim cascade when the day doesn't have enough hours (see applyTrimRules).
@@ -505,6 +531,72 @@ function countSyllabusRowReferences(db, row) {
   count += db.singlePager.filter(s => s.syllabusId === row.id).length;
   count += db.currentAffairs.filter(c => c.syllabusId === row.id).length;
   return count;
+}
+// Corrects a Subject/Topic/Subtopic/Micro Topic value everywhere it
+// appears, not just on the one Syllabus row being edited — this is what
+// "Rename" (the pencil icon in CascadingSelectCell) calls. Without this,
+// fixing a typo on one row would leave every other row and every other
+// tracker's own copy of that text still showing the old (wrong) value,
+// since those are all separately stored strings, not references to a
+// single normalized entity.
+// `context` carries whatever parent values are needed to scope the
+// rename correctly: {} for subject, {subject} for topic, {subject, topic}
+// for subtopic, {subject, topic, subtopic} for microtopic.
+// Deliberately does not touch GS Answer Writing — it has no subject field
+// of its own (only gsPaper + topic), so there's no reliable way to tell
+// whether one of its rows' topic belongs to the subject being renamed
+// without risking a false match against an unrelated subject that happens
+// to share a topic name.
+function renameSyllabusValue(db, updateSlice, level, context, oldValue, newValue) {
+  if (!newValue || newValue === oldValue) return;
+  const { subject, topic, subtopic } = context;
+
+  if (level === "subject") {
+    updateSlice("settings", s => (s.subjects.includes(oldValue) ? { ...s, subjects: s.subjects.map(x => x === oldValue ? newValue : x) } : s));
+    ["syllabus", "classes", "reading", "singlePager", "ncert", "standardBooks", "currentAffairs"].forEach(key => {
+      updateSlice(key, prev => prev.map(r => r.subject === oldValue ? { ...r, subject: newValue } : r));
+    });
+    return;
+  }
+  if (level === "topic") {
+    const matches = r => r.subject === subject && r.topic === oldValue;
+    ["syllabus", "classes", "reading", "singlePager", "ncert", "standardBooks"].forEach(key => {
+      updateSlice(key, prev => prev.map(r => matches(r) ? { ...r, topic: newValue } : r));
+    });
+    updateSlice("currentAffairs", prev => prev.map(r => (r.subject === subject && r.relevantSyllabusTopic === oldValue) ? { ...r, relevantSyllabusTopic: newValue } : r));
+    if (subject === "Tamil Literature") {
+      updateSlice("tamilReading", prev => prev.map(r => r.topic === oldValue ? { ...r, topic: newValue } : r));
+      updateSlice("tamilWriting", prev => prev.map(r => r.topic === oldValue ? { ...r, topic: newValue } : r));
+    }
+    return;
+  }
+  if (level === "subtopic") {
+    const matches = r => r.subject === subject && r.topic === topic && r.subtopic === oldValue;
+    ["syllabus", "classes", "reading", "singlePager", "ncert", "standardBooks"].forEach(key => {
+      updateSlice(key, prev => prev.map(r => matches(r) ? { ...r, subtopic: newValue } : r));
+    });
+    updateSlice("currentAffairs", prev => prev.map(r =>
+      (r.subject === subject && r.relevantSyllabusTopic === topic && r.subtopic === oldValue) ? { ...r, subtopic: newValue } : r));
+    return;
+  }
+  if (level === "microtopic") {
+    const matches = r => r.subject === subject && r.topic === topic && r.subtopic === subtopic && r.microtopic === oldValue;
+    ["syllabus", "reading", "singlePager", "ncert", "standardBooks"].forEach(key => {
+      updateSlice(key, prev => prev.map(r => matches(r) ? { ...r, microtopic: newValue } : r));
+    });
+    updateSlice("currentAffairs", prev => prev.map(r =>
+      (r.subject === subject && r.relevantSyllabusTopic === topic && r.subtopic === subtopic && r.microtopic === oldValue) ? { ...r, microtopic: newValue } : r));
+    // Classes' microtopics tags store a Syllabus row id for anything tagged
+    // after that linking existed — those resolve their displayed label from
+    // the Syllabus row itself, which the update above already renamed, so
+    // nothing more to do there. Only a legacy tag whose stored value IS the
+    // old text (predating id-based tags) needs updating here.
+    updateSlice("classes", prev => prev.map(r => {
+      if (!(r.microtopics || []).includes(oldValue)) return r;
+      return { ...r, microtopics: r.microtopics.map(m => m === oldValue ? newValue : m) };
+    }));
+    return;
+  }
 }
 // Strict topic/subtopic lists scoped to what's actually on the Syllabus tab
 // — the only place (besides Current Affairs, which routes new entries into
@@ -835,13 +927,30 @@ function IconBtn({ icon: Icon, onClick, title, danger, disabled }) {
 /* ============================================================
    GENERIC TRACKER TABLE
    ============================================================ */
-function GenericTracker({ records, setRecords, columns, newRecord, emptyMessage, dense, datalists, confirmRemove }) {
+function GenericTracker({ records, setRecords, columns, newRecord, emptyMessage, dense, datalists, confirmRemove, completionRequiresUpload }) {
   const [expanded, setExpanded] = useState(() => new Set());
   const [filters, setFilters] = useState({});
   const [page, setPage] = useState(0);
   const PAGE_SIZE = 100;
 
+  // completionRequiresUpload (opt-in — only Classes, Single Pager, Tamil
+  // Writing, GS Answer Writing use this, the trackers that have both a
+  // Status column and a driveFile PDF column): a row can't be marked
+  // Completed until its driveFile is set, and once it IS Completed, every
+  // other field on that row locks (pointer-events disabled, dimmed) until
+  // the status is changed away from Completed again — that's the
+  // deliberate escape hatch for fixing a mistake, not an oversight.
   function updateField(rec, col, val, isStatus) {
+    if (completionRequiresUpload && col.type === "status" && val === "Completed" && !rec.driveFile) {
+      const driveFileCol = columns.find(c => c.key === "driveFile");
+      window.alert(`Upload the ${driveFileCol ? driveFileCol.label : "file"} for this row before marking it Completed.`);
+      return;
+    }
+    // Backstop behind the visual pointer-events lock: once a row is
+    // Completed, only its own status field may still change (the
+    // deliberate escape hatch for undoing a mistake) — every other field
+    // is refused here too, not just visually disabled.
+    if (completionRequiresUpload && rec.status === "Completed" && col.type !== "status") return;
     setRecords(prev => prev.map(r => {
       if (r.id !== rec.id) return r;
       const updated = { ...r, [col.key]: val };
@@ -856,7 +965,12 @@ function GenericTracker({ records, setRecords, columns, newRecord, emptyMessage,
   // Patches multiple fields on one record at once — used by "custom" columns
   // (e.g. cascading dropdowns) that need to reset sibling fields when a
   // parent selection changes, which a single-field updateField call can't do.
+  // Blocked entirely while the row is locked (Completed, completionRequiresUpload) —
+  // this is a backstop behind the visual pointer-events lock on the cell,
+  // since this always affects non-status fields (the status column itself
+  // goes through updateField, not this).
   function updateFields(rec, patch) {
+    if (completionRequiresUpload && rec.status === "Completed") return;
     setRecords(prev => prev.map(r => (r.id === rec.id ? { ...r, ...patch } : r)));
   }
 
@@ -984,31 +1098,41 @@ function GenericTracker({ records, setRecords, columns, newRecord, emptyMessage,
           )}
           {pagedRecords.map(rec => {
             const histCount = (rec.history || []).length;
+            const locked = completionRequiresUpload && rec.status === "Completed";
             return (
               <React.Fragment key={rec.id}>
                 <tr>
-                  {columns.map(col => (
-                    <td key={col.key}>
-                      {col.type === "status" ? (
+                  {columns.map(col => {
+                    const isStatusCol = col.type === "status";
+                    const cell = isStatusCol ? (
+                      <div className="ucc-flex" style={{ gap: 4 }}>
                         <StatusSelect value={rec[col.key]} options={col.options} onChange={v => updateField(rec, col, v, true)} />
-                      ) : col.type === "custom" ? (
-                        col.render(rec, (val, isStatus) => updateField(rec, col, val, isStatus), patch => updateFields(rec, patch))
-                      ) : col.type === "date" ? (
-                        <input type="date" className="ucc-input ucc-mono" value={rec[col.key] || ""} onChange={e => updateField(rec, col, e.target.value)} />
-                      ) : col.type === "number" ? (
-                        <input type="number" className="ucc-input ucc-mono" value={rec[col.key] ?? ""} onChange={e => updateField(rec, col, e.target.value)} style={{ width: 70 }} />
-                      ) : col.type === "textarea" ? (
-                        <textarea className="ucc-textarea" value={rec[col.key] || ""} onChange={e => updateField(rec, col, e.target.value)} rows={dense ? 1 : 2} />
-                      ) : col.type === "select" ? (
-                        <select className="ucc-select" value={rec[col.key] || ""} onChange={e => updateField(rec, col, e.target.value)}>
-                          <option value="">—</option>
-                          {col.options.map(o => <option key={o} value={o}>{o}</option>)}
-                        </select>
-                      ) : (
-                        <input type="text" list={typeof col.datalist === "function" ? col.datalist(rec) : col.datalist} className="ucc-input" value={rec[col.key] || ""} onChange={e => updateField(rec, col, e.target.value)} placeholder={col.placeholder} />
-                      )}
-                    </td>
-                  ))}
+                        {locked && <Lock size={13} style={{ color: "var(--ink-muted)", flexShrink: 0 }} aria-label="Row locked — change Status to edit" />}
+                      </div>
+                    ) : col.type === "custom" ? (
+                      col.render(rec, (val, isStatus) => updateField(rec, col, val, isStatus), patch => updateFields(rec, patch))
+                    ) : col.type === "date" ? (
+                      <input type="date" className="ucc-input ucc-mono" value={rec[col.key] || ""} onChange={e => updateField(rec, col, e.target.value)} />
+                    ) : col.type === "number" ? (
+                      <input type="number" className="ucc-input ucc-mono" value={rec[col.key] ?? ""} onChange={e => updateField(rec, col, e.target.value)} style={{ width: 70 }} />
+                    ) : col.type === "textarea" ? (
+                      <textarea className="ucc-textarea" value={rec[col.key] || ""} onChange={e => updateField(rec, col, e.target.value)} rows={dense ? 1 : 2} />
+                    ) : col.type === "select" ? (
+                      <select className="ucc-select" value={rec[col.key] || ""} onChange={e => updateField(rec, col, e.target.value)}>
+                        <option value="">—</option>
+                        {col.options.map(o => <option key={o} value={o}>{o}</option>)}
+                      </select>
+                    ) : (
+                      <input type="text" list={typeof col.datalist === "function" ? col.datalist(rec) : col.datalist} className="ucc-input" value={rec[col.key] || ""} onChange={e => updateField(rec, col, e.target.value)} placeholder={col.placeholder} />
+                    );
+                    return (
+                      <td key={col.key}>
+                        {locked && !isStatusCol
+                          ? <div style={{ pointerEvents: "none", opacity: 0.55 }} title="Completed rows are locked — change Status to edit again">{cell}</div>
+                          : cell}
+                      </td>
+                    );
+                  })}
                   <td>
                     {histCount > 0 ? (
                       <button className="ucc-btn ghost" style={{ padding: "3px 6px" }} onClick={() => toggleExpand(rec.id)} title="View change history">
@@ -1063,28 +1187,43 @@ const ADD_NEW_VALUE = "__ucc_add_new__";
 // `disabled` enforces the chain — e.g. Topic stays disabled until Subject
 // is picked. `onSelect` fires for an existing value, `onAddNew` fires with
 // the trimmed typed value when a new one is confirmed.
-function CascadingSelectCell({ value, options, placeholder, disabled, onSelect, onAddNew, allowAddNew = true }) {
+// `onRename`, when provided, adds a small pencil button (only shown once a
+// value is set) that reuses the same text-input UI to correct the CURRENT
+// value in place — for fixing a typo or a wrong pick, as opposed to
+// picking a different existing value or creating an unrelated new one.
+// The caller is responsible for propagating the rename anywhere else that
+// value is used (see renameSyllabusValue) — this component only handles
+// the input UI.
+function CascadingSelectCell({ value, options, placeholder, disabled, onSelect, onAddNew, allowAddNew = true, onRename }) {
   const [adding, setAdding] = useState(false);
+  const [renaming, setRenaming] = useState(false);
   const [draft, setDraft] = useState("");
 
   function handleChange(v) {
-    if (v === ADD_NEW_VALUE) { setAdding(true); setDraft(""); return; }
+    if (v === ADD_NEW_VALUE) { setRenaming(false); setAdding(true); setDraft(""); return; }
     onSelect(v);
+  }
+  function startRename() {
+    setDraft(value || "");
+    setRenaming(true);
+    setAdding(true);
   }
   function confirmAdd() {
     const name = draft.trim();
     setAdding(false); setDraft("");
-    if (name) onAddNew(name);
+    if (!name) { setRenaming(false); return; }
+    if (renaming) onRename(name); else onAddNew(name);
+    setRenaming(false);
   }
-  function cancelAdd() { setAdding(false); setDraft(""); }
+  function cancelAdd() { setAdding(false); setDraft(""); setRenaming(false); }
 
   if (adding) {
     return (
       <div className="ucc-flex">
-        <input className="ucc-input" autoFocus placeholder="New value"
+        <input className="ucc-input" autoFocus placeholder={renaming ? "Rename to…" : "New value"}
           value={draft} onChange={e => setDraft(e.target.value)}
           onKeyDown={e => { if (e.key === "Enter") confirmAdd(); if (e.key === "Escape") cancelAdd(); }} />
-        <IconBtn icon={Check} onClick={confirmAdd} title="Add" />
+        <IconBtn icon={Check} onClick={confirmAdd} title={renaming ? "Save rename" : "Add"} />
         <IconBtn icon={X} onClick={cancelAdd} title="Cancel" />
       </div>
     );
@@ -1096,11 +1235,16 @@ function CascadingSelectCell({ value, options, placeholder, disabled, onSelect, 
   const noOptionsYet = !disabled && allOptions.length === 0 && !allowAddNew;
   return (
     <div>
-      <select className="ucc-select" value={value || ""} disabled={disabled} onChange={e => handleChange(e.target.value)}>
-        <option value="">{placeholder}</option>
-        {allOptions.map(o => <option key={o} value={o}>{o}</option>)}
-        {allowAddNew && <option value={ADD_NEW_VALUE}>+ Add new</option>}
-      </select>
+      <div className="ucc-flex" style={{ gap: 2 }}>
+        <select className="ucc-select" value={value || ""} disabled={disabled} onChange={e => handleChange(e.target.value)}>
+          <option value="">{placeholder}</option>
+          {allOptions.map(o => <option key={o} value={o}>{o}</option>)}
+          {allowAddNew && <option value={ADD_NEW_VALUE}>+ Add new</option>}
+        </select>
+        {onRename && value && !disabled && (
+          <IconBtn icon={Pencil} onClick={startRename} title={`Rename "${value}" everywhere it's used`} />
+        )}
+      </div>
       {noOptionsYet && <div className="ucc-tiny" style={{ color: "var(--ink-muted)" }}>None yet — add it on the Syllabus tab first.</div>}
     </div>
   );
@@ -1800,7 +1944,7 @@ function ClassesTab({ db, updateSlice }) {
           Topic and Subtopic are chosen from the Syllabus tab — new ones can't be added here. Once a Subtopic is set, tag the Micro Topics this class covered — pick an existing one, or type a new one and hit + Add new (it's saved to Syllabus automatically, so it shows up everywhere else too).
         </div>
         <GenericTracker
-          records={db.classes} setRecords={u => updateSlice("classes", u)}
+          records={db.classes} setRecords={u => updateSlice("classes", u)} completionRequiresUpload
           columns={[
             { key: "date", label: "Date", type: "date", width: 120 },
             { key: "classNumber", label: "Class", type: "number", width: 70 },
@@ -1849,7 +1993,7 @@ function ClassesTab({ db, updateSlice }) {
                     // search for it, we already know its id.
                     const newId = uid();
                     updateSlice("syllabus", prev => [...prev, {
-                      id: newId, gsPaper: "", subject: rec.subject, topic: rec.topic, subtopic: rec.subtopic, microtopic: name,
+                      id: newId, gsPaper: defaultGsPaperForSubject(db, rec.subject), subject: rec.subject, topic: rec.topic, subtopic: rec.subtopic, microtopic: name,
                       studyStatus: "Not Started", revisionStatus: "Not Started", history: [],
                     }]);
                     updateRecord({ microtopics: [...(rec.microtopics || []), newId] });
@@ -1950,6 +2094,9 @@ function SyllabusTab({ db, updateSlice }) {
           <strong>Subject → Topic → Subtopic → Micro Topic</strong> are linked — pick each in order, or choose <strong>+ Add new</strong> to type one in. These also power the subject-wise dropdowns on the Class Lecture slot in Today's plan. New subjects are added to the shared list on the Settings tab automatically.
         </div>
         <div className="ucc-tiny" style={{ marginTop: 6, color: "var(--ink-muted)" }}>
+          Made a typo or picked the wrong one? Click the <Pencil size={11} style={{ verticalAlign: "middle" }} /> next to any Subject/Topic/Subtopic/Micro Topic to correct it — this fixes it everywhere it's used (Classes, NCERT, Standard Books, etc.), not just on this row.
+        </div>
+        <div className="ucc-tiny" style={{ marginTop: 6, color: "var(--ink-muted)" }}>
           <strong>Source Identified</strong> is read-only — it's Yes automatically once this exact Micro Topic appears in Classes, NCERT, or Standard Books, and No (or — with no Micro Topic set) otherwise.
         </div>
       </div>
@@ -1978,6 +2125,7 @@ function SyllabusTab({ db, updateSlice }) {
                     updateSlice("settings", s => (s.subjects.includes(name) ? s : { ...s, subjects: [...s.subjects, name] }));
                     updateRecord({ subject: name, topic: "", subtopic: "", microtopic: "" });
                   }}
+                  onRename={name => renameSyllabusValue(db, updateSlice, "subject", {}, rec.subject, name)}
                 />
               ),
             },
@@ -1989,6 +2137,7 @@ function SyllabusTab({ db, updateSlice }) {
                   placeholder={rec.subject ? "Select topic…" : "Select subject first"} disabled={!rec.subject}
                   onSelect={v => updateRecord({ topic: v, subtopic: "", microtopic: "" })}
                   onAddNew={name => updateRecord({ topic: name, subtopic: "", microtopic: "" })}
+                  onRename={name => renameSyllabusValue(db, updateSlice, "topic", { subject: rec.subject }, rec.topic, name)}
                 />
               ),
             },
@@ -2000,6 +2149,7 @@ function SyllabusTab({ db, updateSlice }) {
                   placeholder={rec.topic ? "Select subtopic…" : "Select topic first"} disabled={!rec.topic}
                   onSelect={v => updateRecord({ subtopic: v, microtopic: "" })}
                   onAddNew={name => updateRecord({ subtopic: name, microtopic: "" })}
+                  onRename={name => renameSyllabusValue(db, updateSlice, "subtopic", { subject: rec.subject, topic: rec.topic }, rec.subtopic, name)}
                 />
               ),
             },
@@ -2011,6 +2161,7 @@ function SyllabusTab({ db, updateSlice }) {
                   placeholder={rec.subtopic ? "Select micro topic…" : "Select subtopic first"} disabled={!rec.subtopic}
                   onSelect={v => updateRecord({ microtopic: v })}
                   onAddNew={name => updateRecord({ microtopic: name })}
+                  onRename={name => renameSyllabusValue(db, updateSlice, "microtopic", { subject: rec.subject, topic: rec.topic, subtopic: rec.subtopic }, rec.microtopic, name)}
                 />
               ),
             },
@@ -2044,7 +2195,7 @@ function SinglePagerTab({ db, updateSlice }) {
         Topic/Subtopic/Micro Topic are chosen from the Syllabus tab — new ones can't be added here.
       </div>
       <GenericTracker
-        records={db.singlePager} setRecords={u => updateSlice("singlePager", u)}
+        records={db.singlePager} setRecords={u => updateSlice("singlePager", u)} completionRequiresUpload
         columns={[
           { key: "date", label: "Date", type: "date", width: 110 },
           {
@@ -2156,7 +2307,7 @@ function NcertTab({ db, updateSlice }) {
                   // text on this row.
                   const newId = uid();
                   updateSlice("syllabus", prev => [...prev, {
-                    id: newId, gsPaper: "", subject: rec.subject, topic: rec.topic, subtopic: rec.subtopic, microtopic: name,
+                    id: newId, gsPaper: defaultGsPaperForSubject(db, rec.subject), subject: rec.subject, topic: rec.topic, subtopic: rec.subtopic, microtopic: name,
                     studyStatus: "Not Started", revisionStatus: "Not Started", history: [],
                   }]);
                   updateRecord({ microtopic: name, syllabusId: newId });
@@ -2222,7 +2373,7 @@ function StandardBooksTab({ db, updateSlice }) {
                 onAddNew={name => {
                   const newId = uid();
                   updateSlice("syllabus", prev => [...prev, {
-                    id: newId, gsPaper: "", subject: rec.subject, topic: rec.topic, subtopic: rec.subtopic, microtopic: name,
+                    id: newId, gsPaper: defaultGsPaperForSubject(db, rec.subject), subject: rec.subject, topic: rec.topic, subtopic: rec.subtopic, microtopic: name,
                     studyStatus: "Not Started", revisionStatus: "Not Started", history: [],
                   }]);
                   updateRecord({ microtopic: name, syllabusId: newId });
@@ -2277,7 +2428,7 @@ function TamilTab({ db, updateSlice }) {
         />
       ) : (
         <GenericTracker
-          records={db.tamilWriting} setRecords={u => updateSlice("tamilWriting", u)}
+          records={db.tamilWriting} setRecords={u => updateSlice("tamilWriting", u)} completionRequiresUpload
           columns={[
             { key: "date", label: "Date", type: "date", width: 110 },
             {
@@ -2348,7 +2499,7 @@ function CurrentAffairsTab({ db, updateSlice }) {
                   // captured directly — no need to re-search for it.
                   const newId = uid();
                   updateSlice("syllabus", prev => [...prev, {
-                    id: newId, gsPaper: "", subject: rec.subject, topic: name, subtopic: "", microtopic: "",
+                    id: newId, gsPaper: defaultGsPaperForSubject(db, rec.subject), subject: rec.subject, topic: name, subtopic: "", microtopic: "",
                     studyStatus: "Not Started", revisionStatus: "Not Started", history: [],
                   }]);
                   updateRecord({ relevantSyllabusTopic: name, subtopic: "", microtopic: "", syllabusId: newId });
@@ -2366,7 +2517,7 @@ function CurrentAffairsTab({ db, updateSlice }) {
                 onAddNew={name => {
                   const newId = uid();
                   updateSlice("syllabus", prev => [...prev, {
-                    id: newId, gsPaper: "", subject: rec.subject, topic: rec.relevantSyllabusTopic, subtopic: name, microtopic: "",
+                    id: newId, gsPaper: defaultGsPaperForSubject(db, rec.subject), subject: rec.subject, topic: rec.relevantSyllabusTopic, subtopic: name, microtopic: "",
                     studyStatus: "Not Started", revisionStatus: "Not Started", history: [],
                   }]);
                   updateRecord({ subtopic: name, microtopic: "", syllabusId: newId });
@@ -2384,7 +2535,7 @@ function CurrentAffairsTab({ db, updateSlice }) {
                 onAddNew={name => {
                   const newId = uid();
                   updateSlice("syllabus", prev => [...prev, {
-                    id: newId, gsPaper: "", subject: rec.subject, topic: rec.relevantSyllabusTopic, subtopic: rec.subtopic, microtopic: name,
+                    id: newId, gsPaper: defaultGsPaperForSubject(db, rec.subject), subject: rec.subject, topic: rec.relevantSyllabusTopic, subtopic: rec.subtopic, microtopic: name,
                     studyStatus: "Not Started", revisionStatus: "Not Started", history: [],
                   }]);
                   updateRecord({ microtopic: name, syllabusId: newId });
@@ -2411,7 +2562,7 @@ function AnswerWritingTab({ db, updateSlice }) {
         Topic is chosen from the Syllabus tab (matched by GS Paper) — new topics can't be added here.
       </div>
       <GenericTracker
-        records={db.answerWriting} setRecords={u => updateSlice("answerWriting", u)}
+        records={db.answerWriting} setRecords={u => updateSlice("answerWriting", u)} completionRequiresUpload
         columns={[
           { key: "date", label: "Date", type: "date", width: 110 },
           {
