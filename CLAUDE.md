@@ -78,6 +78,25 @@ summary will do.
   `syllabusRowOptionsForSubtopic` / `TagMultiSelectCell`), with older
   plain-text tags (written before ids existed) still displaying correctly
   via a fallback lookup.
+- **`syllabusTopicsForSubject`/`syllabusSubtopicsForTopic`/
+  `microtopicOptionsForSubtopic`/`syllabusRowOptionsForSubtopic`/
+  `isSourceIdentifiedForMicrotopic` are cached, not naive filters — do not
+  "simplify" them back to `db.syllabus.filter(...)` one-liners.** Every
+  one of these is called once per row in every cascading-dropdown column,
+  across every tracker table. A naive version re-scans the full array on
+  every call, which is fine at dozens of rows but becomes O(rows²) at
+  scale — with ~1,150 Syllabus rows this measurably hung the page (every
+  keystroke anywhere on the page re-triggered the full O(n²) cost via
+  React's re-render). The fix (`getSyllabusIndex` / `_syllabusIndexCache`,
+  `getSourceIdentifiedIndex` / `_sourceIdentifiedCache`) builds each
+  lookup table once per exact array/object reference (`WeakMap`, keyed on
+  `db.syllabus` or `db`) and reuses it until that reference actually
+  changes — free by construction since this app already treats state
+  immutably (a real edit always produces a new array/object, so the cache
+  invalidates exactly when it should, automatically). If you add another
+  helper that's called per-row across a large table, cache it the same
+  way rather than assuming "it's just a filter, it'll be fine" — it won't
+  be, once the table it feeds grows.
 - **Tracker schemas are intentionally lean, not uniform** — several
   trackers had status/date columns removed because they weren't being
   kept current (NCERT and Standard Books are now pure reference lists:
