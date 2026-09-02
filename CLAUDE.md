@@ -248,6 +248,24 @@ summary will do.
   block. Other trackers don't have an equivalent yet; if that becomes worth
   doing, reuse the same `confirmRemove` prop rather than inventing another
   pattern.
+- **`DangerZone` has two separate resets, by request — don't merge them.**
+  "Reset all data" (unchanged) wipes every key in `CLEARABLE_DATA_KEYS` at
+  once. "Reset one section" wipes exactly one of those same keys, using
+  `RESETTABLE_SECTION_LABELS` for its dropdown — that label map must stay
+  in sync with `CLEARABLE_DATA_KEYS`'s keys (same set, just human-readable
+  names) since it's what makes a section resettable at all. Settings is
+  never offered in either reset, on purpose. Only the Syllabus option in
+  the section-wise reset gets an extra warning line and a live reference
+  count (`countRecordsLinkedToSyllabus`) — every other section stores its
+  own readable subject/topic/etc. text and has nothing else depending on
+  it, but Syllabus is what Classes' Micro Topic tags (which store a
+  Syllabus row id, not text) and every tracker's `syllabusId` ultimately
+  point to, so resetting it alone (unlike "Reset all data", which clears
+  everything that could hold a stale reference in the same stroke) can
+  leave other trackers' data referencing rows that no longer exist. If a
+  future section gains an ID-based reference to another *non-Settings*
+  section, give it the same warning treatment rather than assuming only
+  Syllabus can ever need one.
 - **Google Drive PDFs**: `DriveFileCell` + `uploadDriveFile`/
   `downloadDriveFile` are generic across trackers — pass a `folderKey`
   (see `DRIVE_FOLDER_NAMES`) to keep each tracker's PDFs in their own

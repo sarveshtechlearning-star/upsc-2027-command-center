@@ -2977,7 +2977,7 @@ function SettingsTab({ db, updateSlice }) {
         <input className="ucc-input" style={{ maxWidth: 220 }} placeholder="Add subject" value={newSubject} onChange={e => setNewSubject(e.target.value)} />
         <button className="ucc-btn" onClick={() => { if (newSubject.trim()) { patch({ subjects: [...s.subjects, newSubject.trim()] }); setNewSubject(""); } }}><Plus size={13} /> Add</button>
       </div>
-      <DangerZone updateSlice={updateSlice} />
+      <DangerZone db={db} updateSlice={updateSlice} />
     </div>
   );
 }
@@ -2985,17 +2985,47 @@ function SettingsTab({ db, updateSlice }) {
 // Every StorageKey except "settings" — what "Reset all data" wipes back to
 // empty, using each key's genuinely-empty shape (not defaultDB()'s syllabus
 // seed, since a reset should mean *empty*, not *repopulated with the sample
-// curriculum*).
+// curriculum*). Also the single source of truth for which sections the
+// section-wise reset can target — add a label below rather than a second
+// list, so the two resets can't drift out of sync with each other.
 const CLEARABLE_DATA_KEYS = {
   syllabus: [], classes: [], reading: [], singlePager: [], ncert: [], standardBooks: [],
   tamilReading: [], tamilWriting: [], currentAffairs: [], answerWriting: [], aiLearning: [],
   dailyPlans: {}, dailyReviews: {}, weeklyReviews: {},
 };
+const RESETTABLE_SECTION_LABELS = {
+  syllabus: "Syllabus", classes: "Classes", reading: "Topic Completion", singlePager: "Single Pager",
+  ncert: "NCERT", standardBooks: "Standard Books", tamilReading: "Tamil Literature Reading",
+  tamilWriting: "Tamil Literature Writing", currentAffairs: "Current Affairs", answerWriting: "GS Answer Writing",
+  aiLearning: "AI Learning", dailyPlans: "Daily Plans", dailyReviews: "End-of-day reviews", weeklyReviews: "Weekly reviews",
+};
+// Only Syllabus needs its own extra warning in the section-wise reset:
+// every other tracker stores its own readable subject/topic/etc. text, so
+// resetting it alone doesn't corrupt anything elsewhere. Syllabus is
+// different — Classes' Micro Topic tags store a Syllabus row id rather
+// than text, so wiping Syllabus alone leaves those tags unable to resolve
+// to a name. This gives a live count of how many records currently rely
+// on Syllabus rows still existing, for that warning.
+function countRecordsLinkedToSyllabus(db) {
+  let count = 0;
+  count += db.classes.filter(c => c.syllabusId || (c.microtopics || []).length > 0).length;
+  count += db.reading.filter(r => r.syllabusId).length;
+  count += db.ncert.filter(n => n.syllabusId).length;
+  count += db.standardBooks.filter(s => s.syllabusId).length;
+  count += db.singlePager.filter(s => s.syllabusId).length;
+  count += db.currentAffairs.filter(c => c.syllabusId).length;
+  return count;
+}
 
-function DangerZone({ updateSlice }) {
+function DangerZone({ db, updateSlice }) {
   const [open, setOpen] = useState(false);
   const [confirmText, setConfirmText] = useState("");
   const [done, setDone] = useState(false);
+
+  const [sectionOpen, setSectionOpen] = useState(false);
+  const [sectionKey, setSectionKey] = useState("");
+  const [sectionConfirmText, setSectionConfirmText] = useState("");
+  const [sectionDone, setSectionDone] = useState("");
 
   function resetAllData() {
     Object.entries(CLEARABLE_DATA_KEYS).forEach(([key, emptyValue]) => updateSlice(key, () => emptyValue));
@@ -3003,10 +3033,61 @@ function DangerZone({ updateSlice }) {
     setTimeout(() => setDone(false), 5000);
   }
 
+  function resetSection() {
+    if (!sectionKey) return;
+    const label = RESETTABLE_SECTION_LABELS[sectionKey];
+    updateSlice(sectionKey, () => CLEARABLE_DATA_KEYS[sectionKey]);
+    setSectionOpen(false); setSectionKey(""); setSectionConfirmText("");
+    setSectionDone(label);
+    setTimeout(() => setSectionDone(""), 5000);
+  }
+
+  const linkedToSyllabusCount = sectionKey === "syllabus" ? countRecordsLinkedToSyllabus(db) : 0;
+
   return (
     <div>
       <div className="ucc-hr" />
       <h3 style={{ color: "var(--red)" }}>Danger zone</h3>
+
+      {!sectionOpen ? (
+        <button className="ucc-btn ghost" style={{ borderColor: "var(--red)", color: "var(--red)", marginBottom: 8 }} onClick={() => setSectionOpen(true)}>
+          <Trash2 size={14} /> Reset one section
+        </button>
+      ) : (
+        <div style={{ border: "1px solid var(--red)", background: "var(--red-soft)", borderRadius: 8, padding: 12, marginBottom: 8 }}>
+          <label className="ucc-tiny">Section to reset</label>
+          <select className="ucc-select" style={{ display: "block", margin: "4px 0 8px", maxWidth: 280 }}
+            value={sectionKey} onChange={e => { setSectionKey(e.target.value); setSectionConfirmText(""); }}>
+            <option value="">Select a section…</option>
+            {Object.entries(RESETTABLE_SECTION_LABELS).map(([k, label]) => <option key={k} value={k}>{label}</option>)}
+          </select>
+          {sectionKey && (
+            <>
+              <p className="ucc-tiny">
+                This permanently clears <strong>{RESETTABLE_SECTION_LABELS[sectionKey]}</strong> only — every other
+                section (including Settings) is left exactly as it is. This cannot be undone.
+                {sectionKey === "syllabus" && (
+                  <> <strong>Heads up:</strong> other trackers still reference Syllabus rows
+                  {linkedToSyllabusCount > 0 ? ` (${linkedToSyllabusCount} record${linkedToSyllabusCount === 1 ? "" : "s"} right now)` : ""} —
+                  Classes' Micro Topic tags in particular may show an unreadable value once those rows are gone, and
+                  every tracker's Topic/Subtopic/Micro Topic dropdowns won't offer anything new until Syllabus is
+                  repopulated.</>
+                )}
+              </p>
+              <p className="ucc-tiny">Type <strong>RESET</strong> to confirm.</p>
+              <div className="ucc-flex">
+                <input className="ucc-input" style={{ maxWidth: 140 }} value={sectionConfirmText} onChange={e => setSectionConfirmText(e.target.value)} placeholder="RESET" />
+                <button className="ucc-btn primary" style={{ background: "var(--red)", borderColor: "var(--red)" }} disabled={sectionConfirmText !== "RESET"} onClick={resetSection}>
+                  <Trash2 size={14} /> Confirm reset
+                </button>
+                <button className="ucc-btn ghost" onClick={() => { setSectionOpen(false); setSectionKey(""); setSectionConfirmText(""); }}>Cancel</button>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+      {sectionDone && <p className="ucc-tiny" style={{ color: "var(--green)" }}>{sectionDone} cleared.</p>}
+
       {!open ? (
         <button className="ucc-btn ghost" style={{ borderColor: "var(--red)", color: "var(--red)" }} onClick={() => setOpen(true)}>
           <Trash2 size={14} /> Reset all data
