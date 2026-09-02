@@ -6,7 +6,7 @@ import {
   Newspaper, PenTool, Brain, Search as SearchIcon, BarChart3,
   Settings as SettingsIcon, Upload, Download, ChevronUp, ChevronDown,
   Plus, Trash2, History, Check, AlertTriangle, Clock, ChevronLeft,
-  ChevronRight as ChevronRightIcon, X, LogOut, LayoutDashboard
+  ChevronRight as ChevronRightIcon, X, LogOut, LayoutDashboard, Copy
 } from "lucide-react";
 
 /* ============================================================
@@ -408,6 +408,13 @@ function minutesToTime(mins) {
   return (overflowDays > 0 ? "+1d " : "") + `${hh}:${mmS}`;
 }
 function normKey(...parts) { return parts.map(p => String(p || "").trim().toLowerCase()).join("|"); }
+// Escapes user-typed text (journal entries, reflections) before it goes into
+// an HTML string that gets written to the clipboard — otherwise something
+// like "<b>" or "&" typed in a journal entry would corrupt the markup when
+// pasted into Gmail (or worse, if the text ever looked like a tag).
+function escapeHtml(s) {
+  return String(s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
 function slugify(s) { return String(s || "").trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "") || "none"; }
 // Building topics/subtopics/microtopics fresh by filtering db.syllabus on
 // every call was fine at small scale, but each of these is invoked once per
@@ -2826,6 +2833,7 @@ function SearchTab({ db }) {
    ============================================================ */
 function WeeklyReviewTab({ db, updateSlice }) {
   const [weekOf, setWeekOf] = useState(weekStartISO(todayISO()));
+  const [copyStatus, setCopyStatus] = useState("");
   const weekDates = Array.from({ length: 7 }, (_, i) => addDaysISO(weekOf, i));
   const plans = weekDates.map(d => db.dailyPlans[d]).filter(Boolean);
   let planned = 0, logged = 0, missed = 0;
@@ -2835,6 +2843,9 @@ function WeeklyReviewTab({ db, updateSlice }) {
     if (b.skipped) missed++;
     else if ((b.journal || "").trim()) logged++;
   }));
+  const classesThisWeek = db.classes.filter(c => weekDates.includes(c.date)).length;
+  const answersThisWeek = db.answerWriting.filter(a => weekDates.includes(a.date)).length;
+  const currentAffairsThisWeek = db.currentAffairs.filter(c => weekDates.includes(c.date)).length;
   const reflection = db.weeklyReviews[weekOf] || { wellDone: "", notWell: "", change: "" };
   function setReflection(patch) {
     updateSlice("weeklyReviews", prev => ({ ...prev, [weekOf]: { ...(prev[weekOf] || {}), ...patch } }));
@@ -2851,6 +2862,84 @@ function WeeklyReviewTab({ db, updateSlice }) {
     return { date: d, tasks, hasContent: tasks.length > 0 || hasJournal };
   });
   const weekHasContent = dayLogs.some(dl => dl.hasContent);
+
+  // "Copy for email" — no server, no email account, no secrets: this
+  // writes real HTML to the clipboard (alongside a plain-text fallback),
+  // so pasting into Gmail's own compose window (or Outlook, or anything
+  // else with a rich-text editor) keeps the formatting, and *you* send it
+  // from your own logged-in session. Deliberately not automatic — that
+  // trade was made explicitly in favor of not touching any account's
+  // credentials or a third-party email service at all.
+  const statsRows = [
+    ["Planned sessions", planned], ["Logged", logged], ["Skipped", missed],
+    ["Classes this week", classesThisWeek], ["Answers written", answersThisWeek],
+    ["Current affairs logged", currentAffairsThisWeek],
+  ];
+  function buildSummaryHtml() {
+    const statsHtml = statsRows.map(([label, val]) =>
+      `<tr><td style="padding:3px 16px 3px 0;color:#444;">${escapeHtml(label)}</td><td style="padding:3px 0;font-weight:700;">${val}</td></tr>`
+    ).join("");
+    const reflectionHtml = [
+      ["What went well", reflection.wellDone], ["What did not go well", reflection.notWell], ["What should change next week", reflection.change],
+    ].filter(([, v]) => (v || "").trim()).map(([label, v]) =>
+      `<p style="margin:4px 0 12px;"><strong>${escapeHtml(label)}:</strong><br>${escapeHtml(v).replace(/\n/g, "<br>")}</p>`
+    ).join("");
+    const journalHtml = dayLogs.filter(dl => dl.hasContent).map(dl => {
+      const tasksHtml = dl.tasks.map(t => {
+        const status = t.skipped ? ` <span style="color:#888;">(Skipped${t.skipReason ? ": " + escapeHtml(t.skipReason) : ""})</span>` : "";
+        const journalText = !t.skipped ? (t.journal || "").trim() : "";
+        return `<div style="margin-bottom:6px;">
+          <span style="font-family:monospace;color:#666;font-size:12px;">${minutesToTime(t.start)}–${minutesToTime(t.end)}</span>
+          <strong style="margin-left:6px;">${escapeHtml(t.label)}</strong>${status}
+          ${journalText ? `<div style="color:#333;font-size:13px;margin-top:2px;">${escapeHtml(journalText)}</div>` : ""}
+        </div>`;
+      }).join("");
+      return `<div style="margin-bottom:16px;"><div style="font-weight:700;margin-bottom:6px;">${escapeHtml(fmtDateLong(dl.date))}</div>${tasksHtml}</div>`;
+    }).join("");
+    return `<div style="font-family:Arial,sans-serif;max-width:560px;color:#1a1a1a;">
+      <h2 style="margin-bottom:2px;">Weekly Review — ${weekOf} to ${addDaysISO(weekOf, 6)}</h2>
+      <table style="border-collapse:collapse;margin:12px 0;">${statsHtml}</table>
+      ${reflectionHtml}
+      <h3 style="margin-top:20px;">Hourly journal</h3>
+      ${journalHtml || "<p>No entries logged this week.</p>"}
+    </div>`;
+  }
+  function buildSummaryText() {
+    const lines = [`Weekly Review — ${weekOf} to ${addDaysISO(weekOf, 6)}`, ""];
+    statsRows.forEach(([label, val]) => lines.push(`${label}: ${val}`));
+    [["What went well", reflection.wellDone], ["What did not go well", reflection.notWell], ["What should change next week", reflection.change]]
+      .filter(([, v]) => (v || "").trim()).forEach(([label, v]) => lines.push("", `${label}:`, v));
+    lines.push("", "Hourly journal:");
+    dayLogs.filter(dl => dl.hasContent).forEach(dl => {
+      lines.push("", fmtDateLong(dl.date));
+      dl.tasks.forEach(t => {
+        const status = t.skipped ? ` (Skipped${t.skipReason ? ": " + t.skipReason : ""})` : "";
+        lines.push(`  ${minutesToTime(t.start)}–${minutesToTime(t.end)} ${t.label}${status}`);
+        if (!t.skipped && (t.journal || "").trim()) lines.push(`    ${t.journal.trim()}`);
+      });
+    });
+    return lines.join("\n");
+  }
+  async function copySummaryToClipboard() {
+    const html = buildSummaryHtml();
+    const text = buildSummaryText();
+    try {
+      if (!navigator.clipboard || !window.ClipboardItem) throw new Error("Rich clipboard not supported");
+      await navigator.clipboard.write([
+        new ClipboardItem({ "text/html": new Blob([html], { type: "text/html" }), "text/plain": new Blob([text], { type: "text/plain" }) }),
+      ]);
+      setCopyStatus("Copied — paste into a new Gmail message (or any rich-text email) to send it.");
+    } catch {
+      try {
+        await navigator.clipboard.writeText(text);
+        setCopyStatus("Copied as plain text — this browser doesn't support formatted copy, but the text is ready to paste.");
+      } catch {
+        setCopyStatus("Couldn't copy automatically — try Download as PDF instead.");
+      }
+    }
+    setTimeout(() => setCopyStatus(""), 6000);
+  }
+
   return (
     <div>
       <div className="ucc-card ucc-no-print">
@@ -2868,18 +2957,25 @@ function WeeklyReviewTab({ db, updateSlice }) {
         <div className="ucc-card">
           <div className="ucc-flex between wrap">
             <h3>Week of {weekOf} – {addDaysISO(weekOf, 6)}</h3>
-            <button className="ucc-btn primary ucc-no-print" onClick={() => window.print()}
-              title="Opens your browser's print dialog — choose “Save as PDF” as the destination">
-              <Download size={14} /> Download as PDF
-            </button>
+            <div className="ucc-flex ucc-no-print">
+              <button className="ucc-btn ghost" onClick={copySummaryToClipboard}
+                title="Copies a formatted summary — paste it into a new Gmail message to send it yourself">
+                <Copy size={14} /> Copy for email
+              </button>
+              <button className="ucc-btn primary" onClick={() => window.print()}
+                title="Opens your browser's print dialog — choose “Save as PDF” as the destination">
+                <Download size={14} /> Download as PDF
+              </button>
+            </div>
           </div>
+          {copyStatus && <div className="ucc-tiny ucc-no-print" style={{ color: "var(--green)", marginTop: 4 }}>{copyStatus}</div>}
           <div className="ucc-statgrid" style={{ margin: "12px 0" }}>
             <div className="ucc-stat"><div className="n">{planned}</div><div className="l">Planned sessions</div></div>
             <div className="ucc-stat"><div className="n">{logged}</div><div className="l">Logged</div></div>
             <div className="ucc-stat"><div className="n">{missed}</div><div className="l">Skipped</div></div>
-            <div className="ucc-stat"><div className="n">{db.classes.filter(c => weekDates.includes(c.date)).length}</div><div className="l">Classes this week</div></div>
-            <div className="ucc-stat"><div className="n">{db.answerWriting.filter(a => weekDates.includes(a.date)).length}</div><div className="l">Answers written</div></div>
-            <div className="ucc-stat"><div className="n">{db.currentAffairs.filter(c => weekDates.includes(c.date)).length}</div><div className="l">Current affairs logged</div></div>
+            <div className="ucc-stat"><div className="n">{classesThisWeek}</div><div className="l">Classes this week</div></div>
+            <div className="ucc-stat"><div className="n">{answersThisWeek}</div><div className="l">Answers written</div></div>
+            <div className="ucc-stat"><div className="n">{currentAffairsThisWeek}</div><div className="l">Current affairs logged</div></div>
           </div>
           <div className="ucc-grid">
             <div><label className="ucc-tiny">What went well?</label><textarea className="ucc-textarea" rows={3} value={reflection.wellDone} onChange={e => setReflection({ wellDone: e.target.value })} /></div>

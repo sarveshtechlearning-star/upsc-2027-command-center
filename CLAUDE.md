@@ -332,6 +332,27 @@ summary will do.
   why). If you touch this pagination logic, keep those three behaviors —
   they're what makes paging invisible during normal use rather than a
   source of "where did my row go" confusion.
+- **Weekly Review's "Copy for email" is deliberately client-side only — this
+  app has no email-sending backend, and that was a considered decision,
+  not a gap to fill in later.** A Vercel Cron + Resend/Gmail-SMTP pipeline
+  was built and evaluated, then deliberately abandoned: Resend requires a
+  verified domain to email anyone other than the account owner (a real
+  blocker once "other recipients" was a stated requirement), and Gmail
+  SMTP's own documentation warns that Google's abuse-detection can
+  silently block an automated, unattended sign-in pattern with no error
+  surfaced — an unacceptable failure mode for something meant to run
+  unattended for a year. `copySummaryToClipboard` (`WeeklyReviewTab`)
+  writes real HTML to the clipboard via `ClipboardItem` (with a
+  `text/plain` fallback for browsers/paste-targets that don't support
+  rich content), so pasting into Gmail's own compose window preserves
+  formatting — zero servers, zero secrets, zero third-party accounts, and
+  the person sends it from their own already-authenticated session. The
+  explicit trade made here: automatic send was given up entirely in favor
+  of eliminating that risk — don't quietly reintroduce a scheduled
+  send without re-raising that trade-off with the person first.
+  `escapeHtml` exists specifically to keep user-typed journal/reflection
+  text from corrupting the generated HTML (or, worse, injecting markup) —
+  any new field added to this summary must go through it too.
 - **The Office/commute block in Today's Planner is one merged card
   covering up to three underlying blocks** (`travelTo`, `office`,
   `travelFro` — one or three of these depending on WFH/WFO/Weekend).
