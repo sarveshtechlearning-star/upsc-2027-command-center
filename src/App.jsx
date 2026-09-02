@@ -1070,22 +1070,36 @@ function CascadingSelectCell({ value, options, placeholder, disabled, onSelect, 
 }
 
 // Multi-select tag picker — e.g. one Class can cover several Micro Topics,
-// unlike Subject/Topic/Subtopic which are single-select. Like
-// CascadingSelectCell, this never creates new values. `options` is
+// unlike Subject/Topic/Subtopic which are single-select. `options` is
 // [{ value, label }] rather than plain strings so a tag's stored value can
 // be a stable Syllabus row id (surviving a later rename) while still
 // showing the current micro topic text; a tag written before ids existed
 // just has its raw text as `value`, which falls back to being its own
 // label since it won't match any option's `value`. A value already picked
 // drops out of the dropdown so it can't be added twice. Tags are removed
-// with the × on each chip.
-function TagMultiSelectCell({ values, options, placeholder, disabled, onChange }) {
+// with the × on each chip. When `allowAddNew` is set, "+ Add new" swaps in
+// a small text input (Enter to confirm, Escape to cancel) — `onAddNew`
+// fires with the trimmed typed value so the caller can create whatever
+// backing record the tag needs (e.g. a new Syllabus row) before adding it.
+function TagMultiSelectCell({ values, options, placeholder, disabled, onChange, allowAddNew = false, onAddNew }) {
+  const [adding, setAdding] = useState(false);
+  const [draft, setDraft] = useState("");
   const tags = values || [];
   const tagSet = new Set(tags);
   const available = options.filter(o => !tagSet.has(o.value));
   const labelFor = v => { const opt = options.find(o => o.value === v); return opt ? opt.label : v; };
-  function addTag(v) { if (v) onChange([...tags, v]); }
+  function addTag(v) {
+    if (v === ADD_NEW_VALUE) { setAdding(true); setDraft(""); return; }
+    if (v) onChange([...tags, v]);
+  }
   function removeTag(v) { onChange(tags.filter(t => t !== v)); }
+  function confirmAdd() {
+    const name = draft.trim();
+    setAdding(false); setDraft("");
+    if (name && onAddNew) onAddNew(name);
+  }
+  function cancelAdd() { setAdding(false); setDraft(""); }
+
   return (
     <div>
       {tags.length > 0 && (
@@ -1098,10 +1112,19 @@ function TagMultiSelectCell({ values, options, placeholder, disabled, onChange }
           ))}
         </div>
       )}
-      {!disabled && (
+      {adding ? (
+        <div className="ucc-flex">
+          <input className="ucc-input" autoFocus placeholder="New micro topic"
+            value={draft} onChange={e => setDraft(e.target.value)}
+            onKeyDown={e => { if (e.key === "Enter") confirmAdd(); if (e.key === "Escape") cancelAdd(); }} />
+          <IconBtn icon={Check} onClick={confirmAdd} title="Add" />
+          <IconBtn icon={X} onClick={cancelAdd} title="Cancel" />
+        </div>
+      ) : !disabled && (
         <select className="ucc-select" value="" disabled={disabled} onChange={e => addTag(e.target.value)}>
-          <option value="">{available.length ? placeholder : "No more to add"}</option>
+          <option value="">{available.length ? placeholder : (allowAddNew ? "+ Add a tag…" : "No more to add")}</option>
           {available.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+          {allowAddNew && <option value={ADD_NEW_VALUE}>+ Add new</option>}
         </select>
       )}
       {disabled && tags.length === 0 && <div className="ucc-tiny" style={{ color: "var(--ink-muted)" }}>{placeholder}</div>}
@@ -1737,7 +1760,7 @@ function ClassesTab({ db, updateSlice }) {
       <div className="ucc-card">
         <h3>Class completion tracker</h3>
         <div className="ucc-tiny" style={{ marginBottom: 8, color: "var(--ink-muted)" }}>
-          Topic and Subtopic are chosen from the Syllabus tab — new topics can't be added here. Once a Subtopic is set, tag the specific Micro Topics this class covered.
+          Topic and Subtopic are chosen from the Syllabus tab — new ones can't be added here. Once a Subtopic is set, tag the Micro Topics this class covered — pick an existing one, or type a new one and hit + Add new (it's saved to Syllabus automatically, so it shows up everywhere else too).
         </div>
         <GenericTracker
           records={db.classes} setRecords={u => updateSlice("classes", u)}
@@ -1779,7 +1802,21 @@ function ClassesTab({ db, updateSlice }) {
                 <TagMultiSelectCell
                   values={rec.microtopics} options={syllabusRowOptionsForSubtopic(db, rec.subject, rec.topic, rec.subtopic)}
                   placeholder={rec.subtopic ? "+ Add micro topic tag" : "Select subtopic first"} disabled={!rec.subtopic}
+                  allowAddNew={!!rec.subtopic}
                   onChange={v => updateRecord({ microtopics: v })}
+                  onAddNew={name => {
+                    // A genuinely new micro topic typed here is added to the
+                    // Syllabus tracker itself (the single source of truth,
+                    // same as Current Affairs' add-new flow), then tagged
+                    // directly using the row it just created — no need to
+                    // search for it, we already know its id.
+                    const newId = uid();
+                    updateSlice("syllabus", prev => [...prev, {
+                      id: newId, gsPaper: "", subject: rec.subject, topic: rec.topic, subtopic: rec.subtopic, microtopic: name,
+                      studyStatus: "Not Started", revisionStatus: "Not Started", history: [],
+                    }]);
+                    updateRecord({ microtopics: [...(rec.microtopics || []), newId] });
+                  }}
                 />
               ),
             },
@@ -2034,7 +2071,7 @@ function NcertTab({ db, updateSlice }) {
     <div className="ucc-card">
       <h3>NCERT tracker</h3>
       <div className="ucc-tiny" style={{ marginBottom: 8, color: "var(--ink-muted)" }}>
-        Topic/Subtopic/Micro Topic are chosen from the Syllabus tab — new ones can't be added here.
+        Topic and Subtopic are chosen from the Syllabus tab — new ones can't be added here. Micro Topic can be typed fresh: pick + Add new and it's saved to Syllabus automatically, so it shows up everywhere else too.
       </div>
       <GenericTracker
         records={db.ncert} setRecords={u => updateSlice("ncert", u)}
@@ -2072,9 +2109,21 @@ function NcertTab({ db, updateSlice }) {
             key: "microtopic", label: "Micro Topic", width: 180, type: "custom",
             render: (rec, _onChange, updateRecord) => (
               <CascadingSelectCell
-                value={rec.microtopic} options={microtopicOptionsForSubtopic(db, rec.subject, rec.topic, rec.subtopic)} allowAddNew={false}
+                value={rec.microtopic} options={microtopicOptionsForSubtopic(db, rec.subject, rec.topic, rec.subtopic)}
                 placeholder={rec.subtopic ? "Select micro topic (optional)…" : "Select subtopic first"} disabled={!rec.subtopic}
                 onSelect={v => updateRecord({ microtopic: v, syllabusId: findSyllabusId(db, { subject: rec.subject, topic: rec.topic, subtopic: rec.subtopic, microtopic: v }) })}
+                onAddNew={name => {
+                  // A genuinely new micro topic typed here is added to the
+                  // Syllabus tracker itself (same pattern as Current Affairs
+                  // and Classes' Micro Topic tags), not stored only as free
+                  // text on this row.
+                  const newId = uid();
+                  updateSlice("syllabus", prev => [...prev, {
+                    id: newId, gsPaper: "", subject: rec.subject, topic: rec.topic, subtopic: rec.subtopic, microtopic: name,
+                    studyStatus: "Not Started", revisionStatus: "Not Started", history: [],
+                  }]);
+                  updateRecord({ microtopic: name, syllabusId: newId });
+                }}
               />
             ),
           },
@@ -2092,7 +2141,7 @@ function StandardBooksTab({ db, updateSlice }) {
     <div className="ucc-card">
       <h3>Standard book tracker</h3>
       <div className="ucc-tiny" style={{ marginBottom: 8, color: "var(--ink-muted)" }}>
-        Topic/Subtopic/Micro Topic are chosen from the Syllabus tab — new ones can't be added here.
+        Topic and Subtopic are chosen from the Syllabus tab — new ones can't be added here. Micro Topic can be typed fresh: pick + Add new and it's saved to Syllabus automatically, so it shows up everywhere else too.
       </div>
       <GenericTracker
         records={db.standardBooks} setRecords={u => updateSlice("standardBooks", u)}
@@ -2130,9 +2179,17 @@ function StandardBooksTab({ db, updateSlice }) {
             key: "microtopic", label: "Micro Topic", width: 160, type: "custom",
             render: (rec, _onChange, updateRecord) => (
               <CascadingSelectCell
-                value={rec.microtopic} options={microtopicOptionsForSubtopic(db, rec.subject, rec.topic, rec.subtopic)} allowAddNew={false}
+                value={rec.microtopic} options={microtopicOptionsForSubtopic(db, rec.subject, rec.topic, rec.subtopic)}
                 placeholder={rec.subtopic ? "Select micro topic (optional)…" : "Select subtopic first"} disabled={!rec.subtopic}
                 onSelect={v => updateRecord({ microtopic: v, syllabusId: findSyllabusId(db, { subject: rec.subject, topic: rec.topic, subtopic: rec.subtopic, microtopic: v }) })}
+                onAddNew={name => {
+                  const newId = uid();
+                  updateSlice("syllabus", prev => [...prev, {
+                    id: newId, gsPaper: "", subject: rec.subject, topic: rec.topic, subtopic: rec.subtopic, microtopic: name,
+                    studyStatus: "Not Started", revisionStatus: "Not Started", history: [],
+                  }]);
+                  updateRecord({ microtopic: name, syllabusId: newId });
+                }}
               />
             ),
           },
