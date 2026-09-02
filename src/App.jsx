@@ -2439,34 +2439,67 @@ function AiLearningTab({ db, updateSlice }) {
 function DashboardTab({ db }) {
   const settings = db.settings;
 
-  // Source Mapping % and Overall Topic Completion % — both computed at
-  // Micro Topic level, using every Syllabus row that has one set as the
-  // denominator (per the request: "based on the syllabus on microtopics
-  // level"). Rows with no Micro Topic yet aren't counted either way.
-  const microtopicRows = useMemo(() => db.syllabus.filter(s => s.microtopic), [db.syllabus]);
-  const sourceIdentifiedCount = useMemo(
-    () => microtopicRows.filter(s => isSourceIdentifiedForMicrotopic(db, s)).length,
-    [db, microtopicRows]
-  );
-  const sourceMappingPct = microtopicRows.length ? Math.round((sourceIdentifiedCount / microtopicRows.length) * 100) : null;
+  // Source Mapping % and Overall Topic Completion % — computed at Subtopic
+  // level (not Micro Topic): the denominator is every distinct
+  // Subject+Topic+Subtopic combination in Syllabus, since a subtopic
+  // shouldn't have to be broken down into Micro Topics before it counts as
+  // "sourced" or "covered" — plenty of subtopics may never get that
+  // granular. A Syllabus row with no Subtopic at all isn't counted either
+  // way (nothing to aggregate under). Deliberately scoped to this tab only
+  // — the Syllabus tab's own per-row Source Identified column stays at
+  // whatever granularity that row represents (uses
+  // isSourceIdentifiedForMicrotopic, unchanged).
+  const subtopicRows = useMemo(() => {
+    const seen = new Map();
+    db.syllabus.forEach(s => {
+      if (!s.subtopic) return;
+      const key = normKey(s.subject, s.topic, s.subtopic);
+      if (!seen.has(key)) seen.set(key, { subject: s.subject, topic: s.topic, subtopic: s.subtopic });
+    });
+    return Array.from(seen.values());
+  }, [db.syllabus]);
 
-  const readingByKey = useMemo(() => {
+  // A subtopic is "sourced" if any Classes/NCERT/Standard Books record's
+  // own subject+topic+subtopic matches it — regardless of that record's
+  // own Micro Topic (or lack of one). Built once as a Set (not scanned
+  // per subtopic row) for the same reason the Syllabus-lookup caches
+  // exist: this is O(records) once instead of O(subtopics × records).
+  const sourcedSubtopicKeys = useMemo(() => {
+    const keys = new Set();
+    db.classes.forEach(c => { if (c.subtopic) keys.add(normKey(c.subject, c.topic, c.subtopic)); });
+    db.ncert.forEach(n => { if (n.subtopic) keys.add(normKey(n.subject, n.topic, n.subtopic)); });
+    db.standardBooks.forEach(s => { if (s.subtopic) keys.add(normKey(s.subject, s.topic, s.subtopic)); });
+    return keys;
+  }, [db.classes, db.ncert, db.standardBooks]);
+  const sourceIdentifiedCount = useMemo(
+    () => subtopicRows.filter(st => sourcedSubtopicKeys.has(normKey(st.subject, st.topic, st.subtopic))).length,
+    [subtopicRows, sourcedSubtopicKeys]
+  );
+  const sourceMappingPct = subtopicRows.length ? Math.round((sourceIdentifiedCount / subtopicRows.length) * 100) : null;
+
+  // Topic Completion rows for the same subtopic (there may be several —
+  // one per Micro Topic — or none) are averaged together for that
+  // subtopic's score, so partial micro-topic-level tracking still counts
+  // proportionally rather than needing every micro topic covered first.
+  const readingBySubtopicKey = useMemo(() => {
     const m = new Map();
-    db.reading.forEach(r => m.set(normKey(r.subject, r.topic, r.subtopic, r.microtopic), r));
-    return m;
-  }, [db.reading]);
-  const readingById = useMemo(() => {
-    const m = new Map();
-    db.reading.forEach(r => { if (r.syllabusId) m.set(r.syllabusId, r); });
+    db.reading.forEach(r => {
+      if (!r.subtopic) return;
+      const key = normKey(r.subject, r.topic, r.subtopic);
+      if (!m.has(key)) m.set(key, []);
+      m.get(key).push(r);
+    });
     return m;
   }, [db.reading]);
   const topicCompletionPct = useMemo(() => {
-    if (microtopicRows.length === 0) return null;
-    const scores = microtopicRows.map(s => topicCompletionScore(
-      readingById.get(s.id) || readingByKey.get(normKey(s.subject, s.topic, s.subtopic, s.microtopic))
-    ));
+    if (subtopicRows.length === 0) return null;
+    const scores = subtopicRows.map(st => {
+      const rows = readingBySubtopicKey.get(normKey(st.subject, st.topic, st.subtopic));
+      if (!rows || rows.length === 0) return topicCompletionScore(null);
+      return rows.reduce((sum, r) => sum + topicCompletionScore(r), 0) / rows.length;
+    });
     return Math.round((scores.reduce((a, b) => a + b, 0) / scores.length) * 100);
-  }, [microtopicRows, readingByKey, readingById]);
+  }, [subtopicRows, readingBySubtopicKey]);
 
   // Classes completed by subject — Completed class# vs. that subject's
   // Total Classes (Settings tab). Subjects with no Total set are skipped
@@ -2503,16 +2536,16 @@ function DashboardTab({ db }) {
       <div className="ucc-statgrid" style={{ marginBottom: 16 }}>
         <div className="ucc-stat">
           <div className="n">{sourceMappingPct === null ? "—" : `${sourceMappingPct}%`}</div>
-          <div className="l">Source mapping ({sourceIdentifiedCount}/{microtopicRows.length} micro topics)</div>
+          <div className="l">Source mapping ({sourceIdentifiedCount}/{subtopicRows.length} subtopics)</div>
         </div>
         <div className="ucc-stat">
           <div className="n">{topicCompletionPct === null ? "—" : `${topicCompletionPct}%`}</div>
-          <div className="l">Overall topic completion ({microtopicRows.length} micro topics)</div>
+          <div className="l">Overall topic completion ({subtopicRows.length} subtopics)</div>
         </div>
       </div>
-      {microtopicRows.length === 0 && (
+      {subtopicRows.length === 0 && (
         <div className="ucc-card">
-          <EmptyState>No Syllabus rows have a Micro Topic set yet — add some on the Syllabus tab to see these percentages.</EmptyState>
+          <EmptyState>No Syllabus rows have a Subtopic set yet — add some on the Syllabus tab to see these percentages.</EmptyState>
         </div>
       )}
 
