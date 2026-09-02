@@ -177,18 +177,30 @@ summary will do.
 - **Dashboard tab** (`DashboardTab`, separate from the `Dashboard`
   top-level app-shell component of the same-ish name — don't confuse the
   two) is read-only, computed from existing data, no new user input:
-  - **Source mapping %** and **overall topic completion %** are both
-    computed at Micro Topic level, using every Syllabus row with a Micro
-    Topic set as the denominator — rows without one aren't counted in
-    either. Source mapping reuses `isSourceIdentifiedForMicrotopic`.
-    Topic completion uses `topicCompletionScore` (0..1 partial credit per
-    micro topic across Class Notes/Standard Material/NCERT/Single
-    Pager/Revision 1/Revision 2 — "Not Needed" fields excluded from that
-    micro topic's own denominator, matching `readingCompletionPct`'s
-    convention), averaged across all micro topics. This is a deliberately
-    different, more complete metric than `readingCompletionPct` (which
-    excludes revision and powers Today's "pending reading" list) — don't
-    merge the two or "simplify" by reusing one for the other's purpose.
+  - **Source mapping %** and **overall topic completion %** are computed
+    at **Subtopic level, not Micro Topic** (changed by request — was
+    Micro Topic level originally, deliberately loosened since not every
+    subtopic needs Micro Topics under it to count as "sourced" or
+    "covered"). The denominator is every distinct Subject+Topic+Subtopic
+    combination in Syllabus (`subtopicRows`, deduped — a subtopic with
+    several Micro Topic rows underneath still counts once); rows with no
+    Subtopic at all aren't counted either way. A subtopic is "sourced" if
+    any Classes/NCERT/Standard Books record's own subject+topic+subtopic
+    matches it, regardless of that record's own Micro Topic
+    (`sourcedSubtopicKeys`, a `Set` built once — don't scan per subtopic
+    row, same reasoning as the Syllabus-lookup caches elsewhere). Topic
+    completion averages `topicCompletionScore` (0..1 partial credit
+    across Class Notes/Standard Material/NCERT/Single Pager/Revision
+    1/Revision 2, "Not Needed" fields excluded per the usual convention)
+    over every Reading row matching that subtopic (there may be zero, one,
+    or several — one per Micro Topic — they're averaged together, not
+    just the first one taken). This is a deliberately different, more
+    complete metric than `readingCompletionPct` (which excludes revision
+    and powers Today's "pending reading" list) — don't merge the two or
+    "simplify" by reusing one for the other's purpose. The Syllabus tab's
+    own per-row Source Identified column is intentionally NOT part of this
+    change — it still uses `isSourceIdentifiedForMicrotopic` at whatever
+    granularity that specific row represents, unchanged.
   - **Classes completed by subject**: latest *Completed* class# vs. that
     subject's Total Classes, which lives in
     `settings.totalClassesBySubject` (a plain `{ [subject]: number }` map,
