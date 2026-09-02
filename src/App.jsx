@@ -816,10 +816,10 @@ function PieChart({ segments, size = 140 }) {
   );
 }
 
-function IconBtn({ icon: Icon, onClick, title, danger }) {
+function IconBtn({ icon: Icon, onClick, title, danger, disabled }) {
   return (
-    <button className={`ucc-btn ghost`} onClick={onClick} title={title} aria-label={title}
-      style={{ padding: "5px 7px", color: danger ? "var(--red)" : undefined }}>
+    <button className={`ucc-btn ghost`} onClick={onClick} title={title} aria-label={title} disabled={disabled}
+      style={{ padding: "5px 7px", color: danger ? "var(--red)" : undefined, opacity: disabled ? 0.4 : 1 }}>
       <Icon size={14} />
     </button>
   );
@@ -831,6 +831,8 @@ function IconBtn({ icon: Icon, onClick, title, danger }) {
 function GenericTracker({ records, setRecords, columns, newRecord, emptyMessage, dense, datalists, confirmRemove }) {
   const [expanded, setExpanded] = useState(() => new Set());
   const [filters, setFilters] = useState({});
+  const [page, setPage] = useState(0);
+  const PAGE_SIZE = 100;
 
   function updateField(rec, col, val, isStatus) {
     setRecords(prev => prev.map(r => {
@@ -863,6 +865,7 @@ function GenericTracker({ records, setRecords, columns, newRecord, emptyMessage,
     const rec = { id: uid(), history: [], ...newRecord() };
     setRecords(prev => [...prev, rec]);
     setFilters({}); // otherwise the new (mostly blank) row can vanish behind an active filter
+    setPage(Math.floor(records.length / PAGE_SIZE)); // new row lands at the end — jump to the page that shows it
   }
 
   function toggleExpand(id) {
@@ -912,13 +915,28 @@ function GenericTracker({ records, setRecords, columns, newRecord, emptyMessage,
     }));
   }, [records, columns, filters, hasActiveFilters, filterConfig]);
 
+  // Rendering every row unconditionally is fine for a few dozen records, but
+  // each row's cascading dropdowns and other custom cells add up — at
+  // several hundred+ rows (Syllabus routinely reaches four figures), asking
+  // React to mount/reconcile all of them on every edit is what actually
+  // hangs the page, independent of how fast the underlying data lookups
+  // are. Capping how many rows exist in the DOM at once is what actually
+  // fixes that, not just making the per-row lookups cheaper.
+  const totalPages = Math.max(1, Math.ceil(filteredRecords.length / PAGE_SIZE));
+  const safePage = Math.min(page, totalPages - 1);
+  const pagedRecords = filteredRecords.slice(safePage * PAGE_SIZE, safePage * PAGE_SIZE + PAGE_SIZE);
+  function setFiltersAndResetPage(updater) {
+    setFilters(updater);
+    setPage(0);
+  }
+
   return (
     <div style={{ overflowX: "auto" }}>
       {(datalists || []).map(dl => <datalist id={dl.id} key={dl.id}>{dl.options.map(o => <option key={o} value={o} />)}</datalist>)}
       {hasActiveFilters && (
         <div className="ucc-flex between" style={{ marginBottom: 6 }}>
           <span className="ucc-tiny">Showing {filteredRecords.length} of {records.length}</span>
-          <button type="button" className="ucc-btn ghost" style={{ padding: "2px 8px" }} onClick={() => setFilters({})}><X size={11} /> Clear filters</button>
+          <button type="button" className="ucc-btn ghost" style={{ padding: "2px 8px" }} onClick={() => { setFilters({}); setPage(0); }}><X size={11} /> Clear filters</button>
         </div>
       )}
       <table className="ucc-table">
@@ -935,13 +953,13 @@ function GenericTracker({ records, setRecords, columns, newRecord, emptyMessage,
                 <th key={col.key} style={{ fontWeight: 400, paddingTop: 2, paddingBottom: 4 }}>
                   {cfg && (cfg.type === "select" ? (
                     <select className="ucc-select" style={{ fontSize: 11, padding: "2px 4px", width: "100%" }}
-                      value={filters[col.key] || ""} onChange={e => setFilters(f => ({ ...f, [col.key]: e.target.value }))}>
+                      value={filters[col.key] || ""} onChange={e => setFiltersAndResetPage(f => ({ ...f, [col.key]: e.target.value }))}>
                       <option value="">All</option>
                       {cfg.options.map(o => <option key={o} value={o}>{o}</option>)}
                     </select>
                   ) : (
                     <input type="text" className="ucc-input" style={{ fontSize: 11, padding: "2px 4px", width: "100%" }}
-                      placeholder="Filter…" value={filters[col.key] || ""} onChange={e => setFilters(f => ({ ...f, [col.key]: e.target.value }))} />
+                      placeholder="Filter…" value={filters[col.key] || ""} onChange={e => setFiltersAndResetPage(f => ({ ...f, [col.key]: e.target.value }))} />
                   ))}
                 </th>
               );
@@ -957,7 +975,7 @@ function GenericTracker({ records, setRecords, columns, newRecord, emptyMessage,
           {records.length > 0 && filteredRecords.length === 0 && (
             <tr><td colSpan={columns.length + 2}><EmptyState>No rows match the current filters.</EmptyState></td></tr>
           )}
-          {filteredRecords.map(rec => {
+          {pagedRecords.map(rec => {
             const histCount = (rec.history || []).length;
             return (
               <React.Fragment key={rec.id}>
@@ -1010,6 +1028,18 @@ function GenericTracker({ records, setRecords, columns, newRecord, emptyMessage,
           })}
         </tbody>
       </table>
+      {filteredRecords.length > PAGE_SIZE && (
+        <div className="ucc-flex between" style={{ marginTop: 8 }}>
+          <span className="ucc-tiny">
+            Showing {safePage * PAGE_SIZE + 1}–{Math.min((safePage + 1) * PAGE_SIZE, filteredRecords.length)} of {filteredRecords.length}
+          </span>
+          <div className="ucc-flex">
+            <IconBtn icon={ChevronLeft} onClick={() => setPage(p => Math.max(0, p - 1))} title="Previous page" disabled={safePage === 0} />
+            <span className="ucc-tiny">Page {safePage + 1} of {totalPages}</span>
+            <IconBtn icon={ChevronRightIcon} onClick={() => setPage(p => Math.min(totalPages - 1, p + 1))} title="Next page" disabled={safePage === totalPages - 1} />
+          </div>
+        </div>
+      )}
       <button className="ucc-btn" style={{ marginTop: 10 }} onClick={addRecord}><Plus size={14} /> Add row</button>
     </div>
   );

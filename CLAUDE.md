@@ -314,6 +314,24 @@ summary will do.
   If you add a column whose value is an array/object and it should be
   filterable, that needs deliberate handling here, not an assumption that
   it'll "just work" like the primitive-valued columns do.
+- **`GenericTracker` paginates at 100 rows (`PAGE_SIZE`) — this is a
+  second, separate performance fix from the `getSyllabusIndex`/
+  `getSourceIdentifiedIndex` caching described above, not a duplicate of
+  it.** The caching fixed the O(n²) *data-lookup* cost (re-scanning the
+  full array per row); pagination fixes the *DOM/reconciliation* cost —
+  React mounting/diffing hundreds or thousands of `<tr>`s (each with
+  several dropdowns and other interactive cells) on every edit, which
+  hangs the page regardless of how cheap the underlying lookups are. Fixing
+  only one of the two was not sufficient in practice at ~1,150 Syllabus
+  rows — both are needed. Filters operate on the *full* `filteredRecords`
+  set, not just the current page (correct — you should be able to filter
+  to a row on page 9 without paging there first); adding a filter or
+  clearing filters resets to page 0, and adding a new row jumps to
+  whichever page will contain it (it's appended at the end, so on a large
+  table it would otherwise land off-screen on page 1 with no indication
+  why). If you touch this pagination logic, keep those three behaviors —
+  they're what makes paging invisible during normal use rather than a
+  source of "where did my row go" confusion.
 - **The Office/commute block in Today's Planner is one merged card
   covering up to three underlying blocks** (`travelTo`, `office`,
   `travelFro` — one or three of these depending on WFH/WFO/Weekend).
