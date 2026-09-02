@@ -784,13 +784,18 @@ function buildDriveMultipartBody(metadata, file, boundary) {
 
 // Uploads a new PDF, or (when existingFileId is passed) overwrites the same
 // Drive file in place so re-uploading a corrected document doesn't leave
-// orphaned old copies behind.
-async function uploadDriveFile(db, updateSlice, folderKey, existingFileId, file) {
+// orphaned old copies behind. `desiredName`, when provided, is used as the
+// Drive file's name instead of the raw uploaded file's own name — see
+// nextFileNamePrefix / DriveFileCell for how callers build a standardized
+// name on first upload only (a replace always omits this, keeping
+// whatever name Drive already has).
+async function uploadDriveFile(db, updateSlice, folderKey, existingFileId, file, desiredName) {
   if (file.type && file.type !== "application/pdf") throw new Error("Please choose a PDF file.");
   const accessToken = await getDriveAccessToken();
   const folderId = await ensureDriveFolder(accessToken, db, updateSlice, folderKey);
   const boundary = "uccdrive" + uid();
-  const metadata = existingFileId ? { name: file.name } : { name: file.name, parents: [folderId] };
+  const finalName = desiredName || file.name;
+  const metadata = existingFileId ? { name: finalName } : { name: finalName, parents: [folderId] };
   const body = buildDriveMultipartBody(metadata, file, boundary);
   const url = existingFileId
     ? `https://www.googleapis.com/upload/drive/v3/files/${existingFileId}?uploadType=multipart&fields=id,name`
@@ -1313,12 +1318,41 @@ function TagMultiSelectCell({ values, options, placeholder, disabled, onChange, 
   );
 }
 
+// Strips everything except letters/digits, so a label like "Art & Culture"
+// becomes "ArtCulture" rather than a messy run of underscores from
+// replacing every space and special character individually.
+function fileNameToken(s) {
+  return String(s || "").replace(/[^a-zA-Z0-9]/g, "");
+}
+// Builds "Subject_Subtopic_N" (no extension — DriveFileCell appends the
+// real one) for a FRESH upload only. N is 1 + how many OTHER rows in the
+// same tracker, matching the same group key, already have a file — so the
+// numbering is per subject+subtopic (or whatever grouping the caller
+// passes), not global. Deliberately never called for a replace: reusing
+// this to rename an already-uploaded file on replace risks two files
+// colliding on the same number if upload order and row order diverge
+// (e.g. row A uploaded second gets "_2", then row B — uploaded first,
+// "_1" — is replaced and this function is asked for a fresh number: it
+// would see both rows already have files and recompute "_2" again).
+// Keeping "replace always keeps the existing name" (see DriveFileCell)
+// avoids that entirely rather than trying to solve it here.
+function nextFileNamePrefix(records, rec, groupKeyFn, labelParts) {
+  const key = groupKeyFn(rec);
+  const count = records.filter(r => r.id !== rec.id && r.driveFile && groupKeyFn(r) === key).length + 1;
+  const tokens = labelParts.filter(Boolean).map(fileNameToken).filter(Boolean);
+  return `${tokens.length ? tokens.join("_") : "File"}_${count}`;
+}
+
 // Upload/Download control for a Google-Drive-backed file attachment on one
 // record. The record only ever stores { id, name } (Drive's file id + the
 // original filename) via `onChange` — the PDF bytes themselves go straight
 // to Google Drive over the network and are never written to Supabase.
 // Download re-fetches the bytes from Drive on demand rather than caching them.
-function DriveFileCell({ driveFile, db, updateSlice, onChange, folderKey }) {
+// `namePrefix` (no extension), when provided, standardizes the name of a
+// FRESH upload only — see nextFileNamePrefix. Replacing an existing file
+// always keeps whatever name Drive already has; only the very first upload
+// on a row gets renamed.
+function DriveFileCell({ driveFile, db, updateSlice, onChange, folderKey, namePrefix }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const fileInputRef = useRef(null);
@@ -1329,7 +1363,14 @@ function DriveFileCell({ driveFile, db, updateSlice, onChange, folderKey }) {
     if (!picked) return;
     setBusy(true); setError("");
     try {
-      const uploaded = await uploadDriveFile(db, updateSlice, folderKey, driveFile?.id, picked);
+      let desiredName;
+      if (driveFile) {
+        desiredName = driveFile.name; // replace: keep the existing name as-is
+      } else if (namePrefix) {
+        const ext = (picked.name.match(/\.[a-zA-Z0-9]+$/) || [".pdf"])[0];
+        desiredName = `${namePrefix}${ext}`;
+      }
+      const uploaded = await uploadDriveFile(db, updateSlice, folderKey, driveFile?.id, picked, desiredName);
       onChange(uploaded);
     } catch (err) {
       setError(err.message || "Upload failed.");
@@ -2005,7 +2046,8 @@ function ClassesTab({ db, updateSlice }) {
             { key: "status", label: "Status", type: "status", options: TASK_STATUS, width: 150 },
             {
               key: "driveFile", label: "Class Notes PDF", width: 170, type: "custom",
-              render: (rec, onChange) => <DriveFileCell driveFile={rec.driveFile} db={db} updateSlice={updateSlice} onChange={onChange} folderKey="classes" />,
+              render: (rec, onChange) => <DriveFileCell driveFile={rec.driveFile} db={db} updateSlice={updateSlice} onChange={onChange} folderKey="classes"
+                  namePrefix={nextFileNamePrefix(db.classes, rec, r => normKey(r.subject, r.subtopic || r.topic), [rec.subject, rec.subtopic || rec.topic])} />,
             },
           ]}
           newRecord={() => ({ date: todayISO(), subject: db.settings.subjects[0] || "", classNumber: "", topic: "", subtopic: "", microtopics: [], eta: "", status: "Not Started", syllabusId: null, driveFile: null })}
@@ -2244,7 +2286,8 @@ function SinglePagerTab({ db, updateSlice }) {
           { key: "status", label: "Status", type: "status", options: SP_STATUS, width: 120 },
           {
             key: "driveFile", label: "Single Page PDF", width: 170, type: "custom",
-            render: (rec, onChange) => <DriveFileCell driveFile={rec.driveFile} db={db} updateSlice={updateSlice} onChange={onChange} folderKey="singlePager" />,
+            render: (rec, onChange) => <DriveFileCell driveFile={rec.driveFile} db={db} updateSlice={updateSlice} onChange={onChange} folderKey="singlePager"
+                namePrefix={nextFileNamePrefix(db.singlePager, rec, r => normKey(r.subject, r.subtopic || r.topic), [rec.subject, rec.subtopic || rec.topic])} />,
           },
           { key: "revision", label: "Revision", type: "status", options: READ_STATUS, width: 130 },
         ]}
@@ -2421,7 +2464,8 @@ function TamilTab({ db, updateSlice }) {
             { key: "notes", label: "What I've Learned", type: "textarea", width: 220 },
             {
               key: "driveFile", label: "PDF", width: 170, type: "custom",
-              render: (rec, onChange) => <DriveFileCell driveFile={rec.driveFile} db={db} updateSlice={updateSlice} onChange={onChange} folderKey="tamilReading" />,
+              render: (rec, onChange) => <DriveFileCell driveFile={rec.driveFile} db={db} updateSlice={updateSlice} onChange={onChange} folderKey="tamilReading"
+              namePrefix={nextFileNamePrefix(db.tamilReading, rec, r => normKey(r.topic), ["TamilLiterature", rec.topic])} />,
             },
           ]}
           newRecord={() => ({ topic: "", source: "", notes: "", driveFile: null })}
@@ -2449,7 +2493,8 @@ function TamilTab({ db, updateSlice }) {
             { key: "status", label: "Status", type: "status", options: TASK_STATUS, width: 140 },
             {
               key: "driveFile", label: "Answer PDF", width: 170, type: "custom",
-              render: (rec, onChange) => <DriveFileCell driveFile={rec.driveFile} db={db} updateSlice={updateSlice} onChange={onChange} folderKey="tamilWriting" />,
+              render: (rec, onChange) => <DriveFileCell driveFile={rec.driveFile} db={db} updateSlice={updateSlice} onChange={onChange} folderKey="tamilWriting"
+              namePrefix={nextFileNamePrefix(db.tamilWriting, rec, r => normKey(r.topic), ["TamilLiterature", rec.topic])} />,
             },
           ]}
           newRecord={() => ({ date: todayISO(), topic: "", question: "", wordLimit: 150, answerWritten: "", selfEvaluation: "", marksScored: "", marksMax: "", status: "Not Started", driveFile: null })}
@@ -2545,7 +2590,8 @@ function CurrentAffairsTab({ db, updateSlice }) {
           },
           {
             key: "driveFile", label: "Clipping / PDF", width: 170, type: "custom",
-            render: (rec, onChange) => <DriveFileCell driveFile={rec.driveFile} db={db} updateSlice={updateSlice} onChange={onChange} folderKey="currentAffairs" />,
+            render: (rec, onChange) => <DriveFileCell driveFile={rec.driveFile} db={db} updateSlice={updateSlice} onChange={onChange} folderKey="currentAffairs"
+                namePrefix={nextFileNamePrefix(db.currentAffairs, rec, r => normKey(r.subject, r.subtopic || r.relevantSyllabusTopic), [rec.subject, rec.subtopic || rec.relevantSyllabusTopic])} />,
           },
         ]}
         newRecord={() => ({ date: todayISO(), title: "", source: CA_SOURCES[0], subject: "", subtopic: "", microtopic: "", relevantSyllabusTopic: "", notes: "", driveFile: null, syllabusId: null })}
@@ -2593,7 +2639,8 @@ function AnswerWritingTab({ db, updateSlice }) {
           { key: "improvementNotes", label: "Improvement Notes", type: "textarea", width: 200 },
           {
             key: "driveFile", label: "Answer PDF", width: 170, type: "custom",
-            render: (rec, onChange) => <DriveFileCell driveFile={rec.driveFile} db={db} updateSlice={updateSlice} onChange={onChange} folderKey="answerWriting" />,
+            render: (rec, onChange) => <DriveFileCell driveFile={rec.driveFile} db={db} updateSlice={updateSlice} onChange={onChange} folderKey="answerWriting"
+                namePrefix={nextFileNamePrefix(db.answerWriting, rec, r => normKey(r.gsPaper, r.topic), [rec.gsPaper, rec.topic])} />,
           },
         ]}
         newRecord={() => ({ date: todayISO(), gsPaper: "GS1", topic: "", question: "", wordLimit: 150, answer: "", status: "Not Started", selfScore: "", improvementNotes: "", driveFile: null })}

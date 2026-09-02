@@ -330,6 +330,24 @@ summary will do.
   falls back to the legacy singular `settings.driveFolderId` only for the
   `singlePager` key, to avoid creating a duplicate folder for existing
   users; new folder ids live in `settings.driveFolders[folderKey]`.
+- **First-time uploads get a standardized name; replacing an existing file
+  never renames it.** `DriveFileCell`'s `namePrefix` prop (built per call
+  site by `nextFileNamePrefix`) supplies something like
+  `Polity_FundamentalRights_2` (no extension — `DriveFileCell` appends the
+  uploaded file's own extension), where the trailing number is per
+  subject+subtopic (or whatever grouping that tracker's call site passes —
+  Tamil uses a fixed "TamilLiterature" label + Topic since it has no
+  Subject/Subtopic; GS Answer Writing uses GS Paper + Topic since it has
+  no Subject at all). **This is deliberately only computed for a row with
+  no existing `driveFile` yet — a replace always keeps the current name
+  as-is, full stop, never recomputing.** This isn't an oversight: reusing
+  the numbering logic on replace risks two files colliding on the same
+  number whenever upload order and row order diverge (row A uploaded
+  second gets "_2"; later replacing row B, uploaded first as "_1", would
+  ask for "how many others already have a file" and get the same "_2"
+  answer, since the count doesn't know which specific number a given row
+  was assigned — only "keep whatever's already there" avoids this
+  correctly, rather than trying to solve it with more clever counting).
   `DriveDownloadLink` is the read-only variant used in Topic Master, which
   has no `updateSlice` to support uploading.
 - **Import/export**: `xlsx` for Excel, plus JSON export, applied generically
