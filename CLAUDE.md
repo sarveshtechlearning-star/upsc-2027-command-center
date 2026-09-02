@@ -163,6 +163,62 @@ summary will do.
   problem, extend it the same way rather than inventing a different
   mechanism. AI Learning remains the one full exception (Topic stays free
   text — it's explicitly personal/outside the UPSC syllabus).
+- **Every Syllabus row auto-created from a "+ Add new" flow (Classes,
+  NCERT, Standard Books, Current Affairs) gets a guessed `gsPaper` via
+  `defaultGsPaperForSubject`, not a hardcoded blank.** It prefers the most
+  common `gsPaper` already used for that subject elsewhere in Syllabus
+  (respects the person's own convention, and works for subjects
+  `SUBJECT_TO_GS_PAPER` doesn't know about), falling back to that
+  hardcoded standard-UPSC map only when there's no existing data for the
+  subject yet. The one place this is deliberately NOT applied is
+  Syllabus's own "Add row" (`newRecord`) — at that point `subject` is
+  still blank too, so there's nothing yet to infer from.
+- **Fixing a typo or a wrong Subject/Topic/Subtopic/Micro Topic pick is a
+  cascading rename (`renameSyllabusValue`), not a per-row edit.** The
+  pencil icon next to each of these on the Syllabus tab
+  (`CascadingSelectCell`'s `onRename`) reuses the same inline text-input
+  UI as "+ Add new", but instead of creating something new or only
+  touching the current row, it corrects the value everywhere it's used —
+  every other Syllabus row sharing that value, and the matching
+  subject/topic/subtopic/microtopic text on Classes/Reading/Single
+  Pager/NCERT/Standard Books/Current Affairs (Tamil too, for a Topic
+  rename under Tamil Literature specifically), plus `settings.subjects`
+  for a Subject rename. This exists because Subject/Topic/Subtopic are
+  plain repeated strings, not a normalized entity with one stable id — a
+  plain per-row edit would silently fork the data into two spellings
+  instead of correcting it. **GS Answer Writing is deliberately excluded**
+  from every rename cascade — it has no `subject` field, only
+  `gsPaper`+`topic`, so there's no reliable way to confirm one of its rows
+  actually belongs to the subject being renamed without risking a false
+  match against an unrelated subject that happens to reuse a topic name.
+  Classes' Micro Topic tags need no separate handling for a microtopic
+  rename: an id-based tag resolves its displayed label from the Syllabus
+  row itself (already renamed by this same call), so only a legacy
+  plain-text tag whose value literally equals the old text needs updating
+  — `renameSyllabusValue` handles this distinction internally. If you add
+  a new tracker with its own subject/topic/subtopic/microtopic copy,
+  add it to the relevant cascade list(s) here — a rename that silently
+  misses one tracker is worse than no rename feature at all, since it
+  looks correct everywhere you happened to check.
+- **Classes, Single Pager, Tamil Writing, and GS Answer Writing gate
+  completion behind having a file uploaded, and lock the row once
+  Completed — `GenericTracker`'s `completionRequiresUpload` prop, opted
+  into only by those four (the trackers with both a Status column and a
+  `driveFile` column).** Trying to set Status to "Completed" without
+  `rec.driveFile` set pops a `window.alert` naming the specific file
+  column (looked up from `columns`, not hardcoded) and refuses the
+  change outright — no flash of "Completed" before reverting. Once a row
+  IS Completed, every other cell locks: visually (wrapped in a
+  `pointer-events: none`, dimmed `<div>`) and structurally (`updateField`/
+  `updateFields` refuse non-status changes on a Completed row as a
+  backstop behind the visual lock, in case something ever manages to
+  dispatch a change without going through the disabled UI). The status
+  field itself stays fully interactive on a locked row — changing it away
+  from "Completed" is the deliberate, only escape hatch for fixing a
+  mistake after the fact, not an oversight. Reading (six different status
+  columns, no `driveFile` at all) and every other tracker are unaffected
+  by design — `completionRequiresUpload` is opt-in per tracker, not a
+  global behavior of `GenericTracker`.
 - **Source Identified (Syllabus tab)** is read-only and fully computed —
   never add a way to set it by hand. `isSourceIdentifiedForMicrotopic(db,
   syllabusRow)` takes the whole row (not separate fields) so it can match
