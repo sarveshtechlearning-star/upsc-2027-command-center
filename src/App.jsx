@@ -409,22 +409,60 @@ function minutesToTime(mins) {
 }
 function normKey(...parts) { return parts.map(p => String(p || "").trim().toLowerCase()).join("|"); }
 function slugify(s) { return String(s || "").trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "") || "none"; }
+// Building topics/subtopics/microtopics fresh by filtering db.syllabus on
+// every call was fine at small scale, but each of these is invoked once per
+// row in every table that renders a cascading dropdown — with N syllabus
+// rows that's O(N) work called up to N times just for one column, i.e.
+// O(N²). Past roughly a thousand rows that's slow enough to hang the page.
+// This builds all three lookup tables in a single O(N) pass and caches them
+// against the exact db.syllabus array reference, so every row in every
+// table reuses the same cache during a render and it only rebuilds when
+// the syllabus data actually changes (a new array reference).
+const _syllabusIndexCache = new WeakMap();
+function getSyllabusIndex(db) {
+  let idx = _syllabusIndexCache.get(db.syllabus);
+  if (idx) return idx;
+  const topicsBySubject = new Map();
+  const subtopicsByKey = new Map();
+  const microtopicsByKey = new Map();
+  const rowOptionsByKey = new Map();
+  db.syllabus.forEach(s => {
+    if (s.topic) {
+      if (!topicsBySubject.has(s.subject)) topicsBySubject.set(s.subject, new Set());
+      topicsBySubject.get(s.subject).add(s.topic);
+    }
+    if (s.subtopic) {
+      const k1 = s.subject + "\u0000" + s.topic;
+      if (!subtopicsByKey.has(k1)) subtopicsByKey.set(k1, new Set());
+      subtopicsByKey.get(k1).add(s.subtopic);
+    }
+    if (s.microtopic) {
+      const k2 = s.subject + "\u0000" + s.topic + "\u0000" + s.subtopic;
+      if (!microtopicsByKey.has(k2)) microtopicsByKey.set(k2, new Set());
+      microtopicsByKey.get(k2).add(s.microtopic);
+      if (!rowOptionsByKey.has(k2)) rowOptionsByKey.set(k2, []);
+      rowOptionsByKey.get(k2).push({ value: s.id, label: s.microtopic });
+    }
+  });
+  idx = { topicsBySubject, subtopicsByKey, microtopicsByKey, rowOptionsByKey };
+  _syllabusIndexCache.set(db.syllabus, idx);
+  return idx;
+}
 // Narrowest cascade level: micro-topics already used under one specific
 // subject/topic/subtopic combination — powers the Micro Topic dropdown on
 // the Syllabus tab.
 function microtopicOptionsForSubtopic(db, subject, topic, subtopic) {
-  const set = new Set();
-  db.syllabus.filter(s => s.subject === subject && s.topic === topic && s.subtopic === subtopic && s.microtopic).forEach(s => set.add(s.microtopic));
-  return Array.from(set);
+  const idx = getSyllabusIndex(db);
+  const set = idx.microtopicsByKey.get(subject + "\u0000" + topic + "\u0000" + subtopic);
+  return set ? Array.from(set) : [];
 }
 // Same rows as microtopicOptionsForSubtopic, but as { value: syllabusRowId,
 // label: microtopicText } pairs — for Classes' Micro Topic tag picker,
 // where each tag stores a stable Syllabus row id (see TagMultiSelectCell)
 // rather than the microtopic text itself, so a tag survives a later rename.
 function syllabusRowOptionsForSubtopic(db, subject, topic, subtopic) {
-  return db.syllabus
-    .filter(s => s.subject === subject && s.topic === topic && s.subtopic === subtopic && s.microtopic)
-    .map(s => ({ value: s.id, label: s.microtopic }));
+  const idx = getSyllabusIndex(db);
+  return idx.rowOptionsByKey.get(subject + "\u0000" + topic + "\u0000" + subtopic) || [];
 }
 // Resolves the stable Syllabus row id for a subject/topic/(subtopic)
 // combination, so other trackers can store a real foreign key instead of
@@ -448,7 +486,9 @@ function findSyllabusId(db, { subject, topic, subtopic, microtopic }) {
 // Counts records elsewhere that reference this Syllabus row (by id, or by
 // text for records saved before syllabusId existed) — used to warn before
 // deleting a row that other trackers still point to, since those records
-// would otherwise silently go stale with no indication why.
+// would otherwise silently go stale with no indication why. Only runs on
+// an explicit delete click, not during render, so it doesn't need the
+// caching above.
 function countSyllabusRowReferences(db, row) {
   let count = 0;
   count += db.classes.filter(c => c.syllabusId === row.id || (c.microtopics || []).some(m => m === row.id || (row.microtopic && normKey(m) === normKey(row.microtopic)))).length;
@@ -465,14 +505,12 @@ function countSyllabusRowReferences(db, row) {
 // other tracker's topic dropdown reads from these, so nothing but Syllabus
 // data ever appears as a selectable option going forward.
 function syllabusTopicsForSubject(db, subject) {
-  const set = new Set();
-  db.syllabus.filter(s => s.subject === subject && s.topic).forEach(s => set.add(s.topic));
-  return Array.from(set);
+  const set = getSyllabusIndex(db).topicsBySubject.get(subject);
+  return set ? Array.from(set) : [];
 }
 function syllabusSubtopicsForTopic(db, subject, topic) {
-  const set = new Set();
-  db.syllabus.filter(s => s.subject === subject && s.topic === topic && s.subtopic).forEach(s => set.add(s.subtopic));
-  return Array.from(set);
+  const set = getSyllabusIndex(db).subtopicsByKey.get(subject + "\u0000" + topic);
+  return set ? Array.from(set) : [];
 }
 // Read-only, auto-computed "have I identified a source for this micro
 // topic" check (Syllabus tab's Source Identified column, and the
@@ -484,17 +522,38 @@ function syllabusSubtopicsForTopic(db, subject, topic) {
 // or Standard Books; No otherwise. No micro topic on the row at all means
 // there's nothing to check yet, so callers should treat that as its own
 // "—" state.
+// Like getSyllabusIndex above, this scans Classes/NCERT/Standard Books once
+// per db reference and caches the result, rather than re-scanning all three
+// for every Syllabus row — same O(N²)-to-O(N) fix, same reason it matters.
+const _sourceIdentifiedCache = new WeakMap();
+function getSourceIdentifiedIndex(db) {
+  let idx = _sourceIdentifiedCache.get(db);
+  if (idx) return idx;
+  const idSet = new Set();
+  const textKeySet = new Set();
+  db.classes.forEach(c => {
+    (c.microtopics || []).forEach(m => {
+      idSet.add(m); // harmless if m is legacy text rather than an id — it just won't match any real syllabus id
+      textKeySet.add(normKey(c.subject, c.topic, c.subtopic, m));
+    });
+  });
+  db.ncert.forEach(n => {
+    if (n.syllabusId) idSet.add(n.syllabusId);
+    textKeySet.add(normKey(n.subject, n.topic, n.subtopic, n.microtopic));
+  });
+  db.standardBooks.forEach(s => {
+    if (s.syllabusId) idSet.add(s.syllabusId);
+    textKeySet.add(normKey(s.subject, s.topic, s.subtopic, s.microtopic));
+  });
+  idx = { idSet, textKeySet };
+  _sourceIdentifiedCache.set(db, idx);
+  return idx;
+}
 function isSourceIdentifiedForMicrotopic(db, syllabusRow) {
   const { id, subject, topic, subtopic, microtopic } = syllabusRow;
   if (!microtopic) return false;
-  const key = normKey(subject, topic, subtopic, microtopic);
-  const inClasses = db.classes.some(c => (c.microtopics || []).some(m =>
-    m === id || normKey(c.subject, c.topic, c.subtopic, m) === key
-  ));
-  if (inClasses) return true;
-  const inNcert = db.ncert.some(n => n.syllabusId === id || normKey(n.subject, n.topic, n.subtopic, n.microtopic) === key);
-  if (inNcert) return true;
-  return db.standardBooks.some(s => s.syllabusId === id || normKey(s.subject, s.topic, s.subtopic, s.microtopic) === key);
+  const idx = getSourceIdentifiedIndex(db);
+  return idx.idSet.has(id) || idx.textKeySet.has(normKey(subject, topic, subtopic, microtopic));
 }
 function weekStartISO(iso) {
   const [y, m, d] = iso.split("-").map(Number);
