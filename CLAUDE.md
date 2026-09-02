@@ -142,21 +142,27 @@ summary will do.
   and clears both fields directly. Don't reintroduce a single daily-level
   reflection/skip-reason field — that was tried and explicitly replaced by
   per-block reasons.
-- **Topic governance**: Syllabus and Current Affairs are the only two
-  trackers where a genuinely new Topic/Subtopic/Micro Topic can be created
-  (`CascadingSelectCell` with `allowAddNew` true/default). Current
-  Affairs' "+ Add new" writes a real row into the Syllabus tracker rather
-  than storing free text locally. Every other tracker (Classes, Reading,
-  Single Pager, NCERT, Standard Books, Tamil Reading/Writing, GS Answer
-  Writing) renders the same component with `allowAddNew={false}` and reads
-  its options from the strict `syllabusTopicsForSubject` /
-  `syllabusSubtopicsForTopic` helpers — selection only, no creation. AI
-  Learning is the one deliberate exception: it's explicitly personal/
-  outside the UPSC syllabus, so its Topic field stays free text. Classes
-  additionally supports tagging multiple Micro Topics per row via
-  `TagMultiSelectCell` (same "select only" rule, scoped to the row's
-  Subtopic). Keep new topic-entry UI consistent with this pattern rather
-  than adding another ad hoc free-text field.
+- **Topic governance — Subject/Topic/Subtopic vs. Micro Topic have
+  different rules, don't conflate them.** Subject/Topic/Subtopic can only
+  be newly created on Syllabus or Current Affairs (`CascadingSelectCell`
+  with `allowAddNew` true/default; Current Affairs' "+ Add new" writes a
+  real row into Syllabus rather than storing free text locally). Every
+  other tracker's Subject/Topic/Subtopic stays `allowAddNew={false}`,
+  reading strictly from `syllabusTopicsForSubject` /
+  `syllabusSubtopicsForTopic` — selection only, no creation, no exceptions.
+  **Micro Topic is different since the request to relax it**: Classes
+  (via `TagMultiSelectCell`'s `allowAddNew`/`onAddNew`), NCERT, and
+  Standard Books all allow typing a brand new Micro Topic directly, not
+  just Syllabus/Current Affairs. Typing one and confirming creates a real
+  Syllabus row (subject/topic/subtopic inherited from the row being
+  edited) exactly like Current Affairs' add-new already did — never free
+  text stored only on that row — so it's immediately selectable
+  everywhere else too (Syllabus, Reading, Single Pager, Current Affairs)
+  once it exists. Reading/Single Pager's Micro Topic were deliberately
+  left `allowAddNew={false}` (not requested) — if that gap becomes a
+  problem, extend it the same way rather than inventing a different
+  mechanism. AI Learning remains the one full exception (Topic stays free
+  text — it's explicitly personal/outside the UPSC syllabus).
 - **Source Identified (Syllabus tab)** is read-only and fully computed —
   never add a way to set it by hand. `isSourceIdentifiedForMicrotopic(db,
   syllabusRow)` takes the whole row (not separate fields) so it can match
