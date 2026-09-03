@@ -143,6 +143,19 @@ summary will do.
   with non-empty `journal` text, "Skipped" counts `block.skipped`, and the
   per-day list shows each block's real start/end (via `computePlanTimes`,
   since the stored plan only has `duration`) alongside its journal text.
+- **"Add existing task" brings back a slot `applyTrimRules` dropped** —
+  computed fresh each render as `buildBaseBlocks(dayType, settings)` minus
+  whatever's already in `plan.blocks` (by id), not stored anywhere or
+  derived from `droppedLabels` (that array is label-only, for the
+  "Adjusted for today" note — no full block data to reconstruct from).
+  Only ever contains `REMOVAL_ORDER` slots (study/AI) for this reason:
+  Office/commute are never in `REMOVAL_ORDER` so they're never "missing"
+  this way, and a slot disabled entirely via Settings never reaches
+  `buildBaseBlocks`'s output at all, so it never shows up here either —
+  this is specifically for slots that exist today but got trimmed for
+  not fitting. Re-added blocks get `restored: true` so they're removable
+  again via the same control as a custom task (`b.custom || b.restored`),
+  unlike a normal auto-generated block.
   There is no separate end-of-day review anymore (`db.dailyReviews` stays
   defined in the data model/reset flow for old stored data, but nothing
   reads or writes it) — skip reasons live per-block instead: checking a
