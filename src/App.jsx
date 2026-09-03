@@ -2136,15 +2136,13 @@ function SyllabusTab({ db, updateSlice }) {
           <strong>Subject → Topic → Subtopic → Micro Topic</strong> are linked — pick each in order, or choose <strong>+ Add new</strong> to type one in. These also power the subject-wise dropdowns on the Class Lecture slot in Today's plan. New subjects are added to the shared list on the Settings tab automatically.
         </div>
         <div className="ucc-tiny" style={{ marginTop: 6, color: "var(--ink-muted)" }}>
-          Made a typo or picked the wrong one? Click the <Pencil size={11} style={{ verticalAlign: "middle" }} /> next to any Subject/Topic/Subtopic/Micro Topic to correct it — this fixes it everywhere it's used (Classes, NCERT, Standard Books, etc.), not just on this row.
-        </div>
-        <div className="ucc-tiny" style={{ marginTop: 6, color: "var(--ink-muted)" }}>
-          Filed a Micro Topic under the wrong Subtopic? Just re-pick the correct Subtopic in the dropdown on that row — the Micro Topic stays as-is and moves with it.
+          Picked the wrong Paper/Subject/Topic/Subtopic, or typo'd the Micro Topic, on a row? Just fix that field directly on the row below — it only changes this row, nothing else. To rename a Subject/Topic/Subtopic/Micro Topic <em>everywhere it's used</em> (a genuine spelling fix), use "Rename a term" below instead.
         </div>
         <div className="ucc-tiny" style={{ marginTop: 6, color: "var(--ink-muted)" }}>
           <strong>Source Identified</strong> is read-only — it's Yes automatically once this exact Micro Topic appears in Classes, NCERT, or Standard Books, and No (or — with no Micro Topic set) otherwise.
         </div>
       </div>
+      <SyllabusTermRenamer db={db} updateSlice={updateSlice} />
       <div className="ucc-card">
         <h3>All syllabus items</h3>
         <GenericTracker
@@ -2159,18 +2157,25 @@ function SyllabusTab({ db, updateSlice }) {
           columns={[
             { key: "gsPaper", label: "GS Paper", type: "select", options: GS_PAPER_OPTIONS, width: 140 },
             {
+              // Plain reassignment cell: picking a different existing Subject
+              // (or typing a new one) only ever changes this row's own
+              // subject field. It deliberately does NOT clear
+              // topic/subtopic/microtopic — this row's other fields might
+              // already be correct and shouldn't be wiped out just because
+              // the subject was mis-picked. Renaming a subject's *text*
+              // everywhere it's used lives separately in
+              // SyllabusTermRenamer above, not here.
               key: "subject", label: "Subject", width: 160, type: "custom",
               render: (rec, _onChange, updateRecord) => (
                 <CascadingSelectCell
                   value={rec.subject} options={db.settings.subjects} placeholder="Select subject…"
-                  onSelect={v => updateRecord({ subject: v, topic: "", subtopic: "", microtopic: "" })}
+                  onSelect={v => updateRecord({ subject: v })}
                   onAddNew={name => {
                     // New subjects join the shared master list (Settings tab)
                     // so they immediately appear in every other subject dropdown.
                     updateSlice("settings", s => (s.subjects.includes(name) ? s : { ...s, subjects: [...s.subjects, name] }));
-                    updateRecord({ subject: name, topic: "", subtopic: "", microtopic: "" });
+                    updateRecord({ subject: name });
                   }}
-                  onRename={name => renameSyllabusValue(db, updateSlice, "subject", {}, rec.subject, name)}
                 />
               ),
             },
@@ -2180,9 +2185,8 @@ function SyllabusTab({ db, updateSlice }) {
                 <CascadingSelectCell
                   value={rec.topic} options={syllabusTopicsForSubject(db, rec.subject)}
                   placeholder={rec.subject ? "Select topic…" : "Select subject first"} disabled={!rec.subject}
-                  onSelect={v => updateRecord({ topic: v, subtopic: "", microtopic: "" })}
-                  onAddNew={name => updateRecord({ topic: name, subtopic: "", microtopic: "" })}
-                  onRename={name => renameSyllabusValue(db, updateSlice, "topic", { subject: rec.subject }, rec.topic, name)}
+                  onSelect={v => updateRecord({ topic: v })}
+                  onAddNew={name => updateRecord({ topic: name })}
                 />
               ),
             },
@@ -2192,31 +2196,18 @@ function SyllabusTab({ db, updateSlice }) {
                 <CascadingSelectCell
                   value={rec.subtopic} options={syllabusSubtopicsForTopic(db, rec.subject, rec.topic)}
                   placeholder={rec.topic ? "Select subtopic…" : "Select topic first"} disabled={!rec.topic}
-                  // Deliberately keeps the existing Micro Topic text when the
-                  // Subtopic is switched, unlike every other tracker's subtopic
-                  // cell (which clears it). On this tab a row IS the micro
-                  // topic entity — switching Subtopic here is a reparent of
-                  // that micro topic to a different existing/new Subtopic, not
-                  // a fresh classification pick, so the micro topic value
-                  // should survive the move. Safe because other trackers key
-                  // off this row's stable id (syllabusId), not this text.
                   onSelect={v => updateRecord({ subtopic: v })}
                   onAddNew={name => updateRecord({ subtopic: name })}
-                  onRename={name => renameSyllabusValue(db, updateSlice, "subtopic", { subject: rec.subject, topic: rec.topic }, rec.subtopic, name)}
                 />
               ),
             },
             {
-              key: "microtopic", label: "Micro Topic", width: 200, type: "custom",
-              render: (rec, _onChange, updateRecord) => (
-                <CascadingSelectCell
-                  value={rec.microtopic} options={microtopicOptionsForSubtopic(db, rec.subject, rec.topic, rec.subtopic)}
-                  placeholder={rec.subtopic ? "Select micro topic…" : "Select subtopic first"} disabled={!rec.subtopic}
-                  onSelect={v => updateRecord({ microtopic: v })}
-                  onAddNew={name => updateRecord({ microtopic: name })}
-                  onRename={name => renameSyllabusValue(db, updateSlice, "microtopic", { subject: rec.subject, topic: rec.topic, subtopic: rec.subtopic }, rec.microtopic, name)}
-                />
-              ),
+              // Plain editable text, not a dropdown — a Micro Topic is this
+              // row's own identity, so fixing a typo should be a direct edit
+              // right here, with no "rename everywhere" side effect (nothing
+              // else references this row's old text yet if it was just
+              // mistyped while adding).
+              key: "microtopic", label: "Micro Topic", width: 200, placeholder: "Micro topic…",
             },
             {
               key: "sourceIdentified", label: "Source Identified", width: 130, type: "custom",
@@ -2231,6 +2222,127 @@ function SyllabusTab({ db, updateSlice }) {
           emptyMessage="No syllabus items yet — click Add row below to add your first topic."
         />
       </div>
+    </div>
+  );
+}
+
+// Dedicated, separate tool for the one genuinely different operation:
+// renaming a Subject/Topic/Subtopic/Micro Topic's *text* everywhere it's
+// used (Classes, NCERT, Standard Books, etc.) — for fixing a real spelling
+// mistake in a shared name, not for correcting one row's own selection
+// (that happens inline in the table above via renameSyllabusValue).
+// Kept as its own collapsed-by-default panel so it's never confused with,
+// or accidentally triggered from, the per-row editing controls.
+function SyllabusTermRenamer({ db, updateSlice }) {
+  const [open, setOpen] = useState(false);
+  const [level, setLevel] = useState("subject");
+  const [subject, setSubject] = useState("");
+  const [topic, setTopic] = useState("");
+  const [subtopic, setSubtopic] = useState("");
+  const [oldValue, setOldValue] = useState("");
+  const [newValue, setNewValue] = useState("");
+  const [done, setDone] = useState("");
+
+  const topicOptions = subject ? syllabusTopicsForSubject(db, subject) : [];
+  const subtopicOptions = (subject && topic) ? syllabusSubtopicsForTopic(db, subject, topic) : [];
+  const microtopicOptions = (subject && topic && subtopic) ? microtopicOptionsForSubtopic(db, subject, topic, subtopic) : [];
+  const valueOptions = level === "subject" ? db.settings.subjects
+    : level === "topic" ? topicOptions
+    : level === "subtopic" ? subtopicOptions
+    : microtopicOptions;
+  const contextReady = level === "subject" ? true
+    : level === "topic" ? !!subject
+    : level === "subtopic" ? !!(subject && topic)
+    : !!(subject && topic && subtopic);
+
+  function resetForm() {
+    setSubject(""); setTopic(""); setSubtopic(""); setOldValue(""); setNewValue("");
+  }
+
+  function handleRename() {
+    const trimmed = newValue.trim();
+    if (!oldValue || !trimmed || trimmed === oldValue) return;
+    const context = level === "subject" ? {} : level === "topic" ? { subject } : level === "subtopic" ? { subject, topic } : { subject, topic, subtopic };
+    renameSyllabusValue(db, updateSlice, level, context, oldValue, trimmed);
+    setDone(`Renamed "${oldValue}" to "${trimmed}" everywhere it's used.`);
+    setOldValue(""); setNewValue("");
+    setTimeout(() => setDone(""), 5000);
+  }
+
+  return (
+    <div className="ucc-card">
+      <h3>Rename a term</h3>
+      <p className="ucc-tiny">
+        For fixing a spelling mistake in a Subject/Topic/Subtopic/Micro Topic name that's already used across multiple rows or trackers — this renames it everywhere (Classes, NCERT, Standard Books, etc.), not just one row.
+      </p>
+      {!open ? (
+        <button className="ucc-btn ghost" onClick={() => setOpen(true)}><Pencil size={13} /> Rename a term</button>
+      ) : (
+        <div style={{ border: "1px solid var(--line)", borderRadius: 8, padding: 12 }}>
+          <div className="ucc-grid">
+            <div>
+              <label className="ucc-tiny">Level</label>
+              <select className="ucc-select" value={level}
+                onChange={e => { setLevel(e.target.value); resetForm(); }}>
+                <option value="subject">Subject</option>
+                <option value="topic">Topic</option>
+                <option value="subtopic">Subtopic</option>
+                <option value="microtopic">Micro Topic</option>
+              </select>
+            </div>
+            {level !== "subject" && (
+              <div>
+                <label className="ucc-tiny">Subject</label>
+                <select className="ucc-select" value={subject}
+                  onChange={e => { setSubject(e.target.value); setTopic(""); setSubtopic(""); setOldValue(""); }}>
+                  <option value="">Select subject…</option>
+                  {db.settings.subjects.map(o => <option key={o} value={o}>{o}</option>)}
+                </select>
+              </div>
+            )}
+            {(level === "subtopic" || level === "microtopic") && (
+              <div>
+                <label className="ucc-tiny">Topic</label>
+                <select className="ucc-select" value={topic} disabled={!subject}
+                  onChange={e => { setTopic(e.target.value); setSubtopic(""); setOldValue(""); }}>
+                  <option value="">Select topic…</option>
+                  {topicOptions.map(o => <option key={o} value={o}>{o}</option>)}
+                </select>
+              </div>
+            )}
+            {level === "microtopic" && (
+              <div>
+                <label className="ucc-tiny">Subtopic</label>
+                <select className="ucc-select" value={subtopic} disabled={!topic}
+                  onChange={e => { setSubtopic(e.target.value); setOldValue(""); }}>
+                  <option value="">Select subtopic…</option>
+                  {subtopicOptions.map(o => <option key={o} value={o}>{o}</option>)}
+                </select>
+              </div>
+            )}
+            <div>
+              <label className="ucc-tiny">Current value</label>
+              <select className="ucc-select" value={oldValue} disabled={!contextReady}
+                onChange={e => setOldValue(e.target.value)}>
+                <option value="">Select value…</option>
+                {valueOptions.map(o => <option key={o} value={o}>{o}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="ucc-tiny">New value</label>
+              <input className="ucc-input" value={newValue} onChange={e => setNewValue(e.target.value)}
+                placeholder="Corrected spelling" disabled={!oldValue} />
+            </div>
+          </div>
+          <div className="ucc-flex" style={{ marginTop: 10 }}>
+            <button className="ucc-btn primary" disabled={!oldValue || !newValue.trim() || newValue.trim() === oldValue} onClick={handleRename}>
+              <Check size={13} /> Rename everywhere
+            </button>
+            <button className="ucc-btn ghost" onClick={() => { setOpen(false); resetForm(); }}>Cancel</button>
+          </div>
+        </div>
+      )}
+      {done && <div className="ucc-tiny" style={{ marginTop: 8, color: "var(--green)" }}>{done}</div>}
     </div>
   );
 }
