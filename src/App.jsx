@@ -3498,18 +3498,40 @@ function DashboardTab({ db }) {
     return Array.from(seen.values());
   }, [db.syllabus]);
 
-  // A subtopic is "sourced" if any Classes/NCERT/Standard Books record's
-  // own subject+topic+subtopic matches it — regardless of that record's
-  // own Micro Topic (or lack of one). Built once as a Set (not scanned
-  // per subtopic row) for the same reason the Syllabus-lookup caches
-  // exist: this is O(records) once instead of O(subtopics × records).
+  // A subtopic is "sourced" if any Classes/NCERT/Standard Books record
+  // tags it — regardless of that record's own Micro Topic (or lack of
+  // one). Classes/NCERT/Standard Books rows added from their own tab tag a
+  // Syllabus row by id in `microtopics` (see microtopicTagColumn /
+  // classMatchesSyllabusRow) — they don't carry a literal subject/topic/
+  // subtopic of their own — so a record's tagged ids have to be resolved
+  // back to the Syllabus row they point at to find its subtopic. Rows
+  // brought in via the Excel importer are also handled: those keep their
+  // own literal subject/topic/subtopic fields (only their microtopic
+  // column becomes a `microtopics` tag), so that legacy shape is checked
+  // too. Built once as a Set (not scanned per subtopic row) for the same
+  // reason the Syllabus-lookup caches exist: this is O(records + syllabus)
+  // once instead of O(subtopics × records).
   const sourcedSubtopicKeys = useMemo(() => {
+    const subtopicKeyBySyllabusId = new Map();
+    db.syllabus.forEach(row => {
+      if (!row.subtopic) return;
+      subtopicKeyBySyllabusId.set(row.id, normKey(row.subject, row.topic, row.subtopic));
+    });
     const keys = new Set();
-    db.classes.forEach(c => { if (c.subtopic) keys.add(normKey(c.subject, c.topic, c.subtopic)); });
-    db.ncert.forEach(n => { if (n.subtopic) keys.add(normKey(n.subject, n.topic, n.subtopic)); });
-    db.standardBooks.forEach(s => { if (s.subtopic) keys.add(normKey(s.subject, s.topic, s.subtopic)); });
+    const addFromTagged = records => {
+      records.forEach(rec => {
+        if (rec.subtopic) keys.add(normKey(rec.subject, rec.topic, rec.subtopic)); // legacy imported rows
+        [rec.syllabusId, ...(rec.microtopics || [])].filter(Boolean).forEach(id => {
+          const key = subtopicKeyBySyllabusId.get(id);
+          if (key) keys.add(key);
+        });
+      });
+    };
+    addFromTagged(db.classes);
+    addFromTagged(db.ncert);
+    addFromTagged(db.standardBooks);
     return keys;
-  }, [db.classes, db.ncert, db.standardBooks]);
+  }, [db.syllabus, db.classes, db.ncert, db.standardBooks]);
   const sourceIdentifiedCount = useMemo(
     () => subtopicRows.filter(st => sourcedSubtopicKeys.has(normKey(st.subject, st.topic, st.subtopic))).length,
     [subtopicRows, sourcedSubtopicKeys]
