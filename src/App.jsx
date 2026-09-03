@@ -989,6 +989,27 @@ function EmptyState({ children }) {
   return <div className="ucc-empty">{children}</div>;
 }
 
+// Self-contained real-time clock — keeps its own 1-second interval and
+// cleans it up on unmount, so only this small component re-renders each
+// tick rather than the whole app. Same 24-hour HH:MM:SS style used
+// everywhere else time appears in the app (Wake time input, minutesToTime).
+function LiveClock() {
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    const id = setInterval(() => setNow(new Date()), 1000);
+    return () => clearInterval(id);
+  }, []);
+  const hh = String(now.getHours()).padStart(2, "0");
+  const mm = String(now.getMinutes()).padStart(2, "0");
+  const ss = String(now.getSeconds()).padStart(2, "0");
+  return (
+    <span className="ucc-flex" style={{ gap: 4 }}>
+      <Clock size={12} />
+      <span className="ucc-mono">{hh}:{mm}:{ss}</span>
+    </span>
+  );
+}
+
 // Small dependency-free pie chart (CSS conic-gradient, no charting library)
 // for the Dashboard. `segments`: [{ label, value, color }].
 function PieChart({ segments, size = 140 }) {
@@ -1730,6 +1751,7 @@ function initDayPlan(dateISO, settings, dayType) {
   return {
     date: dateISO,
     wakeTime,
+    wakeTimeLocked: false,
     dayType: dt,
     breakNote,
     droppedLabels,
@@ -1861,8 +1883,17 @@ function TodayTab({ db, updateSlice, onNavigate }) {
     });
   }
 
+  // Wake time can only be edited once per day plan — meant to mirror
+  // reality (you wake up once), not to be freely re-typed. The first edit
+  // sets wakeTimeLocked, which disables the input; Edit (Pencil icon,
+  // same "deliberate escape hatch" pattern GenericTracker uses for
+  // Completed rows) is the only way back in, both for genuinely fixing a
+  // mistyped time and for repeated testing right now.
   function changeWakeTime(newWakeTime) {
-    setPlan(p => regeneratePlan(p, newWakeTime, p.dayType || defaultDayType(dateISO), settings));
+    setPlan(p => ({ ...regeneratePlan(p, newWakeTime, p.dayType || defaultDayType(dateISO), settings), wakeTimeLocked: true }));
+  }
+  function unlockWakeTime() {
+    setPlan(p => ({ ...p, wakeTimeLocked: false }));
   }
   function changeDayType(newDayType) {
     setPlan(p => regeneratePlan(p, p.wakeTime, newDayType, settings));
@@ -1961,9 +1992,18 @@ function TodayTab({ db, updateSlice, onNavigate }) {
             <IconBtn icon={ChevronRightIcon} onClick={() => setDateISO(d => addDaysISO(d, 1))} title="Next day" />
           </div>
           <div className="ucc-flex wrap">
-            <label className="ucc-tiny">Wake time
-              <input type="time" className="ucc-input ucc-mono" value={plan.wakeTime} onChange={e => changeWakeTime(e.target.value)} style={{ marginLeft: 6, width: 100 }} />
-            </label>
+            <div className="ucc-flex" style={{ gap: 4 }}>
+              <label className="ucc-tiny">Wake time
+                <input type="time" className="ucc-input ucc-mono" value={plan.wakeTime} disabled={plan.wakeTimeLocked}
+                  onChange={e => changeWakeTime(e.target.value)} style={{ marginLeft: 6, width: 100 }} />
+              </label>
+              {plan.wakeTimeLocked && (
+                <>
+                  <Lock size={12} style={{ color: "var(--ink-muted)" }} aria-label="Wake time locked for today" />
+                  <IconBtn icon={Pencil} onClick={unlockWakeTime} title="Unlock to edit wake time again" />
+                </>
+              )}
+            </div>
             <label className="ucc-tiny">Day type
               <select className="ucc-select" value={plan.dayType || defaultDayType(dateISO)} onChange={e => changeDayType(e.target.value)} style={{ marginLeft: 6, width: 110, display: "inline-block" }}>
                 {DAY_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
@@ -4559,7 +4599,11 @@ function Dashboard({ session }) {
           <div className="ucc-topbar">
             <div>
               <h2 className="ucc-display">{activeTabDef ? activeTabDef.label : ""}</h2>
-              <div className="sub ucc-mono">{fmtDateLong(todayISO())}</div>
+              <div className="sub ucc-mono ucc-flex" style={{ gap: 8 }}>
+                <span>{fmtDateLong(todayISO())}</span>
+                <span>•</span>
+                <LiveClock />
+              </div>
             </div>
             {saveError && <div className="ucc-tiny" style={{ color: "var(--red)" }}><AlertTriangle size={12} /> {saveError}</div>}
           </div>
