@@ -1889,6 +1889,22 @@ function TodayTab({ db, updateSlice, onNavigate }) {
       ...p, blocks: [...p.blocks, { id: uid(), label: "Custom task", type: "study", link: "custom", duration: 30, status: "Not Started", skipped: false, skipReason: "", journal: "", custom: true }]
     }));
   }
+  // Brings back one of today's standard slots that applyTrimRules dropped
+  // for not fitting (or that's simply not in the plan yet for some other
+  // reason) — looked up fresh from buildBaseBlocks rather than stored
+  // anywhere, so it's always the current Settings-defined version of that
+  // slot. Marked `restored` so it can be removed again via the same
+  // control as a custom task, unlike a normal auto-generated block.
+  function addExistingBlock(blockId) {
+    const dayType = plan.dayType || defaultDayType(dateISO);
+    const template = buildBaseBlocks(dayType, settings).find(b => b.id === blockId);
+    if (!template) return;
+    setPlan(p => ({
+      ...p,
+      droppedLabels: (p.droppedLabels || []).filter(l => l !== template.label),
+      blocks: [...p.blocks, { ...template, status: "Not Started", skipped: false, skipReason: "", completedAt: null, journal: "", restored: true }],
+    }));
+  }
   function removeBlock(id) {
     setPlan(p => ({ ...p, blocks: p.blocks.filter(b => b.id !== id) }));
   }
@@ -1896,6 +1912,11 @@ function TodayTab({ db, updateSlice, onNavigate }) {
   const { wakeMinutes, endMinutes, blocks: timedBlocks } = computePlanTimes(plan);
   const sleepMinutes = parseTimeToMinutes(settings.sleepTime);
   const overflow = endMinutes - sleepMinutes;
+  // Standard slots that would normally be in today's plan (per Settings)
+  // but aren't currently — almost always because applyTrimRules dropped
+  // them for not fitting; powers "+ Add existing task" below.
+  const missingBlocks = buildBaseBlocks(plan.dayType || defaultDayType(dateISO), settings)
+    .filter(b => !plan.blocks.some(pb => pb.id === b.id));
 
   const pending = useMemo(() => computePendingTasks(db), [db]);
   const revisionDue = pending.filter(p => p.cat === "Revision due");
@@ -1983,10 +2004,20 @@ function TodayTab({ db, updateSlice, onNavigate }) {
             <PlanBlock key={b.id} block={b} onUpdate={patch => updateBlock(b.id, patch)}
               onMoveUp={i > 0 ? () => moveBlock(b.id, -1) : null}
               onMoveDown={i < timedBlocks.length - 1 ? () => moveBlock(b.id, 1) : null}
-              onRemove={b.custom ? () => removeBlock(b.id) : null} />
+              onRemove={(b.custom || b.restored) ? () => removeBlock(b.id) : null} />
           );
         })}
-        <button className="ucc-btn" onClick={addCustomBlock}><Plus size={14} /> Add custom task</button>
+        <div className="ucc-flex wrap" style={{ gap: 8 }}>
+          <button className="ucc-btn" onClick={addCustomBlock}><Plus size={14} /> Add custom task</button>
+          {missingBlocks.length > 0 && (
+            <select className="ucc-select" style={{ width: "auto", maxWidth: 240 }} value=""
+              title="Bring back a slot dropped from today's plan"
+              onChange={e => { if (e.target.value) addExistingBlock(e.target.value); }}>
+              <option value="">+ Add existing task…</option>
+              {missingBlocks.map(b => <option key={b.id} value={b.id}>{b.label}</option>)}
+            </select>
+          )}
+        </div>
       </div>
 
       <div className="ucc-grid">
