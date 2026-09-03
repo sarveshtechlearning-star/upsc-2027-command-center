@@ -51,10 +51,11 @@ summary will do.
 
 - **Frontend**: React 18 + Vite. Almost all UI/feature logic lives in the
   single `src/App.jsx` file (daily planner, class tracker, topic completion
-  (formerly "Reading"), syllabus, single pagers, NCERT, standard books,
-  Tamil literature, current affairs, GS answer writing, GS answer writing
-  topper copies, AI learning, topic master, search, weekly review).
-  `src/main.jsx` is the entry point.
+  (`db.reading` — a computed overview of Syllabus + other trackers now, see
+  the dedicated Topic Completion bullet below), syllabus, single pagers,
+  NCERT, standard books, Tamil literature, current affairs, GS answer
+  writing, GS answer writing topper copies, AI learning, topic master,
+  search, weekly review). `src/main.jsx` is the entry point.
 - **Backend**: Supabase (Postgres + Auth) via `src/supabaseClient.js`,
   configured with `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY`.
 - **Data model**: a single `kv_store` table (`user_id`, `key`, `value
@@ -109,6 +110,54 @@ summary will do.
   status. Before adding a field to any tracker, check its current column
   list in the relevant `*Tab` function rather than assuming parity with
   similar-sounding fields elsewhere.
+- **Topic Completion (`ReadingTab`, `db.reading`) is a computed overview,
+  not a manually-populated tracker — by request, to kill the double
+  bookkeeping that existed when it duplicated data already tracked
+  elsewhere.** Its row set is now Syllabus itself: one row per Syllabus
+  entry, always, with no "+ Add row"/delete here — add or edit Subject/
+  Topic/Subtopic/Micro Topic on the Syllabus tab instead. Of its six
+  fields, four are fully derived and non-editable:
+  - **Class Notes**: "Completed" if any Classes record matching this
+    Syllabus row (`classMatchesSyllabusRow`) has `status === "Completed"`;
+    "In Progress" if a match exists but none are Completed; "Not Started"
+    otherwise. Its PDF (`classNotesFile`) is that Completed match's
+    `driveFile`, falling back to any matched class's file.
+  - **Standard Material** / **NCERT**: "Completed" if any Standard
+    Books/NCERT record matches this row at all, "Not Started" otherwise —
+    binary, since neither of those two trackers has a completion field of
+    its own; cataloguing the book/chapter there is the only signal there
+    is.
+  - **Single Pager**: mirrors a matching Single Pager record's own
+    `status` field (Completed/In Progress → same; no match → "Not
+    Started").
+  - **Revision 1** and **Revision 2** remain the only two fields actually
+    set by hand, still `READ_STATUS` dropdowns. Persisted on a `db.reading`
+    record matched to the Syllabus row by `syllabusId` — editing lazily
+    creates that record on the very first edit rather than one existing
+    per Syllabus row up front, so `db.reading` is now normally *sparse*
+    (only rows where revision has ever been touched), unlike every other
+    tracker. **Don't iterate `db.reading` expecting it to mirror all
+    Syllabus topics** — iterate `db.syllabus` and call
+    `computeTopicCompletionFields(row, indexes)` instead (see the "TOPIC
+    COMPLETION — COMPUTED-FIELD HELPERS" block above `TopicMasterTab` for
+    the indexing helpers `buildTopicCompletionIndexes`/
+    `recsForSyllabusRow`/`classesForSyllabusRow` — built once per relevant
+    `db.*` array reference, same O(records)-not-O(rows×records) reasoning
+    as the Syllabus-lookup caches). `computePendingTasks`'s revision-due
+    and pending-reading sections, the Dashboard's Overall Topic Completion
+    %, `SyllabusTab`'s own progress stat, and Topic Master's "Topic
+    completion" panel were all migrated to this pattern — if you touch any
+    of those, keep them reading from Syllabus + the computed fields, not
+    `db.reading` directly. The old "Previous day's class notes" pending
+    item was removed entirely, not migrated — it existed to nudge you to
+    do a separate manual "class notes" step that no longer exists now that
+    Class Notes derives straight from the class's own Completed status.
+  - **Syllabus's own `studyStatus`/`revisionStatus` fields are dead** —
+    never shown or settable by any UI anymore (they used to sit behind
+    this same duplication problem). Existing stored values on old rows are
+    left alone untouched, just no longer read anywhere; don't reintroduce
+    a status field on the Syllabus tab as part of some other change
+    without checking this was intentional.
 - **GS Answer Writing (`AnswerWritingTab`) is sub-tabbed like Tamil
   Literature** — "Answer Writing" (`db.answerWriting`) and "Topper Copies"
   (`db.topperCopies`), sharing `gsPaperColumn`/`subjectTagColumn`/
@@ -287,10 +336,11 @@ summary will do.
   cells are still `pointer-events: none` (or, for `readableWhenLocked`
   columns, fully interactive for scrolling) but carry no opacity/dimming
   of their own — the row-level green tint is the only visual signal now.
-  Reading (six different status
-  columns, no `driveFile` at all) and every other tracker are unaffected
-  by design — `completionRequiresUpload` is opt-in per tracker, not a
-  global behavior of `GenericTracker`. **A column can also set
+  Topic Completion (no `driveFile` of its own, and no status column left
+  that's actually user-set — see the dedicated Topic Completion bullet
+  above) and every other tracker are unaffected by design —
+  `completionRequiresUpload` is opt-in per tracker, not a global behavior
+  of `GenericTracker`. **A column can also set
   `readableWhenLocked: true`** (currently only Topper Copies' Question and
   Observations) to stay fully interactive (no `pointer-events: none`) on a
   locked row so long text can still be scrolled — the cell stays
@@ -326,13 +376,17 @@ summary will do.
     row, same reasoning as the Syllabus-lookup caches elsewhere). Topic
     completion averages `topicCompletionScore` (0..1 partial credit
     across Class Notes/Standard Material/NCERT/Single Pager/Revision
-    1/Revision 2, "Not Needed" fields excluded per the usual convention)
-    over every Reading row matching that subtopic (there may be zero, one,
-    or several — one per Micro Topic — they're averaged together, not
-    just the first one taken). This is a deliberately different, more
-    complete metric than `readingCompletionPct` (which excludes revision
-    and powers Today's "pending reading" list) — don't merge the two or
-    "simplify" by reusing one for the other's purpose. The Syllabus tab's
+    1/Revision 2, "Not Needed" fields excluded per the usual convention —
+    only Revision 1/2 can ever actually be "Not Needed" now, since the
+    other four are computed and never produce that value) over every
+    **Syllabus row's computed Topic Completion fields**
+    (`computeTopicCompletionFields`, see the dedicated Topic Completion
+    bullet above) matching that subtopic — there may be zero, one, or
+    several (one per Micro Topic), averaged together, not just the first
+    one taken. This is a deliberately different, more complete metric
+    than `readingCompletionPct` (which excludes revision and powers
+    Today's "pending reading" list) — don't merge the two or "simplify" by
+    reusing one for the other's purpose. The Syllabus tab's
     own per-row Source Identified column is intentionally NOT part of this
     change — it still uses `isSourceIdentifiedForMicrotopic` at whatever
     granularity that specific row represents, unchanged.
@@ -358,7 +412,13 @@ summary will do.
   syllabus row is a distinct topic-master entry, since Syllabus is already
   the authoritative hierarchy). `classMatchesSyllabusRow` /
   `recMatchesSyllabusRow` match via `syllabusId` first, text as fallback —
-  same rule as Source Identified and the Dashboard. Tamil and GS Answer
+  same rule as Source Identified and the Dashboard. Its "Topic completion"
+  panel shows one computed `computeTopicCompletionFields` result per row
+  (`topicCompletion`, not a `.map()` over a `reading` array — that array
+  key is gone, since Topic Completion is no longer an independently-sized
+  list; see the dedicated Topic Completion bullet above), so `countLinked`
+  no longer counts it either — it's always present, never meaningfully "0
+  vs linked". Tamil and GS Answer
   Writing don't carry a Subtopic/Micro Topic themselves, so they attach at
   the Topic level and can legitimately appear under several Micro Topic
   rows that share one Topic — that's expected, not a bug. The sidebar has
@@ -430,9 +490,14 @@ summary will do.
   `DriveDownloadLink` is the read-only variant used in Topic Master, which
   has no `updateSlice` to support uploading.
 - **Import/export**: `xlsx` for Excel, plus JSON export, applied generically
-  across trackers. `IMPORT_TARGETS` covers every tracker (Classes, Reading,
-  Single Pager, Syllabus, NCERT, Standard Books, Tamil Reading, Tamil
-  Writing, Current Affairs, GS Answer Writing, AI Learning) — when a
+  across trackers. `IMPORT_TARGETS` covers every tracker **except Topic
+  Completion** (Classes, Single Pager, Syllabus, NCERT, Standard Books,
+  Tamil Reading, Tamil Writing, Current Affairs, GS Answer Writing, AI
+  Learning) — Topic Completion has no import target since its rows are a
+  computed 1:1 overview of Syllabus now, not a freestanding importable
+  list (see the dedicated Topic Completion bullet above); don't add one
+  back without re-deriving what "importing a Topic Completion row" would
+  even mean under that model. When a
   tracker's columns change, update its `IMPORT_TARGETS` entry and
   `IMPORT_FIELD_LABELS` in the same change, or the template/import will
   silently drift from the real schema. `downloadImportTemplate(key)`
