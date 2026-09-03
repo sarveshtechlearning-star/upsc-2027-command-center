@@ -101,22 +101,27 @@ summary will do.
   be, once the table it feeds grows.
 - **Tracker schemas are intentionally lean, not uniform** — several
   trackers had status/date columns removed because they weren't being
-  kept current (NCERT and Standard Books are now pure reference lists:
-  Subject/Topic/Subtopic/Micro Topic/Book/Chapter(/Pages), no status or
-  dates; Tamil Reading dropped Status/Revision). Don't reflexively add a
-  status or date field back onto these — that removal was deliberate.
-  Single Pager's Class Notes/Handout/NCERT/Standard Books are a simple
-  `INCLUSION_OPTIONS` ("Included"/"Not Included") select, not a progress
-  status. Before adding a field to any tracker, check its current column
-  list in the relevant `*Tab` function rather than assuming parity with
+  kept current (NCERT and Standard Books are pure reference lists: GS
+  Paper/Subject/Micro Topic/Book/Chapter(/Pages) — see the "GS Paper →
+  Subject → Micro Topic pattern" bullet further down for how that
+  linking works now — no status or dates; Tamil Reading dropped
+  Status/Revision). Don't reflexively add a status or date field back
+  onto these — that removal was deliberate. Single Pager's Class Notes/
+  Handout/NCERT/Standard Books are a simple `INCLUSION_OPTIONS`
+  ("Included"/"Not Included") select, not a progress status. Before
+  adding a field to any tracker, check its current column list in the
+  relevant `*Tab` function rather than assuming parity with
   similar-sounding fields elsewhere.
 - **Topic Completion (`ReadingTab`, `db.reading`) is a computed overview,
   not a manually-populated tracker — by request, to kill the double
   bookkeeping that existed when it duplicated data already tracked
   elsewhere.** Its row set is now Syllabus itself: one row per Syllabus
   entry, always, with no "+ Add row"/delete here — add or edit Subject/
-  Topic/Subtopic/Micro Topic on the Syllabus tab instead. Of its six
-  fields, four are fully derived and non-editable:
+  Topic/Subtopic/Micro Topic on the Syllabus tab instead (or tag a new
+  Micro Topic from Classes/NCERT/Standard Books/Single Pager/GS Answer
+  Writing/Topper Copies' own "+ Add new" popup — either way, a Syllabus
+  row is what actually creates the entry Topic Completion picks up). Of
+  its six fields, four are fully derived and non-editable:
   - **Class Notes**: "Completed" if any Classes record matching this
     Syllabus row (`classMatchesSyllabusRow`) has `status === "Completed"`;
     "In Progress" if a match exists but none are Completed; "Not Started"
@@ -141,11 +146,16 @@ summary will do.
     `computeTopicCompletionFields(row, indexes)` instead (see the "TOPIC
     COMPLETION — COMPUTED-FIELD HELPERS" block above `TopicMasterTab` for
     the indexing helpers `buildTopicCompletionIndexes`/
-    `recsForSyllabusRow`/`classesForSyllabusRow` — built once per relevant
-    `db.*` array reference, same O(records)-not-O(rows×records) reasoning
-    as the Syllabus-lookup caches). `computePendingTasks`'s revision-due
-    and pending-reading sections, the Dashboard's Overall Topic Completion
-    %, `SyllabusTab`'s own progress stat, and Topic Master's "Topic
+    `taggedRecsForSyllabusRow`/`recsForSyllabusRow` — built once per
+    relevant `db.*` array reference, same O(records)-not-O(rows×records)
+    reasoning as the Syllabus-lookup caches. `taggedRecsForSyllabusRow`
+    matches by `microtopics` array membership — Classes, NCERT, Standard
+    Books, and Single Pager all use it now that all four tag Micro Topics
+    the same way; `recsForSyllabusRow` matches by scalar `syllabusId` +
+    full-path text and is only for Reading's own lazily-created revision
+    records now). `computePendingTasks`'s revision-due and
+    pending-reading sections, the Dashboard's Overall Topic Completion %,
+    `SyllabusTab`'s own progress stat, and Topic Master's "Topic
     completion" panel were all migrated to this pattern — if you touch any
     of those, keep them reading from Syllabus + the computed fields, not
     `db.reading` directly. The old "Previous day's class notes" pending
@@ -161,8 +171,9 @@ summary will do.
 - **GS Answer Writing (`AnswerWritingTab`) is sub-tabbed like Tamil
   Literature** — "Answer Writing" (`db.answerWriting`) and "Topper Copies"
   (`db.topperCopies`), sharing `gsPaperColumn`/`subjectTagColumn`/
-  `microtopicTagColumn` (see the Topic-governance bullet above for how
-  Micro Topic linking works here — it differs from every other tracker).
+  `microtopicTagColumn` (see the "GS Paper → Subject → Micro Topic
+  pattern" bullet further down — this pattern is now shared by several
+  other trackers too, not unique to Answer Writing).
   Topper Copies is otherwise a smaller shape — Date/GS Paper/Subject/
   Micro Topic/Question/Observations/Status/PDF, no Word Limit or Self
   Score (you didn't write it, so there's nothing of yours to score).
@@ -239,54 +250,75 @@ summary will do.
   different rules, don't conflate them.** Subject/Topic/Subtopic can only
   be newly created on Syllabus or Current Affairs (`CascadingSelectCell`
   with `allowAddNew` true/default; Current Affairs' "+ Add new" writes a
-  real row into Syllabus rather than storing free text locally). Every
-  other tracker's Subject/Topic/Subtopic stays `allowAddNew={false}`,
-  reading strictly from `syllabusTopicsForSubject` /
-  `syllabusSubtopicsForTopic` — selection only, no creation, no exceptions.
-  **Micro Topic is different since the request to relax it**: Classes
-  (via `TagMultiSelectCell`'s `allowAddNew`/`onAddNew`), NCERT, and
-  Standard Books all allow typing a brand new Micro Topic directly, not
-  just Syllabus/Current Affairs. Typing one and confirming creates a real
-  Syllabus row (subject/topic/subtopic inherited from the row being
-  edited) exactly like Current Affairs' add-new already did — never free
-  text stored only on that row — so it's immediately selectable
-  everywhere else too (Syllabus, Reading, Single Pager, Current Affairs)
-  once it exists. Reading/Single Pager's Micro Topic were deliberately
-  left `allowAddNew={false}` (not requested) — if that gap becomes a
-  problem, extend it the same way rather than inventing a different
-  mechanism. AI Learning remains the one full exception (Topic stays free
-  text — it's explicitly personal/outside the UPSC syllabus).
-  **`AnswerWritingTab` (both its sub-tabs, Answer Writing and Topper
-  Copies) links to Syllabus differently from every other tracker**: they
-  share `subjectTagColumn` (Subject as a tag array, `rec.subjects` —
-  one answer/topper copy can span several Subjects, `allowAddNew={false}`,
-  scoped to Subjects on Syllabus under the row's GS Paper) and
-  `microtopicTagColumn` (Micro Topic as a tag array, `rec.microtopics`,
-  storing Syllabus row ids like Classes' tags) — but Micro Topic's options
-  come from `microtopicRowOptionsForSubjects`, every Micro Topic under
-  whichever Subject(s) are tagged, **deliberately skipping Syllabus's own
-  Topic/Subtopic levels entirely**. "+ Add new" on Micro Topic doesn't
-  inherit context and create a row inline the way Classes/NCERT/Standard
-  Books do — there's no single Subject/Topic/Subtopic to safely assume
-  here — it opens `AddSyllabusRowPopup` instead, a small modal replicating
-  Syllabus's own add-a-row flow (GS Paper/Subject/Topic/Subtopic pickers,
-  Micro Topic pre-filled), so the person places the new row properly
-  themselves; confirming also adds its Subject to the row's own Subject
-  tags if not already there. Also note `GS_PAPER_SHORT_TO_LONG`: Answer
-  Writing/Topper Copies' own GS Paper field uses short codes ("GS1") while
-  Syllabus's uses long form ("GS Paper I") — always translate through this
-  map when filtering Syllabus by `rec.gsPaper` here, comparing them
-  directly silently matches nothing.
-- **Every Syllabus row auto-created from a "+ Add new" flow (Classes,
-  NCERT, Standard Books, Current Affairs) gets a guessed `gsPaper` via
-  `defaultGsPaperForSubject`, not a hardcoded blank.** It prefers the most
-  common `gsPaper` already used for that subject elsewhere in Syllabus
-  (respects the person's own convention, and works for subjects
-  `SUBJECT_TO_GS_PAPER` doesn't know about), falling back to that
-  hardcoded standard-UPSC map only when there's no existing data for the
-  subject yet. The one place this is deliberately NOT applied is
-  Syllabus's own "Add row" (`newRecord`) — at that point `subject` is
-  still blank too, so there's nothing yet to infer from.
+  real row into Syllabus rather than storing free text locally). Current
+  Affairs is the one other tracker that still has its own real Subject/
+  Topic/Subtopic/Micro Topic fields (unchanged, `allowAddNew={false}` on
+  all four, reading from `syllabusTopicsForSubject`/
+  `syllabusSubtopicsForTopic`/`microtopicOptionsForSubtopic`) — selection
+  only, no creation. AI Learning remains the one full exception (Topic
+  stays free text — it's explicitly personal/outside the UPSC syllabus).
+  **Every other tracker (Classes, NCERT, Standard Books, Single Pager, GS
+  Answer Writing, Topper Copies) now shares one pattern**, converged from
+  several different earlier designs into a single set of column helpers —
+  see the next bullet.
+- **The GS Paper → Subject → Micro Topic pattern, shared by Classes,
+  NCERT, Standard Books, Single Pager, GS Answer Writing, and Topper
+  Copies.** These trackers don't show or store Syllabus's own Topic/
+  Subtopic levels at all — only GS Paper, Subject, and Micro Topic (the
+  UI always labels this column "Topic", even though the underlying field
+  is `microtopics` linking to Syllabus's Micro Topic level specifically).
+  Three shared column helpers build this:
+  - `gsPaperColumn()` — plain select from `GS_PAPERS` (short codes, e.g.
+    "GS1"), no side effects on change.
+  - `subjectTagColumn(db)` (Answer Writing/Topper Copies only — `rec.subjects`,
+    a tag array, since one answer/topper copy can span several Subjects)
+    or `subjectSingleSelectColumn(db)` (Classes/NCERT/Standard Books/Single
+    Pager — `rec.subject`, single-select, since one class/chapter/
+    single-pager is always one Subject's material). Both scope their
+    options to Subjects already on Syllabus under the row's GS Paper, and
+    both are `allowAddNew={false}` — Subject stays purely Syllabus-governed
+    everywhere now, a new Subject is added on Settings/Syllabus instead.
+  - `microtopicTagColumn(db, trackerKey, setAddTopicFor, label)` — a tag
+    array (`rec.microtopics`, Syllabus row ids, works identically for
+    either the single `rec.subject` or the array `rec.subjects` shape
+    above) linked via `microtopicRowOptionsForSubjects`: every Micro Topic
+    under whichever Subject(s) apply to this row, **deliberately skipping
+    Syllabus's own Topic/Subtopic levels** — one row can draw on Micro
+    Topics from several different Topics/Subtopics under a Subject (or,
+    for Answer Writing/Topper Copies, across several Subjects). "+ Add
+    new" never inherits context and creates a row inline — there's no
+    single Topic/Subtopic to safely assume even with one Subject known —
+    it opens `AddSyllabusRowPopup` via `setAddTopicFor` (one small piece
+    of state per tab, tagged with `trackerKey` so the popup knows which
+    `db.*` array to tag the new row onto).
+  `AddSyllabusRowPopup` replicates Syllabus's own add-a-row flow (GS
+  Paper/Subject/Topic/Subtopic pickers, Micro Topic pre-filled with
+  whatever was just typed); confirming creates a real Syllabus row and
+  also adds its Subject to the row's own Subject field/tags if not
+  already set. `GS_PAPER_SHORT_TO_LONG` translates these trackers' own
+  short-form GS Paper ("GS1") to Syllabus's long form ("GS Paper I") —
+  always go through this map when filtering Syllabus by `rec.gsPaper`
+  here, comparing them directly silently matches nothing (this was a real
+  bug once, fixed — don't reintroduce it).
+  Because these four don't store Topic/Subtopic anymore, every place that
+  used to match them to a Syllabus row by a `syllabusId` scalar + full
+  text path had to move to id/array-based matching instead:
+  `buildTaggedIndex`/`taggedRecsForSyllabusRow` (generalized from what was
+  originally Classes-only) power Topic Completion's derivation
+  (`computeTopicCompletionFields`) and Topic Master's cross-linking for
+  all four; `countSyllabusRowReferences`/`countRecordsLinkedToSyllabus`
+  and `getSourceIdentifiedIndex` check `microtopics` array membership
+  alongside the legacy `syllabusId` scalar; `renameSyllabusValue`'s
+  topic/subtopic-level branches no longer touch these four (they have
+  nothing to rename at those levels); `syncSyllabusRowReferences` excludes
+  them entirely (their tags resolve live off the Syllabus row via
+  `resolveMicrotopicLabelById`, same as Classes always did — no stale
+  copy to sync). Import/Export for these four was **not** updated to this
+  shape — it still imports into the old `subject`/`topic`/`subtopic`/
+  `microtopic` scalar fields (Classes' importer does convert a plain
+  `microtopic` column into a one-item `microtopics` array, but the others
+  don't even do that) — re-derive this properly before relying on it
+  rather than assuming it round-trips.
 - **Fixing a typo or a wrong Subject/Topic/Subtopic/Micro Topic pick is a
   cascading rename (`renameSyllabusValue`), not a per-row edit.** The
   pencil icon next to each of these on the Syllabus tab
