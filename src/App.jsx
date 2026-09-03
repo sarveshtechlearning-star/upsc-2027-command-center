@@ -97,6 +97,12 @@ const CSS = `
   }
   table.ucc-table td{border-bottom:1px solid var(--line); padding:5px 8px; vertical-align:top;}
   table.ucc-table tr:hover td{background:#FAFAF8;}
+  /* Locked (Completed) rows: keep the green fill static — the row stays
+     "done" whether or not the mouse is over it — rather than letting the
+     generic row-hover grey (above) flash over it and read as
+     de-highlighting. Higher specificity (extra .ucc-row-locked class)
+     than the plain tr:hover rule, so this wins on hover too. */
+  table.ucc-table tr.ucc-row-locked td, table.ucc-table tr.ucc-row-locked:hover td{background:var(--green-soft);}
   .ucc-input, .ucc-select, .ucc-textarea{
     border:1px solid var(--line-strong); border-radius:5px; padding:5px 7px; font-size:12.8px;
     font-family:inherit; width:100%; background:#fff; color:var(--ink);
@@ -1245,7 +1251,7 @@ function GenericTracker({ records, setRecords, columns, newRecord, emptyMessage,
             const partiallyLocked = rec.status === "Partially Completed";
             return (
               <React.Fragment key={rec.id}>
-                <tr style={locked ? { background: "var(--green-soft)" } : undefined}>
+                <tr className={locked ? "ucc-row-locked" : undefined}>
                   {reorderMode && (
                     <td>
                       <div className="ucc-flex" style={{ gap: 2 }}>
