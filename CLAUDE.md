@@ -52,8 +52,9 @@ summary will do.
 - **Frontend**: React 18 + Vite. Almost all UI/feature logic lives in the
   single `src/App.jsx` file (daily planner, class tracker, topic completion
   (formerly "Reading"), syllabus, single pagers, NCERT, standard books,
-  Tamil literature, current affairs, GS answer writing, AI learning, topic
-  master, search, weekly review). `src/main.jsx` is the entry point.
+  Tamil literature, current affairs, GS answer writing, GS answer writing
+  topper copies, AI learning, topic master, search, weekly review).
+  `src/main.jsx` is the entry point.
 - **Backend**: Supabase (Postgres + Auth) via `src/supabaseClient.js`,
   configured with `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY`.
 - **Data model**: a single `kv_store` table (`user_id`, `key`, `value
@@ -108,6 +109,15 @@ summary will do.
   status. Before adding a field to any tracker, check its current column
   list in the relevant `*Tab` function rather than assuming parity with
   similar-sounding fields elsewhere.
+- **GS Answer Writing (`answerWritingTab`) is sub-tabbed like Tamil
+  Literature** — "Answer Writing" (`db.answerWriting`) and "Topper Copies"
+  (`db.topperCopies`), sharing the same GS Paper + Topic cells
+  (`GsPaperTopicCells`). Topper Copies is deliberately a smaller shape —
+  Date/GS Paper/Topic/Question/Observations/PDF only, no Word Limit,
+  Status, or Self Score (you didn't write it, so there's nothing of yours
+  to score or lock), and correspondingly no `completionRequiresUpload`.
+  Both key off GS Paper + Topic like Answer Writing always has — neither
+  carries a `syllabusId`.
 - **"Log" column**: most trackers end with a `LogButton` cell
   (`{ key: "log", ... render: rec => <LogButton history={rec.history} /> }`)
   — a read-only popover over the record's existing `history` array (already
