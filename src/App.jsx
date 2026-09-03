@@ -556,6 +556,11 @@ function renameSyllabusValue(db, updateSlice, level, context, oldValue, newValue
     ["syllabus", "classes", "reading", "singlePager", "ncert", "standardBooks", "currentAffairs"].forEach(key => {
       updateSlice(key, prev => prev.map(r => r.subject === oldValue ? { ...r, subject: newValue } : r));
     });
+    // Answer Writing's Subject is a tag array (one answer can span several
+    // Subjects), not a single field like every other tracker above.
+    updateSlice("answerWriting", prev => prev.map(r => (r.subjects || []).includes(oldValue)
+      ? { ...r, subjects: r.subjects.map(s => s === oldValue ? newValue : s) }
+      : r));
     return;
   }
   if (level === "topic") {
@@ -3009,32 +3014,90 @@ function AnswerWritingTab({ db, updateSlice }) {
         <button className={sub === "mine" ? "active" : ""} onClick={() => setSub("mine")}>Answer Writing</button>
         <button className={sub === "topper" ? "active" : ""} onClick={() => setSub("topper")}>Topper Copies</button>
       </div>
-      <div className="ucc-tiny" style={{ margin: "8px 0", color: "var(--ink-muted)" }}>
-        Topic is chosen from the Syllabus tab (matched by GS Paper) — new topics can't be added here.
-      </div>
       {sub === "mine" ? (
-        <GenericTracker
-          records={db.answerWriting} setRecords={u => updateSlice("answerWriting", u)} completionRequiresUpload
-          columns={[
-            { key: "date", label: "Date", type: "date", width: 110 },
-            ...gsPaperTopicColumns(db),
-            { key: "question", label: "Question", type: "textarea", width: 240 },
-            { key: "wordLimit", label: "Word Limit", type: "number", width: 90 },
-            { key: "status", label: "Status", type: "status", options: TASK_STATUS, width: 140 },
-            { key: "selfScore", label: "Self Score", width: 80 },
-            { key: "improvementNotes", label: "Improvement Notes", type: "textarea", width: 200 },
-            {
-              key: "driveFile", label: "Answer PDF", width: 170, type: "custom",
-              render: (rec, onChange) => <DriveFileCell driveFile={rec.driveFile} db={db} updateSlice={updateSlice} onChange={onChange} folderKey="answerWriting"
-                  namePrefix={nextFileNamePrefix(db.answerWriting, rec, r => normKey(r.gsPaper, r.topic), [rec.gsPaper, rec.topic])} />,
-            },
-          ]}
-          newRecord={() => ({ date: todayISO(), gsPaper: "GS1", topic: "", question: "", wordLimit: 150, answer: "", status: "Not Started", selfScore: "", improvementNotes: "", driveFile: null })}
-        />
+        <>
+          <div className="ucc-tiny" style={{ margin: "8px 0", color: "var(--ink-muted)" }}>
+            Subject is scoped to the GS Paper and comes from the Syllabus tab — new subjects can't be added here. Topic is your own free-form label(s) for what the question actually covered — type as many as fit; adding one here only tags this answer and never creates a Syllabus row.
+          </div>
+          <GenericTracker
+            records={db.answerWriting} setRecords={u => updateSlice("answerWriting", u)} completionRequiresUpload
+            columns={[
+              { key: "date", label: "Date", type: "date", width: 110 },
+              {
+                key: "gsPaper", label: "GS Paper", width: 90, type: "custom",
+                render: (rec, _onChange, updateRecord) => (
+                  <select className="ucc-select" value={rec.gsPaper || ""} onChange={e => updateRecord({ gsPaper: e.target.value })}>
+                    {GS_PAPERS.map(g => <option key={g} value={g}>{g}</option>)}
+                  </select>
+                ),
+              },
+              {
+                // Tag multi-select, not single-select — one answer can
+                // legitimately touch several Subjects. Options are strictly
+                // the Subjects already on Syllabus under this GS Paper (no
+                // add-new): Subject stays Syllabus-governed even though
+                // Topic below doesn't.
+                key: "subjects", label: "Subject", width: 170, type: "custom",
+                render: (rec, _onChange, updateRecord) => {
+                  const options = Array.from(new Set(db.syllabus.filter(s => s.gsPaper === rec.gsPaper && s.subject).map(s => s.subject)))
+                    .map(s => ({ value: s, label: s }));
+                  return (
+                    <TagMultiSelectCell
+                      values={rec.subjects || []} options={options}
+                      placeholder={options.length ? "+ Add subject" : "Set GS Paper on Syllabus subjects first"}
+                      disabled={!rec.gsPaper}
+                      onChange={v => updateRecord({ subjects: v })}
+                    />
+                  );
+                },
+              },
+              {
+                // Tag multi-select of the user's OWN free-text labels — a
+                // deliberate exception to the usual topic-governance rule
+                // (Syllabus/Current Affairs only create real topics): these
+                // are ad hoc angles a single answer touched on, not Syllabus
+                // topics, so "+ Add new" here just tags this row and never
+                // writes to Syllabus. Suggests labels already typed on other
+                // Answer Writing rows so spelling stays consistent, but
+                // never suggests Syllabus topics.
+                key: "topics", label: "Topic", width: 220, type: "custom",
+                render: (rec, _onChange, updateRecord) => {
+                  const values = rec.topics || (rec.topic ? [rec.topic] : []);
+                  const options = Array.from(new Set(db.answerWriting.flatMap(a => a.topics || (a.topic ? [a.topic] : []))))
+                    .map(t => ({ value: t, label: t }));
+                  return (
+                    <TagMultiSelectCell
+                      values={values} options={options} allowAddNew
+                      placeholder="+ Add topic"
+                      onChange={v => updateRecord({ topics: v })}
+                      onAddNew={name => updateRecord({ topics: [...values, name] })}
+                    />
+                  );
+                },
+              },
+              { key: "question", label: "Question", type: "textarea", width: 240 },
+              { key: "wordLimit", label: "Word Limit", type: "number", width: 90 },
+              { key: "status", label: "Status", type: "status", options: TASK_STATUS, width: 140 },
+              { key: "selfScore", label: "Self Score", width: 80 },
+              { key: "improvementNotes", label: "Improvement Notes", type: "textarea", width: 200 },
+              {
+                key: "driveFile", label: "Answer PDF", width: 170, type: "custom",
+                render: (rec, onChange) => {
+                  const firstTopic = (rec.topics && rec.topics[0]) || rec.topic;
+                  return (
+                    <DriveFileCell driveFile={rec.driveFile} db={db} updateSlice={updateSlice} onChange={onChange} folderKey="answerWriting"
+                      namePrefix={nextFileNamePrefix(db.answerWriting, rec, r => normKey(r.gsPaper, (r.topics && r.topics[0]) || r.topic), [rec.gsPaper, firstTopic])} />
+                  );
+                },
+              },
+            ]}
+            newRecord={() => ({ date: todayISO(), gsPaper: "GS1", subjects: [], topics: [], question: "", wordLimit: 150, answer: "", status: "Not Started", selfScore: "", improvementNotes: "", driveFile: null })}
+          />
+        </>
       ) : (
         <>
-          <div className="ucc-tiny" style={{ marginBottom: 8, color: "var(--ink-muted)" }}>
-            For a topper's own answer — no Word Limit, Status, or Self Score to fill in, since you didn't write it. Use Observations for what stands out about their approach.
+          <div className="ucc-tiny" style={{ margin: "8px 0", color: "var(--ink-muted)" }}>
+            Topic is chosen from the Syllabus tab (matched by GS Paper) — new topics can't be added here. For a topper's own answer — no Word Limit, Status, or Self Score to fill in, since you didn't write it. Use Observations for what stands out about their approach.
           </div>
           <GenericTracker
             records={db.topperCopies} setRecords={u => updateSlice("topperCopies", u)}
@@ -3172,7 +3235,10 @@ function DashboardTab({ db }) {
     return counts;
   }, [db.classes]);
 
-  const gsCounts = GS_PAPERS.map(p => ({ paper: p, count: db.answerWriting.filter(a => a.gsPaper === p).length }));
+  // Only Completed Answer Writing rows — this card is meant to reflect
+  // actually-finished practice answers, not every row you've started
+  // logging, and never Topper Copies (someone else's answer, not yours).
+  const gsCounts = GS_PAPERS.map(p => ({ paper: p, count: db.answerWriting.filter(a => a.gsPaper === p && a.status === "Completed").length }));
   const tamilWritingCount = db.tamilWriting.length;
 
   return (
@@ -3220,7 +3286,7 @@ function DashboardTab({ db }) {
       </div>
 
       <div className="ucc-card">
-        <h3>Answers written</h3>
+        <h3>Answers completed</h3>
         <div className="ucc-statgrid">
           {gsCounts.map(g => (
             <div className="ucc-stat" key={g.paper}><div className="n">{g.count}</div><div className="l">{g.paper}</div></div>
@@ -3266,7 +3332,12 @@ function TopicMasterTab({ db, onNavigate }) {
       currentAffairs: db.currentAffairs.filter(c => recMatchesSyllabusRow(c, row, "relevantSyllabusTopic")),
       tamilReading: row.subject === "Tamil Literature" ? db.tamilReading.filter(t => t.topic === row.topic) : [],
       tamilWriting: row.subject === "Tamil Literature" ? db.tamilWriting.filter(t => t.topic === row.topic) : [],
-      answerWriting: row.gsPaper ? db.answerWriting.filter(a => a.gsPaper === row.gsPaper && a.topic === row.topic) : [],
+      // Answer Writing's Topic is now the user's own free-form tag(s),
+      // deliberately decoupled from Syllabus topics (see AnswerWritingTab) —
+      // this only catches a coincidental exact match (or a legacy
+      // single-topic record saved before tags existed), it's not expected
+      // to reliably link every answer to a Syllabus row anymore.
+      answerWriting: row.gsPaper ? db.answerWriting.filter(a => a.gsPaper === row.gsPaper && ((a.topics || (a.topic ? [a.topic] : [])).includes(row.topic))) : [],
       topperCopies: row.gsPaper ? db.topperCopies.filter(a => a.gsPaper === row.gsPaper && a.topic === row.topic) : [],
     })).sort((a, b) => breadcrumb(a.row).localeCompare(breadcrumb(b.row)));
   }, [db]);
@@ -3424,7 +3495,7 @@ function SearchTab({ db }) {
     scan(db.tamilReading, "Tamil Reading", ["topic", "source"], r => r.topic);
     scan(db.tamilWriting, "Tamil Writing", ["topic", "question"], r => r.topic);
     scan(db.currentAffairs, "Current Affairs", ["title", "subject", "relevantSyllabusTopic"], r => r.title);
-    scan(db.answerWriting, "Answer Writing", ["topic", "question", "gsPaper"], r => `${r.gsPaper} — ${r.topic}`);
+    scan(db.answerWriting, "Answer Writing", ["topics", "topic", "question", "gsPaper", "subjects"], r => `${r.gsPaper} — ${(r.topics && r.topics.join(", ")) || r.topic || "Untitled"}`);
     scan(db.topperCopies, "Topper Copies", ["topic", "question", "gsPaper", "observations"], r => `${r.gsPaper} — ${r.topic}`);
     scan(db.aiLearning, "AI Learning", ["topic", "notes"], r => r.topic);
     return out;

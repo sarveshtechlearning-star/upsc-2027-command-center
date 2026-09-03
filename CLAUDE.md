@@ -172,7 +172,20 @@ summary will do.
   left `allowAddNew={false}` (not requested) — if that gap becomes a
   problem, extend it the same way rather than inventing a different
   mechanism. AI Learning remains the one full exception (Topic stays free
-  text — it's explicitly personal/outside the UPSC syllabus).
+  text — it's explicitly personal/outside the UPSC syllabus). **GS Answer
+  Writing's own Topic is a second full exception**, and unlike AI
+  Learning's plain text it's a tag array (`rec.topics`, via
+  `TagMultiSelectCell` with `allowAddNew`) — one answer can cover several
+  ad hoc angles that don't map to a single Syllabus topic, so typing one
+  here only tags that row locally and never touches Syllabus at all (not
+  even a free-text local copy elsewhere reads from — it's genuinely a
+  separate namespace, suggested from other Answer Writing rows' past tags
+  only). Its Subject (`rec.subjects`, also a tag array — one answer can
+  span several Subjects) stays properly Syllabus-governed though,
+  `allowAddNew={false}`, scoped to whichever Subjects appear on Syllabus
+  under the row's GS Paper. Topper Copies, the other sub-tab of
+  `AnswerWritingTab`, keeps the original single-select Topic (no tags,
+  no Subject) — this exception is scoped to Answer Writing only.
 - **Every Syllabus row auto-created from a "+ Add new" flow (Classes,
   NCERT, Standard Books, Current Affairs) gets a guessed `gsPaper` via
   `defaultGsPaperForSubject`, not a hardcoded blank.** It prefers the most
