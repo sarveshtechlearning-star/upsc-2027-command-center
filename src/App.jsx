@@ -459,6 +459,7 @@ function getSyllabusIndex(db) {
   const subtopicsByKey = new Map();
   const microtopicsByKey = new Map();
   const rowOptionsByKey = new Map();
+  const rowOptionsBySubject = new Map();
   db.syllabus.forEach(s => {
     if (s.topic) {
       if (!topicsBySubject.has(s.subject)) topicsBySubject.set(s.subject, new Set());
@@ -475,11 +476,34 @@ function getSyllabusIndex(db) {
       microtopicsByKey.get(k2).add(s.microtopic);
       if (!rowOptionsByKey.has(k2)) rowOptionsByKey.set(k2, []);
       rowOptionsByKey.get(k2).push({ value: s.id, label: s.microtopic });
+      if (!rowOptionsBySubject.has(s.subject)) rowOptionsBySubject.set(s.subject, []);
+      rowOptionsBySubject.get(s.subject).push({ value: s.id, label: s.microtopic });
     }
   });
-  idx = { topicsBySubject, subtopicsByKey, microtopicsByKey, rowOptionsByKey };
+  idx = { topicsBySubject, subtopicsByKey, microtopicsByKey, rowOptionsByKey, rowOptionsBySubject };
   _syllabusIndexCache.set(db.syllabus, idx);
   return idx;
+}
+// Every Micro Topic row across an arbitrary set of Subjects — not scoped to
+// a single Topic/Subtopic like microtopicOptionsForSubtopic/
+// syllabusRowOptionsForSubtopic are. Powers GS Answer Writing's Micro Topic
+// tag picker, which links straight from Subject to Micro Topic and skips
+// Syllabus's own Topic/Subtopic levels entirely — one answer can draw on
+// Micro Topics from several different Topics under one Subject, or across
+// several Subjects at once. Cached the same way as every other per-row
+// syllabus lookup (see the warning on getSyllabusIndex above) rather than
+// filtering db.syllabus directly, since this runs once per rendered row.
+function microtopicRowOptionsForSubjects(db, subjects) {
+  if (!subjects || subjects.length === 0) return [];
+  const idx = getSyllabusIndex(db);
+  const seen = new Set();
+  const out = [];
+  subjects.forEach(subj => {
+    (idx.rowOptionsBySubject.get(subj) || []).forEach(o => {
+      if (!seen.has(o.value)) { seen.add(o.value); out.push(o); }
+    });
+  });
+  return out;
 }
 // Narrowest cascade level: micro-topics already used under one specific
 // subject/topic/subtopic combination — powers the Micro Topic dropdown on
@@ -2977,9 +3001,9 @@ function CurrentAffairsTab({ db, updateSlice }) {
   );
 }
 
-// GS Paper + Topic pair shared by both Answer Writing sub-tabs — Topic
-// options are scoped to whichever GS Paper is currently picked, same
-// Syllabus-backed list either way.
+// GS Paper + Topic pair used by Topper Copies — Topic options are scoped
+// to whichever GS Paper is currently picked, Syllabus-backed, single-select
+// (Topper Copies doesn't use the Subject → Micro Topic tag linkage below).
 function gsPaperTopicColumns(db) {
   return [
     {
@@ -3005,6 +3029,27 @@ function gsPaperTopicColumns(db) {
     },
   ];
 }
+// Subject tag column shared by both Answer Writing sub-tabs — a tag
+// multi-select (one answer/topper copy can span several Subjects), options
+// strictly the Subjects already on Syllabus under this row's GS Paper, no
+// add-new: Subject stays Syllabus-governed on both sub-tabs.
+function subjectTagColumn(db) {
+  return {
+    key: "subjects", label: "Subject", width: 170, type: "custom",
+    render: (rec, _onChange, updateRecord) => {
+      const options = Array.from(new Set(db.syllabus.filter(s => s.gsPaper === rec.gsPaper && s.subject).map(s => s.subject)))
+        .map(s => ({ value: s, label: s }));
+      return (
+        <TagMultiSelectCell
+          values={rec.subjects || []} options={options}
+          placeholder={options.length ? "+ Add subject" : "Set GS Paper on Syllabus subjects first"}
+          disabled={!rec.gsPaper}
+          onChange={v => updateRecord({ subjects: v })}
+        />
+      );
+    },
+  };
+}
 
 function AnswerWritingTab({ db, updateSlice }) {
   const [sub, setSub] = useState("mine");
@@ -3017,7 +3062,7 @@ function AnswerWritingTab({ db, updateSlice }) {
       {sub === "mine" ? (
         <>
           <div className="ucc-tiny" style={{ margin: "8px 0", color: "var(--ink-muted)" }}>
-            Subject is scoped to the GS Paper and comes from the Syllabus tab — new subjects can't be added here. Topic is your own free-form label(s) for what the question actually covered — type as many as fit; adding one here only tags this answer and never creates a Syllabus row.
+            Subject is scoped to the GS Paper and comes from the Syllabus tab — new subjects can't be added here. Micro Topic tags every Micro Topic under whichever Subject(s) are picked (across all their Topics/Subtopics) — pick as many as the answer actually touched; new ones can't be added here.
           </div>
           <GenericTracker
             records={db.answerWriting} setRecords={u => updateSlice("answerWriting", u)} completionRequiresUpload
@@ -3031,46 +3076,30 @@ function AnswerWritingTab({ db, updateSlice }) {
                   </select>
                 ),
               },
+              subjectTagColumn(db),
               {
-                // Tag multi-select, not single-select — one answer can
-                // legitimately touch several Subjects. Options are strictly
-                // the Subjects already on Syllabus under this GS Paper (no
-                // add-new): Subject stays Syllabus-governed even though
-                // Topic below doesn't.
-                key: "subjects", label: "Subject", width: 170, type: "custom",
+                // Tag multi-select linked straight to Syllabus Micro Topics
+                // — deliberately skipping Syllabus's own Topic/Subtopic
+                // levels, since one answer can draw on Micro Topics from
+                // several different Topics under a Subject (or across
+                // several Subjects). Options are every Micro Topic under
+                // whichever Subject(s) are currently tagged above; picking
+                // "Economics" and "Polity" shows Micro Topics from both.
+                // allowAddNew is off — this links to real Syllabus rows
+                // (by id, survives a later rename, same mechanism as
+                // Classes' Micro Topic tags), it doesn't invent new ones.
+                key: "microtopics", label: "Micro Topic", width: 220, type: "custom",
                 render: (rec, _onChange, updateRecord) => {
-                  const options = Array.from(new Set(db.syllabus.filter(s => s.gsPaper === rec.gsPaper && s.subject).map(s => s.subject)))
-                    .map(s => ({ value: s, label: s }));
+                  const subjects = rec.subjects || [];
+                  const values = rec.microtopics || (rec.topic ? [rec.topic] : []);
+                  const options = microtopicRowOptionsForSubjects(db, subjects);
                   return (
                     <TagMultiSelectCell
-                      values={rec.subjects || []} options={options}
-                      placeholder={options.length ? "+ Add subject" : "Set GS Paper on Syllabus subjects first"}
-                      disabled={!rec.gsPaper}
-                      onChange={v => updateRecord({ subjects: v })}
-                    />
-                  );
-                },
-              },
-              {
-                // Tag multi-select of the user's OWN free-text labels — a
-                // deliberate exception to the usual topic-governance rule
-                // (Syllabus/Current Affairs only create real topics): these
-                // are ad hoc angles a single answer touched on, not Syllabus
-                // topics, so "+ Add new" here just tags this row and never
-                // writes to Syllabus. Suggests labels already typed on other
-                // Answer Writing rows so spelling stays consistent, but
-                // never suggests Syllabus topics.
-                key: "topics", label: "Topic", width: 220, type: "custom",
-                render: (rec, _onChange, updateRecord) => {
-                  const values = rec.topics || (rec.topic ? [rec.topic] : []);
-                  const options = Array.from(new Set(db.answerWriting.flatMap(a => a.topics || (a.topic ? [a.topic] : []))))
-                    .map(t => ({ value: t, label: t }));
-                  return (
-                    <TagMultiSelectCell
-                      values={values} options={options} allowAddNew
-                      placeholder="+ Add topic"
-                      onChange={v => updateRecord({ topics: v })}
-                      onAddNew={name => updateRecord({ topics: [...values, name] })}
+                      values={values} options={options}
+                      resolveLabel={v => resolveMicrotopicLabelById(db, v)}
+                      placeholder={subjects.length ? "+ Add micro topic" : "Add a Subject first"}
+                      disabled={subjects.length === 0}
+                      onChange={v => updateRecord({ microtopics: v })}
                     />
                   );
                 },
@@ -3083,15 +3112,15 @@ function AnswerWritingTab({ db, updateSlice }) {
               {
                 key: "driveFile", label: "Answer PDF", width: 170, type: "custom",
                 render: (rec, onChange) => {
-                  const firstTopic = (rec.topics && rec.topics[0]) || rec.topic;
+                  const firstMicrotopic = (rec.microtopics && rec.microtopics[0] && resolveMicrotopicLabelById(db, rec.microtopics[0])) || rec.topic;
                   return (
                     <DriveFileCell driveFile={rec.driveFile} db={db} updateSlice={updateSlice} onChange={onChange} folderKey="answerWriting"
-                      namePrefix={nextFileNamePrefix(db.answerWriting, rec, r => normKey(r.gsPaper, (r.topics && r.topics[0]) || r.topic), [rec.gsPaper, firstTopic])} />
+                      namePrefix={nextFileNamePrefix(db.answerWriting, rec, r => normKey(r.gsPaper, r.microtopics && r.microtopics[0]), [rec.gsPaper, firstMicrotopic])} />
                   );
                 },
               },
             ]}
-            newRecord={() => ({ date: todayISO(), gsPaper: "GS1", subjects: [], topics: [], question: "", wordLimit: 150, answer: "", status: "Not Started", selfScore: "", improvementNotes: "", driveFile: null })}
+            newRecord={() => ({ date: todayISO(), gsPaper: "GS1", subjects: [], microtopics: [], question: "", wordLimit: 150, answer: "", status: "Not Started", selfScore: "", improvementNotes: "", driveFile: null })}
           />
         </>
       ) : (
@@ -3101,18 +3130,23 @@ function AnswerWritingTab({ db, updateSlice }) {
           </div>
           <GenericTracker
             records={db.topperCopies} setRecords={u => updateSlice("topperCopies", u)}
-            columns={[
-              { key: "date", label: "Date", type: "date", width: 110 },
-              ...gsPaperTopicColumns(db),
-              { key: "question", label: "Question", type: "textarea", width: 240 },
-              { key: "observations", label: "Observations", type: "textarea", width: 220 },
-              {
-                key: "driveFile", label: "Topper Copy PDF", width: 170, type: "custom",
-                render: (rec, onChange) => <DriveFileCell driveFile={rec.driveFile} db={db} updateSlice={updateSlice} onChange={onChange} folderKey="topperCopies"
-                    namePrefix={nextFileNamePrefix(db.topperCopies, rec, r => normKey(r.gsPaper, r.topic), [rec.gsPaper, rec.topic])} />,
-              },
-            ]}
-            newRecord={() => ({ date: todayISO(), gsPaper: "GS1", topic: "", question: "", observations: "", driveFile: null })}
+            columns={(() => {
+              const [gsPaperCol, topicCol] = gsPaperTopicColumns(db);
+              return [
+                { key: "date", label: "Date", type: "date", width: 110 },
+                gsPaperCol,
+                subjectTagColumn(db),
+                topicCol,
+                { key: "question", label: "Question", type: "textarea", width: 240 },
+                { key: "observations", label: "Observations", type: "textarea", width: 220 },
+                {
+                  key: "driveFile", label: "Topper Copy PDF", width: 170, type: "custom",
+                  render: (rec, onChange) => <DriveFileCell driveFile={rec.driveFile} db={db} updateSlice={updateSlice} onChange={onChange} folderKey="topperCopies"
+                      namePrefix={nextFileNamePrefix(db.topperCopies, rec, r => normKey(r.gsPaper, r.topic), [rec.gsPaper, rec.topic])} />,
+                },
+              ];
+            })()}
+            newRecord={() => ({ date: todayISO(), gsPaper: "GS1", subjects: [], topic: "", question: "", observations: "", driveFile: null })}
             emptyMessage="No topper copies logged yet — click Add row below to add your first one."
           />
         </>
@@ -3337,7 +3371,13 @@ function TopicMasterTab({ db, onNavigate }) {
       // this only catches a coincidental exact match (or a legacy
       // single-topic record saved before tags existed), it's not expected
       // to reliably link every answer to a Syllabus row anymore.
-      answerWriting: row.gsPaper ? db.answerWriting.filter(a => a.gsPaper === row.gsPaper && ((a.topics || (a.topic ? [a.topic] : [])).includes(row.topic))) : [],
+      // Answer Writing's Micro Topic tags link by Syllabus row id now (see
+      // AnswerWritingTab) — matches this row directly, same mechanism as
+      // Classes. Falls back to a GS Paper + Topic text match only for
+      // legacy rows saved before that existed (a plain rec.topic string,
+      // predating both the free-text-tag and the id-linked version).
+      answerWriting: db.answerWriting.filter(a => (a.microtopics || []).includes(row.id)
+        || (row.gsPaper && !a.microtopics && a.gsPaper === row.gsPaper && a.topic === row.topic)),
       topperCopies: row.gsPaper ? db.topperCopies.filter(a => a.gsPaper === row.gsPaper && a.topic === row.topic) : [],
     })).sort((a, b) => breadcrumb(a.row).localeCompare(breadcrumb(b.row)));
   }, [db]);
@@ -3495,7 +3535,15 @@ function SearchTab({ db }) {
     scan(db.tamilReading, "Tamil Reading", ["topic", "source"], r => r.topic);
     scan(db.tamilWriting, "Tamil Writing", ["topic", "question"], r => r.topic);
     scan(db.currentAffairs, "Current Affairs", ["title", "subject", "relevantSyllabusTopic"], r => r.title);
-    scan(db.answerWriting, "Answer Writing", ["topics", "topic", "question", "gsPaper", "subjects"], r => `${r.gsPaper} — ${(r.topics && r.topics.join(", ")) || r.topic || "Untitled"}`);
+    // Bespoke rather than the generic scan() above — Micro Topic tags now
+    // store Syllabus row ids (see AnswerWritingTab), which need resolving
+    // to their current text before they mean anything as search terms.
+    db.answerWriting.forEach(a => {
+      const microtopicLabels = (a.microtopics || []).map(id => resolveMicrotopicLabelById(db, id)).filter(Boolean);
+      const legacyTopic = a.microtopics ? "" : (a.topic || "");
+      const hay = [a.question, a.gsPaper, ...(a.subjects || []), ...microtopicLabels, legacyTopic].join(" ").toLowerCase();
+      if (hay.includes(needle)) out.push({ module: "Answer Writing", label: `${a.gsPaper} — ${microtopicLabels.join(", ") || legacyTopic || "Untitled"}` });
+    });
     scan(db.topperCopies, "Topper Copies", ["topic", "question", "gsPaper", "observations"], r => `${r.gsPaper} — ${r.topic}`);
     scan(db.aiLearning, "AI Learning", ["topic", "notes"], r => r.topic);
     return out;
