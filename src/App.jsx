@@ -3502,18 +3502,23 @@ function DashboardTab({ db }) {
     return Math.round((scores.reduce((a, b) => a + b, 0) / scores.length) * 100);
   }, [subtopicRows, syllabusRowsBySubtopicKey, topicCompletionIndexes]);
 
-  // Classes completed by subject — Completed class# vs. that subject's
-  // Total Classes (Settings tab). Subjects with no Total set are skipped
-  // entirely, since "no total" isn't the same as "0% done".
+  // Classes completed by subject — a literal count of rows marked
+  // Completed vs. that subject's Total Classes (Settings tab), not the
+  // highest class number seen (that was the old behavior — it meant a
+  // single Completed row with, say, Class Number 2 always read "2 of N"
+  // regardless of how many other rows were Completed or Partially
+  // Completed, which didn't match what people expect "X of N completed"
+  // to mean). Partially Completed/In Progress/Skipped rows still don't
+  // count — only exactly "Completed" does. Subjects with no Total set are
+  // skipped entirely, since "no total" isn't the same as "0% done".
   const classProgressBySubject = useMemo(() => {
     const totals = settings.totalClassesBySubject || {};
     return settings.subjects
       .filter(subj => totals[subj] != null && totals[subj] > 0)
       .map(subj => {
         const total = totals[subj];
-        const completedNumbers = db.classes.filter(c => c.subject === subj && c.status === "Completed").map(c => Number(c.classNumber) || 0);
-        const latest = completedNumbers.length ? Math.max(...completedNumbers) : 0;
-        return { subject: subj, latest, total, pct: Math.min(100, Math.round((latest / total) * 100)) };
+        const completed = db.classes.filter(c => c.subject === subj && c.status === "Completed").length;
+        return { subject: subj, completed, total, pct: Math.min(100, Math.round((completed / total) * 100)) };
       });
   }, [settings.subjects, settings.totalClassesBySubject, db.classes]);
 
@@ -3555,7 +3560,7 @@ function DashboardTab({ db }) {
 
       <div className="ucc-card">
         <h3>Classes completed by subject</h3>
-        <p className="ucc-tiny">Latest completed class # vs. that subject's Total Classes (set on the Settings tab). Subjects with no total set aren't shown here.</p>
+        <p className="ucc-tiny">Count of classes marked Completed vs. that subject's Total Classes (set on the Settings tab). Subjects with no total set aren't shown here.</p>
         {classProgressBySubject.length === 0 ? (
           <EmptyState>No subjects have a Total Classes set yet — add one on the Settings tab and it'll show up here.</EmptyState>
         ) : (
@@ -3563,7 +3568,7 @@ function DashboardTab({ db }) {
             {classProgressBySubject.map(cp => (
               <div className="ucc-stat" key={cp.subject}>
                 <div className="n">{cp.pct}%</div>
-                <div className="l">{cp.subject} — {cp.latest} of {cp.total}</div>
+                <div className="l">{cp.subject} — {cp.completed} of {cp.total}</div>
               </div>
             ))}
           </div>
