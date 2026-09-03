@@ -2210,21 +2210,23 @@ function TodayTab({ db, updateSlice, onNavigate }) {
         {/* Deliberately sits beside the planner, not buried below it in the
             summary grid — a streak is meant to nag, so it needs to be seen
             every time this tab opens, not scrolled past. flex-start on the
-            row above (not stretch) plus no set height here is load-bearing:
-            stretching this to match the plan card's height (which can be
-            tall) pushed its centered content down past the fold, exactly
-            defeating the "visible without scrolling" point. */}
+            row above (not stretch) is load-bearing: stretching this to
+            match the plan card's own height (which can be tall) pushed its
+            centered content down past the fold. minHeight below is a fixed
+            floor, not tied to the plan card's height the way stretch was,
+            so it can be sized generously without reintroducing that bug on
+            a long day. */}
         <div className="ucc-card" style={{
-          flex: "1 1 190px", maxWidth: 220, margin: 0, padding: "10px 14px", display: "flex",
-          alignItems: "center", gap: 10,
-          background: "var(--red-soft)", border: "2px solid var(--red)",
+          flex: "1 1 220px", maxWidth: 260, minHeight: 300, margin: 0, padding: "24px 20px",
+          display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
+          textAlign: "center", gap: 8,
+          background: "var(--red-soft)", border: "3px solid var(--red)",
         }}>
-          <Flame size={22} style={{ color: "var(--red)", flexShrink: 0 }} />
-          <div>
-            <div style={{ fontSize: 22, fontWeight: 800, color: "var(--red)", lineHeight: 1 }}>
-              {consistencyStreak} <span style={{ fontSize: 12, fontWeight: 700 }}>day{consistencyStreak === 1 ? "" : "s"} streak</span>
-            </div>
-            <div className="ucc-tiny" style={{ color: "var(--ink-muted)" }}>Any tracker logged today keeps it going.</div>
+          <Flame size={44} style={{ color: "var(--red)" }} />
+          <div style={{ fontSize: 52, fontWeight: 800, color: "var(--red)", lineHeight: 1 }}>{consistencyStreak}</div>
+          <div style={{ fontSize: 16, fontWeight: 700, color: "var(--red)" }}>day{consistencyStreak === 1 ? "" : "s"} streak</div>
+          <div className="ucc-tiny" style={{ color: "var(--ink-muted)", marginTop: 8 }}>
+            Log anything today — a class, a chapter, an answer, a single pager — to keep it going.
           </div>
         </div>
       </div>
