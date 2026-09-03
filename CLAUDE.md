@@ -109,15 +109,15 @@ summary will do.
   status. Before adding a field to any tracker, check its current column
   list in the relevant `*Tab` function rather than assuming parity with
   similar-sounding fields elsewhere.
-- **GS Answer Writing (`answerWritingTab`) is sub-tabbed like Tamil
+- **GS Answer Writing (`AnswerWritingTab`) is sub-tabbed like Tamil
   Literature** — "Answer Writing" (`db.answerWriting`) and "Topper Copies"
-  (`db.topperCopies`), sharing the same GS Paper + Topic cells
-  (`GsPaperTopicCells`). Topper Copies is deliberately a smaller shape —
-  Date/GS Paper/Topic/Question/Observations/PDF only, no Word Limit,
-  Status, or Self Score (you didn't write it, so there's nothing of yours
-  to score or lock), and correspondingly no `completionRequiresUpload`.
-  Both key off GS Paper + Topic like Answer Writing always has — neither
-  carries a `syllabusId`.
+  (`db.topperCopies`), sharing `gsPaperColumn`/`subjectTagColumn`/
+  `microtopicTagColumn` (see the Topic-governance bullet above for how
+  Micro Topic linking works here — it differs from every other tracker).
+  Topper Copies is otherwise a smaller shape — Date/GS Paper/Subject/
+  Micro Topic/Question/Observations/PDF only, no Word Limit, Status, or
+  Self Score (you didn't write it, so there's nothing of yours to score or
+  lock), and correspondingly no `completionRequiresUpload`.
 - **"Log" column**: most trackers end with a `LogButton` cell
   (`{ key: "log", ... render: rec => <LogButton history={rec.history} /> }`)
   — a read-only popover over the record's existing `history` array (already
@@ -172,20 +172,28 @@ summary will do.
   left `allowAddNew={false}` (not requested) — if that gap becomes a
   problem, extend it the same way rather than inventing a different
   mechanism. AI Learning remains the one full exception (Topic stays free
-  text — it's explicitly personal/outside the UPSC syllabus). **GS Answer
-  Writing's own Topic is a second full exception**, and unlike AI
-  Learning's plain text it's a tag array (`rec.topics`, via
-  `TagMultiSelectCell` with `allowAddNew`) — one answer can cover several
-  ad hoc angles that don't map to a single Syllabus topic, so typing one
-  here only tags that row locally and never touches Syllabus at all (not
-  even a free-text local copy elsewhere reads from — it's genuinely a
-  separate namespace, suggested from other Answer Writing rows' past tags
-  only). Its Subject (`rec.subjects`, also a tag array — one answer can
-  span several Subjects) stays properly Syllabus-governed though,
-  `allowAddNew={false}`, scoped to whichever Subjects appear on Syllabus
-  under the row's GS Paper. Topper Copies, the other sub-tab of
-  `AnswerWritingTab`, keeps the original single-select Topic (no tags,
-  no Subject) — this exception is scoped to Answer Writing only.
+  text — it's explicitly personal/outside the UPSC syllabus).
+  **`AnswerWritingTab` (both its sub-tabs, Answer Writing and Topper
+  Copies) links to Syllabus differently from every other tracker**: they
+  share `subjectTagColumn` (Subject as a tag array, `rec.subjects` —
+  one answer/topper copy can span several Subjects, `allowAddNew={false}`,
+  scoped to Subjects on Syllabus under the row's GS Paper) and
+  `microtopicTagColumn` (Micro Topic as a tag array, `rec.microtopics`,
+  storing Syllabus row ids like Classes' tags) — but Micro Topic's options
+  come from `microtopicRowOptionsForSubjects`, every Micro Topic under
+  whichever Subject(s) are tagged, **deliberately skipping Syllabus's own
+  Topic/Subtopic levels entirely**. "+ Add new" on Micro Topic doesn't
+  inherit context and create a row inline the way Classes/NCERT/Standard
+  Books do — there's no single Subject/Topic/Subtopic to safely assume
+  here — it opens `AddSyllabusRowPopup` instead, a small modal replicating
+  Syllabus's own add-a-row flow (GS Paper/Subject/Topic/Subtopic pickers,
+  Micro Topic pre-filled), so the person places the new row properly
+  themselves; confirming also adds its Subject to the row's own Subject
+  tags if not already there. Also note `GS_PAPER_SHORT_TO_LONG`: Answer
+  Writing/Topper Copies' own GS Paper field uses short codes ("GS1") while
+  Syllabus's uses long form ("GS Paper I") — always translate through this
+  map when filtering Syllabus by `rec.gsPaper` here, comparing them
+  directly silently matches nothing.
 - **Every Syllabus row auto-created from a "+ Add new" flow (Classes,
   NCERT, Standard Books, Current Affairs) gets a guessed `gsPaper` via
   `defaultGsPaperForSubject`, not a hardcoded blank.** It prefers the most
