@@ -598,6 +598,32 @@ function renameSyllabusValue(db, updateSlice, level, context, oldValue, newValue
     return;
   }
 }
+// After a Syllabus row's own Subject/Topic/Subtopic/Micro Topic changes —
+// via the plain per-row reassignment dropdowns, or a direct Micro Topic
+// text edit — keeps every OTHER tracker record that links to this SPECIFIC
+// row (via syllabusId) showing the same current classification, instead of
+// silently going stale. Deliberately matched by id only, never by text, so
+// moving or correcting one micro topic can never spill over onto a
+// different, unrelated row that happens to share the old Subject/Topic/
+// Subtopic text — that broader, text-matched propagation is what
+// renameSyllabusValue is for (used by "Rename a term" and by editing an
+// existing Micro Topic's text, both genuine "this name is wrong everywhere"
+// corrections). Classes is deliberately not touched here: a Class's own
+// Subject/Topic/Subtopic is the user's classification of the class itself
+// (it can cover several Micro Topics under one Subtopic), not something
+// that should silently move because one tagged Micro Topic did. Its tags
+// resolve their label straight from the live Syllabus row instead (see
+// TagMultiSelectCell's resolveLabel usage on the Classes tab), which stays
+// correct without needing this sync at all.
+function syncSyllabusRowReferences(db, updateSlice, row) {
+  const patch = { subject: row.subject, topic: row.topic, subtopic: row.subtopic, microtopic: row.microtopic };
+  ["reading", "ncert", "standardBooks", "singlePager"].forEach(key => {
+    updateSlice(key, prev => prev.map(r => (r.syllabusId === row.id ? { ...r, ...patch } : r)));
+  });
+  updateSlice("currentAffairs", prev => prev.map(r => (r.syllabusId === row.id
+    ? { ...r, subject: row.subject, relevantSyllabusTopic: row.topic, subtopic: row.subtopic, microtopic: row.microtopic }
+    : r)));
+}
 // Strict topic/subtopic lists scoped to what's actually on the Syllabus tab
 // — the only place (besides Current Affairs, which routes new entries into
 // Syllabus too) new topics/subtopics/micro topics may be created. Every
@@ -936,7 +962,26 @@ function GenericTracker({ records, setRecords, columns, newRecord, emptyMessage,
   const [expanded, setExpanded] = useState(() => new Set());
   const [filters, setFilters] = useState({});
   const [page, setPage] = useState(0);
+  const [reorderMode, setReorderMode] = useState(false);
   const PAGE_SIZE = 100;
+
+  // Swaps a record with its immediate neighbor in the underlying (unfiltered,
+  // unpaged) records array — always resolved by id inside the updater, so
+  // this stays correct regardless of what's currently visible. The "up"/
+  // "down" buttons that call this are only shown once filters are cleared
+  // (see reorderMode below), so a visible neighbor is always the true
+  // array neighbor too.
+  function moveRecord(id, direction) {
+    setRecords(prev => {
+      const idx = prev.findIndex(r => r.id === id);
+      if (idx === -1) return prev;
+      const swapIdx = idx + direction;
+      if (swapIdx < 0 || swapIdx >= prev.length) return prev;
+      const next = prev.slice();
+      [next[idx], next[swapIdx]] = [next[swapIdx], next[idx]];
+      return next;
+    });
+  }
 
   // completionRequiresUpload (opt-in — only Classes, Single Pager, Tamil
   // Writing, GS Answer Writing use this, the trackers that have both a
@@ -1059,20 +1104,29 @@ function GenericTracker({ records, setRecords, columns, newRecord, emptyMessage,
   return (
     <div style={{ overflowX: "auto" }}>
       {(datalists || []).map(dl => <datalist id={dl.id} key={dl.id}>{dl.options.map(o => <option key={o} value={o} />)}</datalist>)}
-      {hasActiveFilters && (
-        <div className="ucc-flex between" style={{ marginBottom: 6 }}>
-          <span className="ucc-tiny">Showing {filteredRecords.length} of {records.length}</span>
-          <button type="button" className="ucc-btn ghost" style={{ padding: "2px 8px" }} onClick={() => { setFilters({}); setPage(0); }}><X size={11} /> Clear filters</button>
+      <div className="ucc-flex between" style={{ marginBottom: 6 }}>
+        <span className="ucc-tiny">{hasActiveFilters ? `Showing ${filteredRecords.length} of ${records.length}` : `${records.length} row${records.length === 1 ? "" : "s"}`}</span>
+        <div className="ucc-flex">
+          {hasActiveFilters && (
+            <button type="button" className="ucc-btn ghost" style={{ padding: "2px 8px" }} onClick={() => { setFilters({}); setPage(0); }}><X size={11} /> Clear filters</button>
+          )}
+          <button type="button" className="ucc-btn ghost" style={{ padding: "2px 8px" }} disabled={hasActiveFilters}
+            title={hasActiveFilters ? "Clear filters first to reorder rows" : (reorderMode ? "Finish reordering" : "Reorder rows with the up/down arrows")}
+            onClick={() => setReorderMode(m => !m)}>
+            {reorderMode ? <Check size={11} /> : <><ChevronUp size={11} /><ChevronDown size={11} /></>} {reorderMode ? "Done" : "Reorder"}
+          </button>
         </div>
-      )}
+      </div>
       <table className="ucc-table">
         <thead>
           <tr>
+            {reorderMode && <th style={{ width: 54 }}></th>}
             {columns.map(c => <th key={c.key} style={{ minWidth: c.width || 100 }}>{c.label}</th>)}
             <th style={{ width: 60 }}>Log</th>
             <th style={{ width: 40 }}></th>
           </tr>
           <tr>
+            {reorderMode && <th></th>}
             {columns.map(col => {
               const cfg = filterConfig[col.key];
               return (
@@ -1096,10 +1150,10 @@ function GenericTracker({ records, setRecords, columns, newRecord, emptyMessage,
         </thead>
         <tbody>
           {records.length === 0 && (
-            <tr><td colSpan={columns.length + 2}><EmptyState>{emptyMessage || "No records yet. Add your first one below."}</EmptyState></td></tr>
+            <tr><td colSpan={columns.length + 2 + (reorderMode ? 1 : 0)}><EmptyState>{emptyMessage || "No records yet. Add your first one below."}</EmptyState></td></tr>
           )}
           {records.length > 0 && filteredRecords.length === 0 && (
-            <tr><td colSpan={columns.length + 2}><EmptyState>No rows match the current filters.</EmptyState></td></tr>
+            <tr><td colSpan={columns.length + 2 + (reorderMode ? 1 : 0)}><EmptyState>No rows match the current filters.</EmptyState></td></tr>
           )}
           {pagedRecords.map(rec => {
             const histCount = (rec.history || []).length;
@@ -1107,6 +1161,14 @@ function GenericTracker({ records, setRecords, columns, newRecord, emptyMessage,
             return (
               <React.Fragment key={rec.id}>
                 <tr>
+                  {reorderMode && (
+                    <td>
+                      <div className="ucc-flex" style={{ gap: 2 }}>
+                        <IconBtn icon={ChevronUp} onClick={() => moveRecord(rec.id, -1)} title="Move up" disabled={rec === pagedRecords[0]} />
+                        <IconBtn icon={ChevronDown} onClick={() => moveRecord(rec.id, 1)} title="Move down" disabled={rec === pagedRecords[pagedRecords.length - 1]} />
+                      </div>
+                    </td>
+                  )}
                   {columns.map(col => {
                     const isStatusCol = col.type === "status";
                     const cell = isStatusCol ? (
@@ -1149,7 +1211,7 @@ function GenericTracker({ records, setRecords, columns, newRecord, emptyMessage,
                 </tr>
                 {expanded.has(rec.id) && (
                   <tr className="ucc-histrow">
-                    <td colSpan={columns.length + 2}>
+                    <td colSpan={columns.length + 2 + (reorderMode ? 1 : 0)}>
                       <strong>Change history</strong>
                       <ul style={{ margin: "4px 0 0 0", paddingLeft: 18 }}>
                         {(rec.history || []).slice().reverse().map((h, i) => (
@@ -1267,13 +1329,24 @@ function CascadingSelectCell({ value, options, placeholder, disabled, onSelect, 
 // a small text input (Enter to confirm, Escape to cancel) — `onAddNew`
 // fires with the trimmed typed value so the caller can create whatever
 // backing record the tag needs (e.g. a new Syllabus row) before adding it.
-function TagMultiSelectCell({ values, options, placeholder, disabled, onChange, allowAddNew = false, onAddNew }) {
+// `resolveLabel`, if given, is tried first — it should look up an id-based
+// tag's label directly off the live Syllabus row (by id, unscoped), not off
+// `options` (which is scoped to the *current row's own* Subject/Topic/
+// Subtopic and so can miss a tag whose underlying Syllabus row has since
+// been reassigned elsewhere — the tag would otherwise fall through to
+// showing its raw stored id instead of a name).
+function TagMultiSelectCell({ values, options, placeholder, disabled, onChange, allowAddNew = false, onAddNew, resolveLabel }) {
   const [adding, setAdding] = useState(false);
   const [draft, setDraft] = useState("");
   const tags = values || [];
   const tagSet = new Set(tags);
   const available = options.filter(o => !tagSet.has(o.value));
-  const labelFor = v => { const opt = options.find(o => o.value === v); return opt ? opt.label : v; };
+  const labelFor = v => {
+    const resolved = resolveLabel && resolveLabel(v);
+    if (resolved) return resolved;
+    const opt = options.find(o => o.value === v);
+    return opt ? opt.label : v;
+  };
   function addTag(v) {
     if (v === ADD_NEW_VALUE) { setAdding(true); setDraft(""); return; }
     if (v) onChange([...tags, v]);
@@ -2023,6 +2096,7 @@ function ClassesTab({ db, updateSlice }) {
               render: (rec, _onChange, updateRecord) => (
                 <TagMultiSelectCell
                   values={rec.microtopics} options={syllabusRowOptionsForSubtopic(db, rec.subject, rec.topic, rec.subtopic)}
+                  resolveLabel={v => { const row = db.syllabus.find(s => s.id === v); return row ? row.microtopic : null; }}
                   placeholder={rec.subtopic ? "+ Add micro topic tag" : "Select subtopic first"} disabled={!rec.subtopic}
                   allowAddNew={!!rec.subtopic}
                   onChange={v => updateRecord({ microtopics: v })}
@@ -2121,6 +2195,26 @@ function ReadingTab({ db, updateSlice }) {
   );
 }
 
+// Plain text cell for a Syllabus row's own Micro Topic, committing on
+// blur/Enter rather than on every keystroke — the caller decides what a
+// commit means (direct set vs. propagate-everywhere) based on whether the
+// row already had a value, so this stays a dumb input with local draft
+// state only.
+function SyllabusMicrotopicCell({ value, onCommit }) {
+  const [draft, setDraft] = useState(value || "");
+  useEffect(() => { setDraft(value || ""); }, [value]);
+  function commit() {
+    const trimmed = draft.trim();
+    if (trimmed !== (value || "")) onCommit(trimmed);
+  }
+  return (
+    <input className="ucc-input" value={draft} placeholder="Micro topic…"
+      onChange={e => setDraft(e.target.value)}
+      onBlur={commit}
+      onKeyDown={e => { if (e.key === "Enter") e.target.blur(); }} />
+  );
+}
+
 function SyllabusTab({ db, updateSlice }) {
   const total = db.syllabus.length;
   const done = db.syllabus.filter(s => s.studyStatus === "Completed" || s.studyStatus === "Revised").length;
@@ -2136,7 +2230,7 @@ function SyllabusTab({ db, updateSlice }) {
           <strong>Subject → Topic → Subtopic → Micro Topic</strong> are linked — pick each in order, or choose <strong>+ Add new</strong> to type one in. These also power the subject-wise dropdowns on the Class Lecture slot in Today's plan. New subjects are added to the shared list on the Settings tab automatically.
         </div>
         <div className="ucc-tiny" style={{ marginTop: 6, color: "var(--ink-muted)" }}>
-          Picked the wrong Paper/Subject/Topic/Subtopic, or typo'd the Micro Topic, on a row? Just fix that field directly on the row below — it only changes this row, nothing else. To rename a Subject/Topic/Subtopic/Micro Topic <em>everywhere it's used</em> (a genuine spelling fix), use "Rename a term" below instead.
+          Picked the wrong Paper/Subject/Topic/Subtopic, or typo'd the Micro Topic, on a row? Just fix that field directly on the row below — Classes, NCERT, Standard Books, Single Pager, and Current Affairs entries already tagged to that exact Micro Topic follow along automatically. To rename a Subject/Topic/Subtopic/Micro Topic <em>everywhere it's used</em> (a genuine spelling fix affecting every Micro Topic under it, not just one), use "Rename a term" below instead.
         </div>
         <div className="ucc-tiny" style={{ marginTop: 6, color: "var(--ink-muted)" }}>
           <strong>Source Identified</strong> is read-only — it's Yes automatically once this exact Micro Topic appears in Classes, NCERT, or Standard Books, and No (or — with no Micro Topic set) otherwise.
@@ -2169,12 +2263,18 @@ function SyllabusTab({ db, updateSlice }) {
               render: (rec, _onChange, updateRecord) => (
                 <CascadingSelectCell
                   value={rec.subject} options={db.settings.subjects} placeholder="Select subject…"
-                  onSelect={v => updateRecord({ subject: v })}
+                  onSelect={v => {
+                    const nextRow = { ...rec, subject: v };
+                    updateRecord({ subject: v });
+                    syncSyllabusRowReferences(db, updateSlice, nextRow);
+                  }}
                   onAddNew={name => {
                     // New subjects join the shared master list (Settings tab)
                     // so they immediately appear in every other subject dropdown.
                     updateSlice("settings", s => (s.subjects.includes(name) ? s : { ...s, subjects: [...s.subjects, name] }));
+                    const nextRow = { ...rec, subject: name };
                     updateRecord({ subject: name });
+                    syncSyllabusRowReferences(db, updateSlice, nextRow);
                   }}
                 />
               ),
@@ -2185,8 +2285,16 @@ function SyllabusTab({ db, updateSlice }) {
                 <CascadingSelectCell
                   value={rec.topic} options={syllabusTopicsForSubject(db, rec.subject)}
                   placeholder={rec.subject ? "Select topic…" : "Select subject first"} disabled={!rec.subject}
-                  onSelect={v => updateRecord({ topic: v })}
-                  onAddNew={name => updateRecord({ topic: name })}
+                  onSelect={v => {
+                    const nextRow = { ...rec, topic: v };
+                    updateRecord({ topic: v });
+                    syncSyllabusRowReferences(db, updateSlice, nextRow);
+                  }}
+                  onAddNew={name => {
+                    const nextRow = { ...rec, topic: name };
+                    updateRecord({ topic: name });
+                    syncSyllabusRowReferences(db, updateSlice, nextRow);
+                  }}
                 />
               ),
             },
@@ -2196,18 +2304,43 @@ function SyllabusTab({ db, updateSlice }) {
                 <CascadingSelectCell
                   value={rec.subtopic} options={syllabusSubtopicsForTopic(db, rec.subject, rec.topic)}
                   placeholder={rec.topic ? "Select subtopic…" : "Select topic first"} disabled={!rec.topic}
-                  onSelect={v => updateRecord({ subtopic: v })}
-                  onAddNew={name => updateRecord({ subtopic: name })}
+                  onSelect={v => {
+                    const nextRow = { ...rec, subtopic: v };
+                    updateRecord({ subtopic: v });
+                    syncSyllabusRowReferences(db, updateSlice, nextRow);
+                  }}
+                  onAddNew={name => {
+                    const nextRow = { ...rec, subtopic: name };
+                    updateRecord({ subtopic: name });
+                    syncSyllabusRowReferences(db, updateSlice, nextRow);
+                  }}
                 />
               ),
             },
             {
               // Plain editable text, not a dropdown — a Micro Topic is this
-              // row's own identity, so fixing a typo should be a direct edit
-              // right here, with no "rename everywhere" side effect (nothing
-              // else references this row's old text yet if it was just
-              // mistyped while adding).
-              key: "microtopic", label: "Micro Topic", width: 200, placeholder: "Micro topic…",
+              // row's own identity, so fixing a typo is a direct edit right
+              // here. Commits on blur/Enter (not per keystroke): if this row
+              // already had a Micro Topic, the edit is treated as a genuine
+              // rename and propagated everywhere it's used (Reading/NCERT/
+              // Standard Books/Single Pager/Current Affairs, and Classes'
+              // legacy text tags) via the same renameSyllabusValue "Rename a
+              // term" uses. If it was empty (freshly added), nothing could
+              // already reference it, so it's just set directly.
+              key: "microtopic", label: "Micro Topic", width: 200, type: "custom",
+              render: (rec, _onChange, updateRecord) => (
+                <SyllabusMicrotopicCell
+                  value={rec.microtopic}
+                  onCommit={newValue => {
+                    const oldValue = rec.microtopic;
+                    if (oldValue && newValue) {
+                      renameSyllabusValue(db, updateSlice, "microtopic", { subject: rec.subject, topic: rec.topic, subtopic: rec.subtopic }, oldValue, newValue);
+                    } else {
+                      updateRecord({ microtopic: newValue });
+                    }
+                  }}
+                />
+              ),
             },
             {
               key: "sourceIdentified", label: "Source Identified", width: 130, type: "custom",
