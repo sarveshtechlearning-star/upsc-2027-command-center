@@ -873,6 +873,83 @@ async function ensureDriveFolder(accessToken, db, updateSlice, folderKey) {
   return folderId;
 }
 
+const ARCHIVE_ROOT_FOLDER_NAME = "UPSC 2027 Command Center - Archives";
+// One shared top-level "Archives" folder, found/created once and cached
+// like ensureDriveFolder's per-tracker folders — every reset's dated
+// subfolder lives inside this, rather than each reset creating its own
+// disconnected top-level folder.
+async function ensureArchiveRootFolder(accessToken, db, updateSlice) {
+  const existingId = db.settings.driveArchiveRootFolderId;
+  if (existingId) return existingId;
+  const q = encodeURIComponent(`name='${ARCHIVE_ROOT_FOLDER_NAME}' and mimeType='application/vnd.google-apps.folder' and trashed=false`);
+  const searchRes = await driveFetch(`https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id,name)`, accessToken);
+  const searchData = await searchRes.json();
+  let folderId = searchData.files && searchData.files[0] && searchData.files[0].id;
+  if (!folderId) {
+    const createRes = await driveFetch("https://www.googleapis.com/drive/v3/files?fields=id", accessToken, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: ARCHIVE_ROOT_FOLDER_NAME, mimeType: "application/vnd.google-apps.folder" }),
+    });
+    folderId = (await createRes.json()).id;
+  }
+  updateSlice("settings", prev => ({ ...prev, driveArchiveRootFolderId: folderId }));
+  return folderId;
+}
+// A fresh, uniquely-named subfolder for one specific reset (never reused
+// across resets, unlike the root above) — minutes included in the name
+// since two resets in the same day are entirely possible.
+async function createDatedArchiveFolder(accessToken, parentId, label) {
+  const now = new Date();
+  const pad = n => String(n).padStart(2, "0");
+  const stamp = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}-${pad(now.getMinutes())}`;
+  const name = label ? `Archive ${stamp} — ${label}` : `Archive ${stamp}`;
+  const createRes = await driveFetch("https://www.googleapis.com/drive/v3/files?fields=id", accessToken, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, mimeType: "application/vnd.google-apps.folder", parents: [parentId] }),
+  });
+  return (await createRes.json()).id;
+}
+// Drive v3 "move" is really "swap parents" — has to know the current
+// parent(s) to remove before adding the new one, or the folder ends up
+// visible in both places instead of actually moved.
+async function moveDriveFolder(accessToken, folderId, newParentId) {
+  const getRes = await driveFetch(`https://www.googleapis.com/drive/v3/files/${folderId}?fields=parents`, accessToken);
+  const oldParents = ((await getRes.json()).parents || []).join(",");
+  const url = `https://www.googleapis.com/drive/v3/files/${folderId}?addParents=${newParentId}${oldParents ? `&removeParents=${oldParents}` : ""}&fields=id,parents`;
+  await driveFetch(url, accessToken, { method: "PATCH" });
+}
+// Archives the Drive folders for the given tracker keys into one fresh
+// dated subfolder under the shared Archives root, then clears their
+// cached folder ids so the next upload for that tracker creates a brand
+// new top-level folder — the practical equivalent of "clear out the old
+// files" without ever actually deleting anything from Drive (Reset has
+// never done that, and drive.file scope aside, still doesn't). Skips a
+// folder key entirely if nothing was ever uploaded for it (no cached id to
+// move), and skips the whole operation — no Archives root created, no API
+// calls made — if none of the requested keys have anything to archive.
+async function archiveDriveFolders(db, updateSlice, folderKeys, label) {
+  const existing = folderKeys
+    .map(key => ({ key, id: (db.settings.driveFolders && db.settings.driveFolders[key]) || (key === "singlePager" ? db.settings.driveFolderId : null) }))
+    .filter(x => x.id);
+  if (existing.length === 0) return { archived: 0 };
+  const accessToken = await getDriveAccessToken();
+  const rootId = await ensureArchiveRootFolder(accessToken, db, updateSlice);
+  const datedFolderId = await createDatedArchiveFolder(accessToken, rootId, label);
+  for (const { id } of existing) {
+    await moveDriveFolder(accessToken, id, datedFolderId);
+  }
+  updateSlice("settings", prev => {
+    const nextFolders = { ...(prev.driveFolders || {}) };
+    existing.forEach(({ key }) => { delete nextFolders[key]; });
+    const patch = { driveFolders: nextFolders };
+    if (existing.some(x => x.key === "singlePager")) patch.driveFolderId = null;
+    return { ...prev, ...patch };
+  });
+  return { archived: existing.length };
+}
+
 function buildDriveMultipartBody(metadata, file, boundary) {
   const metaPart = `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(metadata)}\r\n`;
   const fileHeader = `--${boundary}\r\nContent-Type: ${file.type || "application/pdf"}\r\n\r\n`;
@@ -4195,22 +4272,45 @@ function DangerZone({ db, updateSlice }) {
   const [open, setOpen] = useState(false);
   const [confirmText, setConfirmText] = useState("");
   const [done, setDone] = useState(false);
+  const [busy, setBusy] = useState(false);
 
   const [sectionOpen, setSectionOpen] = useState(false);
   const [sectionKey, setSectionKey] = useState("");
   const [sectionConfirmText, setSectionConfirmText] = useState("");
   const [sectionDone, setSectionDone] = useState("");
 
-  function resetAllData() {
+  // Archiving is best-effort: a reset always clears the app's own data
+  // regardless of whether the Drive side succeeds (auth issues, offline,
+  // Drive not configured at all) — that's the one thing this button has
+  // always reliably done. A failed archive just means old files are left
+  // exactly where the un-archived version of Reset always left them
+  // (in their normal folder, untouched), not lost.
+  async function resetAllData() {
+    setBusy(true);
+    try {
+      await archiveDriveFolders(db, updateSlice, Object.keys(DRIVE_FOLDER_NAMES), "Full reset");
+    } catch (e) {
+      window.alert(`Data will still be cleared, but archiving Drive folders failed: ${e.message}\n\nYour existing files are safe in their original folders — try Reset again once Drive is reachable, or move them in Drive yourself.`);
+    }
     Object.entries(CLEARABLE_DATA_KEYS).forEach(([key, emptyValue]) => updateSlice(key, () => emptyValue));
+    setBusy(false);
     setOpen(false); setConfirmText(""); setDone(true);
     setTimeout(() => setDone(false), 5000);
   }
 
-  function resetSection() {
+  async function resetSection() {
     if (!sectionKey) return;
     const label = RESETTABLE_SECTION_LABELS[sectionKey];
+    setBusy(true);
+    if (DRIVE_FOLDER_NAMES[sectionKey]) {
+      try {
+        await archiveDriveFolders(db, updateSlice, [sectionKey], label);
+      } catch (e) {
+        window.alert(`${label} will still be cleared, but archiving its Drive folder failed: ${e.message}\n\nYour existing files are safe in their original folder — try again once Drive is reachable, or move them in Drive yourself.`);
+      }
+    }
     updateSlice(sectionKey, () => CLEARABLE_DATA_KEYS[sectionKey]);
+    setBusy(false);
     setSectionOpen(false); setSectionKey(""); setSectionConfirmText("");
     setSectionDone(label);
     setTimeout(() => setSectionDone(""), 5000);
@@ -4240,6 +4340,10 @@ function DangerZone({ db, updateSlice }) {
               <p className="ucc-tiny">
                 This permanently clears <strong>{RESETTABLE_SECTION_LABELS[sectionKey]}</strong> only — every other
                 section (including Settings) is left exactly as it is. This cannot be undone.
+                {DRIVE_FOLDER_NAMES[sectionKey] && (
+                  <> Its Drive folder is archived first — moved into a dated folder under "{ARCHIVE_ROOT_FOLDER_NAME}",
+                  not deleted — so the next upload here starts a fresh folder instead of mixing with the old files.</>
+                )}
                 {sectionKey === "syllabus" && (
                   <> <strong>Heads up:</strong> other trackers still reference Syllabus rows
                   {linkedToSyllabusCount > 0 ? ` (${linkedToSyllabusCount} record${linkedToSyllabusCount === 1 ? "" : "s"} right now)` : ""} —
@@ -4250,11 +4354,11 @@ function DangerZone({ db, updateSlice }) {
               </p>
               <p className="ucc-tiny">Type <strong>RESET</strong> to confirm.</p>
               <div className="ucc-flex">
-                <input className="ucc-input" style={{ maxWidth: 140 }} value={sectionConfirmText} onChange={e => setSectionConfirmText(e.target.value)} placeholder="RESET" />
-                <button className="ucc-btn primary" style={{ background: "var(--red)", borderColor: "var(--red)" }} disabled={sectionConfirmText !== "RESET"} onClick={resetSection}>
-                  <Trash2 size={14} /> Confirm reset
+                <input className="ucc-input" style={{ maxWidth: 140 }} value={sectionConfirmText} onChange={e => setSectionConfirmText(e.target.value)} placeholder="RESET" disabled={busy} />
+                <button className="ucc-btn primary" style={{ background: "var(--red)", borderColor: "var(--red)" }} disabled={sectionConfirmText !== "RESET" || busy} onClick={resetSection}>
+                  <Trash2 size={14} /> {busy ? "Archiving & resetting…" : "Confirm reset"}
                 </button>
-                <button className="ucc-btn ghost" onClick={() => { setSectionOpen(false); setSectionKey(""); setSectionConfirmText(""); }}>Cancel</button>
+                <button className="ucc-btn ghost" disabled={busy} onClick={() => { setSectionOpen(false); setSectionKey(""); setSectionConfirmText(""); }}>Cancel</button>
               </div>
             </>
           )}
@@ -4272,20 +4376,22 @@ function DangerZone({ db, updateSlice }) {
             This permanently clears <strong>Syllabus, Classes, Reading, Single Pager, NCERT, Standard Books,
             Tamil Literature Reading &amp; Writing, Current Affairs, GS Answer Writing, AI Learning, all Daily
             Plans, End-of-day reviews, and Weekly reviews.</strong> Your Settings (subjects, wake time, slot
-            template) are kept exactly as configured. This cannot be undone — any PDFs already in Google Drive
-            are left untouched, only the app's own data is cleared.
+            template) are kept exactly as configured. This cannot be undone. Every tracker's Drive folder is
+            archived first — moved into a fresh dated folder under a shared "{ARCHIVE_ROOT_FOLDER_NAME}" folder in
+            your Drive, not deleted — so nothing is lost and the next upload anywhere starts a clean folder instead
+            of mixing with the old files.
           </p>
           <p className="ucc-tiny">Type <strong>RESET</strong> to confirm.</p>
           <div className="ucc-flex">
-            <input className="ucc-input" style={{ maxWidth: 140 }} value={confirmText} onChange={e => setConfirmText(e.target.value)} placeholder="RESET" />
-            <button className="ucc-btn primary" style={{ background: "var(--red)", borderColor: "var(--red)" }} disabled={confirmText !== "RESET"} onClick={resetAllData}>
-              <Trash2 size={14} /> Confirm reset
+            <input className="ucc-input" style={{ maxWidth: 140 }} value={confirmText} onChange={e => setConfirmText(e.target.value)} placeholder="RESET" disabled={busy} />
+            <button className="ucc-btn primary" style={{ background: "var(--red)", borderColor: "var(--red)" }} disabled={confirmText !== "RESET" || busy} onClick={resetAllData}>
+              <Trash2 size={14} /> {busy ? "Archiving & resetting…" : "Confirm reset"}
             </button>
-            <button className="ucc-btn ghost" onClick={() => { setOpen(false); setConfirmText(""); }}>Cancel</button>
+            <button className="ucc-btn ghost" disabled={busy} onClick={() => { setOpen(false); setConfirmText(""); }}>Cancel</button>
           </div>
         </div>
       )}
-      {done && <p className="ucc-tiny" style={{ color: "var(--green)" }}>All tracked data cleared — your Settings were kept.</p>}
+      {done && <p className="ucc-tiny" style={{ color: "var(--green)" }}>All tracked data cleared and Drive folders archived — your Settings were kept.</p>}
     </div>
   );
 }
