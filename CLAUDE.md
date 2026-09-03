@@ -336,13 +336,20 @@ summary will do.
     own per-row Source Identified column is intentionally NOT part of this
     change — it still uses `isSourceIdentifiedForMicrotopic` at whatever
     granularity that specific row represents, unchanged.
-  - **Classes completed by subject**: latest *Completed* class# vs. that
-    subject's Total Classes, which lives in
-    `settings.totalClassesBySubject` (a plain `{ [subject]: number }` map,
-    set on the Settings tab — deliberately not a per-class-row field,
+  - **Classes completed by subject**: a literal count of rows with
+    `status === "Completed"` vs. that subject's Total Classes, which lives
+    in `settings.totalClassesBySubject` (a plain `{ [subject]: number }`
+    map, set on the Settings tab — deliberately not a per-class-row field,
     since that was tried before and removed for being redundant/
-    error-prone). A subject only appears here once its total is set;
-    "no total set" and "0% done" are treated as different things.
+    error-prone). **Not** the highest `classNumber` seen among Completed
+    rows — that was the original behavior and was changed by request,
+    since a single Completed row at Class Number 2 reading "2 of 26"
+    regardless of how many other rows were Completed or Partially
+    Completed didn't match what "X of N completed" means to someone
+    reading it. Partially Completed/In Progress/Skipped rows still don't
+    count toward it either way — only exactly "Completed" does. A subject
+    only appears here once its total is set; "no total set" and "0% done"
+    are treated as different things.
   - **Classes — overall status** pie chart buckets every class's status
     into exactly three groups: Completed, In Progress, and Not Completed
     (Not Started + Partially Completed + Skipped, combined). `PieChart` is
