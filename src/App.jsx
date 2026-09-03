@@ -1164,9 +1164,18 @@ function GenericTracker({ records, setRecords, columns, newRecord, emptyMessage,
   // values (free-text fields like Question/Notes) get a substring-search
   // box instead of a dropdown, since a dropdown of 40 unique sentences
   // isn't useful.
+  // Filters auto-pick text vs. a dropdown of every distinct value based on
+  // how many distinct values exist (a dropdown stops being useful past ~15,
+  // or once a value's too long to sit comfortably in one) — but a column
+  // can force `filterType: "text"` to skip that heuristic outright, for a
+  // field that's always going to be free-text-like in practice regardless
+  // of how many distinct values happen to exist right now (e.g. Syllabus's
+  // Micro Topic, which could start under the dropdown threshold on a
+  // lightly-filled-in syllabus and flip once it isn't).
   const filterConfig = useMemo(() => {
     const cfg = {};
     columns.forEach(col => {
+      if (col.filterType === "text") { cfg[col.key] = { type: "text", options: [] }; return; }
       const values = new Set();
       let hasComplexValue = false;
       records.forEach(r => {
@@ -2576,7 +2585,7 @@ function SyllabusTab({ db, updateSlice }) {
               // legacy text tags) via the same renameSyllabusValue "Rename a
               // term" uses. If it was empty (freshly added), nothing could
               // already reference it, so it's just set directly.
-              key: "microtopic", label: "Micro Topic", width: 200, type: "custom",
+              key: "microtopic", label: "Micro Topic", width: 200, type: "custom", filterType: "text",
               render: (rec, _onChange, updateRecord) => (
                 <SyllabusMicrotopicCell
                   value={rec.microtopic}
