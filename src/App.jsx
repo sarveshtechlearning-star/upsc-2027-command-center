@@ -199,7 +199,6 @@ const CSS = `
    CONSTANTS
    ============================================================ */
 const READ_STATUS = ["Yet to Start", "In Progress", "Completed", "Not Needed"];
-const SYLLABUS_STATUS = ["Not Started", "In Progress", "Completed", "Revised", "Strong", "Weak"];
 const TASK_STATUS = ["Not Started", "In Progress", "Completed", "Partially Completed", "Skipped"];
 const GS_PAPERS = ["GS1", "GS2", "GS3", "GS4", "Essay"];
 const SP_STATUS = ["Not Started", "In Progress", "Completed"];
@@ -415,7 +414,7 @@ function defaultDB() {
       slotTemplate: [...CORE_SLOT_TEMPLATE, AI_BLOCK],
       driveFolderId: null, // cached id of the Google Drive folder used for Single Pager PDFs
     },
-    syllabus: SYLLABUS_SEED.map(s => ({ id: uid(), ...s, subtopic: "", microtopic: "", studyStatus: "Not Started", revisionStatus: "Not Started", history: [] })),
+    syllabus: SYLLABUS_SEED.map(s => ({ id: uid(), ...s, subtopic: "", microtopic: "", history: [] })),
     classes: [], reading: [], singlePager: [], ncert: [], standardBooks: [],
     tamilReading: [], tamilWriting: [], currentAffairs: [], answerWriting: [], topperCopies: [], aiLearning: [],
     dailyPlans: {}, dailyReviews: {}, weeklyReviews: {},
@@ -1798,17 +1797,6 @@ function computePlanTimes(plan) {
 /* ============================================================
    PRIORITY / LINKING HELPERS
    ============================================================ */
-function upsertReadingForTopic(readingArr, subject, topic, classNumber, dateISO, syllabusId, subtopic) {
-  const key = normKey(subject, topic);
-  const existing = readingArr.find(r => normKey(r.subject, r.topic) === key);
-  if (existing) return readingArr;
-  return [...readingArr, {
-    id: uid(), date: dateISO, subject, classNumber: classNumber || "", topic, subtopic: subtopic || "", microtopic: "", syllabusId: syllabusId || null,
-    classNotes: "In Progress", standardMaterial: "Yet to Start", ncert: "Yet to Start", singlePager: "Yet to Start",
-    revision1: "Yet to Start", revision2: "Yet to Start", history: [],
-  }];
-}
-
 function readingCompletionPct(rec) {
   const fields = ["classNotes", "standardMaterial", "ncert", "singlePager"];
   const applicable = fields.filter(f => rec[f] !== "Not Needed");
@@ -1833,35 +1821,39 @@ function topicCompletionScore(readingRec) {
 
 function computePendingTasks(db) {
   const items = [];
-  const yISO = addDaysISO(todayISO(), -1);
+  // Topic Completion is a computed overview of Syllabus now (see "TOPIC
+  // COMPLETION — COMPUTED-FIELD HELPERS") — these two sections walk
+  // db.syllabus instead of db.reading, since db.reading only holds the
+  // manually-set Revision 1/2 values for a subset of rows, not a full
+  // mirror of every topic anymore. The old "Previous day's class notes"
+  // section is gone entirely: Class Notes is now derived directly from a
+  // matching Class's own Completed status, so the moment you complete a
+  // class, its topic's Class Notes reads Completed too — there's no
+  // separate manual step left for this reminder to catch anyone missing.
+  const topicCompletionIndexes = buildTopicCompletionIndexes(db);
   // 2. Revision due
-  db.reading.forEach(r => {
-    if (r.classNotes === "Completed" && (r.revision1 === "Yet to Start" || r.revision1 === "In Progress")) {
-      items.push({ cat: "Revision due", label: `${r.subject} — ${r.topic}`, detail: "Revision 1 pending", date: r.date, tab: "reading" });
-    } else if (r.revision1 === "Completed" && (r.revision2 === "Yet to Start" || r.revision2 === "In Progress")) {
-      items.push({ cat: "Revision due", label: `${r.subject} — ${r.topic}`, detail: "Revision 2 pending", date: r.date, tab: "reading" });
-    }
-  });
-  // 3. Previous day's class notes
-  db.classes.filter(c => c.date === yISO && c.status === "Completed").forEach(c => {
-    const r = db.reading.find(x => normKey(x.subject, x.topic) === normKey(c.subject, c.topic));
-    if (!r || r.classNotes !== "Completed") {
-      items.push({ cat: "Yesterday's class", label: `${c.subject} — ${c.topic}`, detail: "Class notes reading pending", date: c.date, tab: "classes" });
+  db.syllabus.forEach(row => {
+    const f = computeTopicCompletionFields(row, topicCompletionIndexes);
+    if (f.classNotes === "Completed" && (f.revision1 === "Yet to Start" || f.revision1 === "In Progress")) {
+      items.push({ cat: "Revision due", label: `${row.subject} — ${row.topic}`, detail: "Revision 1 pending", date: "", tab: "reading" });
+    } else if (f.revision1 === "Completed" && (f.revision2 === "Yet to Start" || f.revision2 === "In Progress")) {
+      items.push({ cat: "Revision due", label: `${row.subject} — ${row.topic}`, detail: "Revision 2 pending", date: "", tab: "reading" });
     }
   });
   // 5. Pending reading (standard material / NCERT) — no longer requires Class Notes to be "Completed" first
-  db.reading.forEach(r => {
-    if (r.standardMaterial !== "Completed" && r.standardMaterial !== "Not Needed") {
-      items.push({ cat: "Pending reading", label: `${r.subject} — ${r.topic}`, detail: `Standard material: ${r.standardMaterial}`, date: r.date, tab: "reading" });
-    } else if (r.ncert !== "Completed" && r.ncert !== "Not Needed") {
-      items.push({ cat: "Pending reading", label: `${r.subject} — ${r.topic}`, detail: `NCERT: ${r.ncert}`, date: r.date, tab: "reading" });
+  db.syllabus.forEach(row => {
+    const f = computeTopicCompletionFields(row, topicCompletionIndexes);
+    if (f.standardMaterial !== "Completed") {
+      items.push({ cat: "Pending reading", label: `${row.subject} — ${row.topic}`, detail: `Standard material: ${f.standardMaterial}`, date: "", tab: "reading" });
+    } else if (f.ncert !== "Completed") {
+      items.push({ cat: "Pending reading", label: `${row.subject} — ${row.topic}`, detail: `NCERT: ${f.ncert}`, date: "", tab: "reading" });
     }
   });
   // 6. Overdue single pagers
   db.singlePager.filter(s => s.status !== "Completed").forEach(s => {
     items.push({ cat: "Single pager", label: `${s.subject} — ${s.topic}`, detail: `Single pager: ${s.status || "Not Started"}`, date: s.date || "", tab: "singlePager" });
   });
-  const order = ["Revision due", "Yesterday's class", "Pending reading", "Single pager", "Other pending"];
+  const order = ["Revision due", "Pending reading", "Single pager", "Other pending"];
   items.sort((a, b) => order.indexOf(a.cat) - order.indexOf(b.cat) || (a.date || "").localeCompare(b.date || ""));
   return items;
 }
@@ -1979,11 +1971,18 @@ function TodayTab({ db, updateSlice, onNavigate }) {
   const revisionDue = pending.filter(p => p.cat === "Revision due");
   const yISO = addDaysISO(dateISO, -1);
   const yClasses = db.classes.filter(c => c.date === yISO && c.status === "Completed");
-  const pendingReadingCount = db.reading.filter(r => readingCompletionPct(r) < 100).length;
+  // Topic Completion is a computed overview of Syllabus now (see "TOPIC
+  // COMPLETION — COMPUTED-FIELD HELPERS"), so "pending" and "fully done"
+  // are both measured across db.syllabus, not db.reading (db.reading only
+  // holds the manually-set Revision 1/2 values for a subset of rows).
+  const topicCompletionIndexes = useMemo(() => buildTopicCompletionIndexes(db),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [db.classes, db.ncert, db.standardBooks, db.singlePager, db.reading]);
+  const pendingReadingCount = db.syllabus.filter(row => readingCompletionPct(computeTopicCompletionFields(row, topicCompletionIndexes)) < 100).length;
   const pendingSP = db.singlePager.filter(s => s.status !== "Completed");
   const todayAnswers = db.answerWriting.filter(a => a.date === dateISO);
   const todayCA = db.currentAffairs.filter(c => c.date === dateISO);
-  const syllabusDone = db.syllabus.filter(s => s.studyStatus === "Completed" || s.studyStatus === "Revised").length;
+  const topicsFullyDone = db.syllabus.filter(row => topicCompletionScore(computeTopicCompletionFields(row, topicCompletionIndexes)) === 1).length;
 
   return (
     <div>
@@ -2104,7 +2103,7 @@ function TodayTab({ db, updateSlice, onNavigate }) {
             yClasses.map(c => <div key={c.id} className="ucc-tiny">{c.subject} #{c.classNumber} — {c.topic}</div>)}
         </SummaryCard>
         <SummaryCard title="Topic completion" count={pendingReadingCount} onTitleClick={() => onNavigate("reading")}>
-          <div className="ucc-tiny">{pendingReadingCount} of {db.reading.length} topics have pending reading items.</div>
+          <div className="ucc-tiny">{pendingReadingCount} of {db.syllabus.length} topics have pending reading items.</div>
         </SummaryCard>
         <SummaryCard title="Single pager" count={pendingSP.length} onTitleClick={() => onNavigate("singlePager")}>
           {pendingSP.length === 0 ? <EmptyState>All tracked single pagers are up to date.</EmptyState> :
@@ -2118,8 +2117,8 @@ function TodayTab({ db, updateSlice, onNavigate }) {
           {todayCA.length === 0 ? <EmptyState>No current affairs added for today.</EmptyState> :
             todayCA.map(c => <div key={c.id} className="ucc-tiny">{c.title}</div>)}
         </SummaryCard>
-        <SummaryCard title="Progress" count={syllabusDone} onTitleClick={() => onNavigate("syllabus")}>
-          <div className="ucc-tiny">{syllabusDone} of {db.syllabus.length} syllabus items completed/revised</div>
+        <SummaryCard title="Progress" count={topicsFullyDone} onTitleClick={() => onNavigate("reading")}>
+          <div className="ucc-tiny">{topicsFullyDone} of {db.syllabus.length} topics fully complete (notes, material, both revisions)</div>
           <div className="ucc-tiny">{db.classes.filter(c => c.status === "Completed").length} classes completed</div>
           <div className="ucc-tiny">{db.singlePager.filter(s => s.status === "Completed").length} single pagers completed</div>
         </SummaryCard>
@@ -2339,7 +2338,7 @@ function ClassesTab({ db, updateSlice }) {
                     const newId = uid();
                     updateSlice("syllabus", prev => [...prev, {
                       id: newId, gsPaper: defaultGsPaperForSubject(db, rec.subject), subject: rec.subject, topic: rec.topic, subtopic: rec.subtopic, microtopic: name,
-                      studyStatus: "Not Started", revisionStatus: "Not Started", history: [],
+                      history: [],
                     }]);
                     updateRecord({ microtopics: [...(rec.microtopics || []), newId] });
                   }}
@@ -2376,66 +2375,109 @@ function ClassesTab({ db, updateSlice }) {
   );
 }
 
+// Topic Completion — a computed overview of the other trackers, keyed 1:1
+// to Syllabus rows (see the "TOPIC COMPLETION — COMPUTED-FIELD HELPERS"
+// block above). Rows aren't added/removed here: add/edit Subject/Topic/
+// Subtopic/Micro Topic on the Syllabus tab and a row shows up (or updates)
+// automatically. Class Notes, Standard Material, NCERT, and Single Pager
+// are all read-only, derived from Classes/Standard Books/NCERT/Single
+// Pager. Revision 1 and 2 are the only fields actually set here — editing
+// one patches this row's existing "reading" record (matched by syllabusId)
+// or lazily creates one on the very first edit.
 function ReadingTab({ db, updateSlice }) {
+  const [query, setQuery] = useState("");
+  const [page, setPage] = useState(0);
+  const PAGE_SIZE = 100;
+
+  const indexes = useMemo(() => buildTopicCompletionIndexes(db),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [db.classes, db.ncert, db.standardBooks, db.singlePager, db.reading]);
+
+  const rows = useMemo(() => {
+    return db.syllabus
+      .map(row => ({ row, fields: computeTopicCompletionFields(row, indexes) }))
+      .sort((a, b) => breadcrumb(a.row).localeCompare(breadcrumb(b.row)));
+  }, [db.syllabus, indexes]);
+
+  const filtered = query.trim()
+    ? rows.filter(r => breadcrumb(r.row).toLowerCase().includes(query.trim().toLowerCase()))
+    : rows;
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const safePage = Math.min(page, totalPages - 1);
+  const paged = filtered.slice(safePage * PAGE_SIZE, (safePage + 1) * PAGE_SIZE);
+
+  function updateRevision(row, fields, patch) {
+    updateSlice("reading", prev => {
+      if (fields.readingRecId) {
+        return prev.map(r => (r.id === fields.readingRecId ? { ...r, ...patch } : r));
+      }
+      return [...prev, {
+        id: uid(), syllabusId: row.id, subject: row.subject, topic: row.topic, subtopic: row.subtopic, microtopic: row.microtopic,
+        revision1: "Yet to Start", revision2: "Yet to Start", history: [], ...patch,
+      }];
+    });
+  }
+
   return (
     <div className="ucc-card">
       <h3>Topic completion</h3>
-      <p className="ucc-tiny">"Not Needed" items are excluded from completion — they never count against you.</p>
-      <div className="ucc-tiny" style={{ marginBottom: 8, color: "var(--ink-muted)" }}>
-        Topic/Subtopic/Micro Topic are chosen from the Syllabus tab — new ones can't be added here.
-      </div>
-      <GenericTracker
-        records={db.reading} setRecords={u => updateSlice("reading", u)}
-        columns={[
-          { key: "date", label: "Date", type: "date", width: 110 },
-          {
-            key: "subject", label: "Subject", width: 130, type: "custom",
-            render: (rec, _onChange, updateRecord) => (
-              <CascadingSelectCell
-                value={rec.subject} options={db.settings.subjects} placeholder="Select subject…" allowAddNew={false}
-                onSelect={v => updateRecord({ subject: v, topic: "", subtopic: "", microtopic: "", syllabusId: null })}
-              />
-            ),
-          },
-          {
-            key: "topic", label: "Topic", width: 180, type: "custom",
-            render: (rec, _onChange, updateRecord) => (
-              <CascadingSelectCell
-                value={rec.topic} options={syllabusTopicsForSubject(db, rec.subject)} allowAddNew={false}
-                placeholder={rec.subject ? "Select topic…" : "Select subject first"} disabled={!rec.subject}
-                onSelect={v => updateRecord({ topic: v, subtopic: "", microtopic: "", syllabusId: findSyllabusId(db, { subject: rec.subject, topic: v }) })}
-              />
-            ),
-          },
-          {
-            key: "subtopic", label: "Subtopic", width: 180, type: "custom",
-            render: (rec, _onChange, updateRecord) => (
-              <CascadingSelectCell
-                value={rec.subtopic} options={syllabusSubtopicsForTopic(db, rec.subject, rec.topic)} allowAddNew={false}
-                placeholder={rec.topic ? "Select subtopic (optional)…" : "Select topic first"} disabled={!rec.topic}
-                onSelect={v => updateRecord({ subtopic: v, microtopic: "", syllabusId: findSyllabusId(db, { subject: rec.subject, topic: rec.topic, subtopic: v }) })}
-              />
-            ),
-          },
-          {
-            key: "microtopic", label: "Micro Topic", width: 180, type: "custom",
-            render: (rec, _onChange, updateRecord) => (
-              <CascadingSelectCell
-                value={rec.microtopic} options={microtopicOptionsForSubtopic(db, rec.subject, rec.topic, rec.subtopic)} allowAddNew={false}
-                placeholder={rec.subtopic ? "Select micro topic (optional)…" : "Select subtopic first"} disabled={!rec.subtopic}
-                onSelect={v => updateRecord({ microtopic: v, syllabusId: findSyllabusId(db, { subject: rec.subject, topic: rec.topic, subtopic: rec.subtopic, microtopic: v }) })}
-              />
-            ),
-          },
-          { key: "classNotes", label: "Class Notes", type: "status", options: READ_STATUS, width: 130 },
-          { key: "standardMaterial", label: "Standard Material", type: "status", options: READ_STATUS, width: 130 },
-          { key: "ncert", label: "NCERT", type: "status", options: READ_STATUS, width: 130 },
-          { key: "singlePager", label: "Single Pager", type: "status", options: READ_STATUS, width: 130 },
-          { key: "revision1", label: "Revision 1", type: "status", options: READ_STATUS, width: 130 },
-          { key: "revision2", label: "Revision 2", type: "status", options: READ_STATUS, width: 130 },
-        ]}
-        newRecord={() => ({ date: todayISO(), subject: db.settings.subjects[0] || "", topic: "", subtopic: "", microtopic: "", classNotes: "Yet to Start", standardMaterial: "Yet to Start", ncert: "Yet to Start", singlePager: "Yet to Start", revision1: "Yet to Start", revision2: "Yet to Start", syllabusId: null })}
-      />
+      <p className="ucc-tiny" style={{ marginBottom: 8, color: "var(--ink-muted)" }}>
+        One row per Syllabus entry, automatically — add or edit Subject/Topic/Subtopic/Micro Topic on the Syllabus tab, not here. Class Notes, Standard Material, NCERT, and Single Pager are computed from their own trackers; Revision 1 and 2 are the only fields you set here.
+      </p>
+      {db.syllabus.length === 0 ? (
+        <EmptyState>No Syllabus entries yet — add some on the Syllabus tab first.</EmptyState>
+      ) : (
+        <>
+          <input className="ucc-input" style={{ marginBottom: 10, maxWidth: 360 }}
+            placeholder="Search subject / topic / subtopic / micro topic…"
+            value={query} onChange={e => { setQuery(e.target.value); setPage(0); }} />
+          <table className="ucc-table">
+            <thead>
+              <tr>
+                <th style={{ minWidth: 260 }}>Topic</th>
+                <th style={{ minWidth: 150 }}>Class Notes</th>
+                <th style={{ minWidth: 140 }}>Standard Material</th>
+                <th style={{ minWidth: 110 }}>NCERT</th>
+                <th style={{ minWidth: 120 }}>Single Pager</th>
+                <th style={{ minWidth: 150 }}>Revision 1</th>
+                <th style={{ minWidth: 150 }}>Revision 2</th>
+              </tr>
+            </thead>
+            <tbody>
+              {paged.length === 0 && <tr><td colSpan={7}><EmptyState>No matches.</EmptyState></td></tr>}
+              {paged.map(({ row, fields }) => (
+                <tr key={row.id}>
+                  <td>
+                    <div style={{ fontWeight: 600 }}>{row.microtopic || row.subtopic || row.topic || "(untitled)"}</div>
+                    <div className="ucc-tiny" style={{ color: "var(--ink-muted)" }}>{breadcrumb(row)}</div>
+                  </td>
+                  <td>
+                    <div className="ucc-flex" style={{ gap: 4 }}>
+                      <Badge tone={colorFor(fields.classNotes)}>{fields.classNotes}</Badge>
+                      <DriveDownloadLink driveFile={fields.classNotesFile} />
+                    </div>
+                  </td>
+                  <td><Badge tone={colorFor(fields.standardMaterial)}>{fields.standardMaterial}</Badge></td>
+                  <td><Badge tone={colorFor(fields.ncert)}>{fields.ncert}</Badge></td>
+                  <td><Badge tone={colorFor(fields.singlePager)}>{fields.singlePager}</Badge></td>
+                  <td><StatusSelect value={fields.revision1} options={READ_STATUS} onChange={v => updateRevision(row, fields, { revision1: v })} /></td>
+                  <td><StatusSelect value={fields.revision2} options={READ_STATUS} onChange={v => updateRevision(row, fields, { revision2: v })} /></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {filtered.length > PAGE_SIZE && (
+            <div className="ucc-flex between" style={{ marginTop: 8 }}>
+              <span className="ucc-tiny">Showing {safePage * PAGE_SIZE + 1}–{Math.min((safePage + 1) * PAGE_SIZE, filtered.length)} of {filtered.length}</span>
+              <div className="ucc-flex">
+                <IconBtn icon={ChevronLeft} onClick={() => setPage(p => Math.max(0, p - 1))} title="Previous page" disabled={safePage === 0} />
+                <span className="ucc-tiny">Page {safePage + 1} of {totalPages}</span>
+                <IconBtn icon={ChevronRightIcon} onClick={() => setPage(p => Math.min(totalPages - 1, p + 1))} title="Next page" disabled={safePage === totalPages - 1} />
+              </div>
+            </div>
+          )}
+        </>
+      )}
     </div>
   );
 }
@@ -2462,12 +2504,23 @@ function SyllabusMicrotopicCell({ value, onCommit }) {
 
 function SyllabusTab({ db, updateSlice }) {
   const total = db.syllabus.length;
-  const done = db.syllabus.filter(s => s.studyStatus === "Completed" || s.studyStatus === "Revised").length;
+  // "Done" now means fully complete on the computed Topic Completion
+  // overview (Class Notes + Standard Material + NCERT + Single Pager + both
+  // revisions) — studyStatus/revisionStatus are never set by any UI
+  // anymore (existing stored values on old rows are left alone, just no
+  // longer read), so a stat based on them would always read 0.
+  const topicCompletionIndexes = useMemo(() => buildTopicCompletionIndexes(db),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [db.classes, db.ncert, db.standardBooks, db.singlePager, db.reading]);
+  const done = useMemo(
+    () => db.syllabus.filter(row => topicCompletionScore(computeTopicCompletionFields(row, topicCompletionIndexes)) === 1).length,
+    [db.syllabus, topicCompletionIndexes]
+  );
   return (
     <div>
       <div className="ucc-card">
         <h3>Syllabus progress</h3>
-        <div className="ucc-tiny">{done} of {total} syllabus items completed or revised.</div>
+        <div className="ucc-tiny">{done} of {total} syllabus items fully complete on Topic Completion.</div>
         <div className="ucc-tiny" style={{ marginTop: 6, color: "var(--ink-muted)" }}>
           This starts from the standard top-level UPSC structure only. Upload your actual syllabus PDF via Import/Export to expand it into real sub-topics — nothing here is a substitute for the official document.
         </div>
@@ -2596,7 +2649,7 @@ function SyllabusTab({ db, updateSlice }) {
                 : <span className="ucc-tiny" style={{ color: "var(--ink-muted)" }}>—</span>,
             },
           ]}
-          newRecord={() => ({ gsPaper: "", subject: "", topic: "", subtopic: "", microtopic: "", studyStatus: "Not Started", revisionStatus: "Not Started" })}
+          newRecord={() => ({ gsPaper: "", subject: "", topic: "", subtopic: "", microtopic: "" })}
           emptyMessage="No syllabus items yet — click Add row below to add your first topic."
         />
       </div>
@@ -2856,7 +2909,7 @@ function NcertTab({ db, updateSlice }) {
                   const newId = uid();
                   updateSlice("syllabus", prev => [...prev, {
                     id: newId, gsPaper: defaultGsPaperForSubject(db, rec.subject), subject: rec.subject, topic: rec.topic, subtopic: rec.subtopic, microtopic: name,
-                    studyStatus: "Not Started", revisionStatus: "Not Started", history: [],
+                    history: [],
                   }]);
                   updateRecord({ microtopic: name, syllabusId: newId });
                 }}
@@ -2922,7 +2975,7 @@ function StandardBooksTab({ db, updateSlice }) {
                   const newId = uid();
                   updateSlice("syllabus", prev => [...prev, {
                     id: newId, gsPaper: defaultGsPaperForSubject(db, rec.subject), subject: rec.subject, topic: rec.topic, subtopic: rec.subtopic, microtopic: name,
-                    studyStatus: "Not Started", revisionStatus: "Not Started", history: [],
+                    history: [],
                   }]);
                   updateRecord({ microtopic: name, syllabusId: newId });
                 }}
@@ -3050,7 +3103,7 @@ function CurrentAffairsTab({ db, updateSlice }) {
                   const newId = uid();
                   updateSlice("syllabus", prev => [...prev, {
                     id: newId, gsPaper: defaultGsPaperForSubject(db, rec.subject), subject: rec.subject, topic: name, subtopic: "", microtopic: "",
-                    studyStatus: "Not Started", revisionStatus: "Not Started", history: [],
+                    history: [],
                   }]);
                   updateRecord({ relevantSyllabusTopic: name, subtopic: "", microtopic: "", syllabusId: newId });
                 }}
@@ -3068,7 +3121,7 @@ function CurrentAffairsTab({ db, updateSlice }) {
                   const newId = uid();
                   updateSlice("syllabus", prev => [...prev, {
                     id: newId, gsPaper: defaultGsPaperForSubject(db, rec.subject), subject: rec.subject, topic: rec.relevantSyllabusTopic, subtopic: name, microtopic: "",
-                    studyStatus: "Not Started", revisionStatus: "Not Started", history: [],
+                    history: [],
                   }]);
                   updateRecord({ subtopic: name, microtopic: "", syllabusId: newId });
                 }}
@@ -3086,7 +3139,7 @@ function CurrentAffairsTab({ db, updateSlice }) {
                   const newId = uid();
                   updateSlice("syllabus", prev => [...prev, {
                     id: newId, gsPaper: defaultGsPaperForSubject(db, rec.subject), subject: rec.subject, topic: rec.relevantSyllabusTopic, subtopic: rec.subtopic, microtopic: name,
-                    studyStatus: "Not Started", revisionStatus: "Not Started", history: [],
+                    history: [],
                   }]);
                   updateRecord({ microtopic: name, syllabusId: newId });
                 }}
@@ -3202,7 +3255,7 @@ function AddSyllabusRowPopup({ db, updateSlice, initialMicrotopic, initialSubjec
       id: newId,
       gsPaper: gsPaper || defaultGsPaperForSubject(db, subject),
       subject: subject.trim(), topic: topic.trim(), subtopic: subtopic.trim(), microtopic: microtopic.trim(),
-      studyStatus: "Not Started", revisionStatus: "Not Started", history: [],
+      history: [],
     }]);
     onCreated(newId, subject.trim());
   }
@@ -3423,25 +3476,31 @@ function DashboardTab({ db }) {
   // one per Micro Topic — or none) are averaged together for that
   // subtopic's score, so partial micro-topic-level tracking still counts
   // proportionally rather than needing every micro topic covered first.
-  const readingBySubtopicKey = useMemo(() => {
+  // Sourced from Syllabus + the computed Topic Completion fields now (see
+  // "TOPIC COMPLETION — COMPUTED-FIELD HELPERS" above), not from db.reading
+  // directly — db.reading only holds the manually-set Revision 1/2 values.
+  const topicCompletionIndexes = useMemo(() => buildTopicCompletionIndexes(db),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [db.classes, db.ncert, db.standardBooks, db.singlePager, db.reading]);
+  const syllabusRowsBySubtopicKey = useMemo(() => {
     const m = new Map();
-    db.reading.forEach(r => {
-      if (!r.subtopic) return;
-      const key = normKey(r.subject, r.topic, r.subtopic);
+    db.syllabus.forEach(row => {
+      if (!row.subtopic) return;
+      const key = normKey(row.subject, row.topic, row.subtopic);
       if (!m.has(key)) m.set(key, []);
-      m.get(key).push(r);
+      m.get(key).push(row);
     });
     return m;
-  }, [db.reading]);
+  }, [db.syllabus]);
   const topicCompletionPct = useMemo(() => {
     if (subtopicRows.length === 0) return null;
     const scores = subtopicRows.map(st => {
-      const rows = readingBySubtopicKey.get(normKey(st.subject, st.topic, st.subtopic));
+      const rows = syllabusRowsBySubtopicKey.get(normKey(st.subject, st.topic, st.subtopic));
       if (!rows || rows.length === 0) return topicCompletionScore(null);
-      return rows.reduce((sum, r) => sum + topicCompletionScore(r), 0) / rows.length;
+      return rows.reduce((sum, row) => sum + topicCompletionScore(computeTopicCompletionFields(row, topicCompletionIndexes)), 0) / rows.length;
     });
     return Math.round((scores.reduce((a, b) => a + b, 0) / scores.length) * 100);
-  }, [subtopicRows, readingBySubtopicKey]);
+  }, [subtopicRows, syllabusRowsBySubtopicKey, topicCompletionIndexes]);
 
   // Classes completed by subject — Completed class# vs. that subject's
   // Total Classes (Settings tab). Subjects with no Total set are skipped
@@ -3545,6 +3604,119 @@ function breadcrumb(row) {
   return [row.subject, row.topic, row.subtopic, row.microtopic].filter(Boolean).join(" › ");
 }
 
+/* ============================================================
+   TOPIC COMPLETION — COMPUTED-FIELD HELPERS
+   ============================================================
+   Topic Completion (ReadingTab) is a computed overview keyed 1:1 to
+   Syllabus rows, not a separately-populated tracker — see CLAUDE.md. These
+   build one-time (per relevant array reference) lookup indexes so deriving
+   every Syllabus row's Class Notes/Standard Material/NCERT/Single Pager
+   status stays O(records) total instead of O(syllabus rows × records),
+   same reasoning as getSyllabusIndex/isSourceIdentifiedForMicrotopic. */
+
+// Generic index for trackers that match a Syllabus row via
+// recMatchesSyllabusRow (syllabusId first, full-path text as a fallback
+// for records saved before syllabusId existed) — NCERT, Standard Books,
+// Single Pager, and Reading's own (legacy or lazily-created) revision
+// records.
+function buildRecIndex(records) {
+  const byId = new Map();
+  const byTextKey = new Map();
+  records.forEach(rec => {
+    if (rec.syllabusId) {
+      if (!byId.has(rec.syllabusId)) byId.set(rec.syllabusId, []);
+      byId.get(rec.syllabusId).push(rec);
+    }
+    const key = normKey(rec.subject, rec.topic, rec.subtopic, rec.microtopic);
+    if (!byTextKey.has(key)) byTextKey.set(key, []);
+    byTextKey.get(key).push(rec);
+  });
+  return { byId, byTextKey };
+}
+function recsForSyllabusRow(index, row) {
+  const byId = index.byId.get(row.id) || [];
+  const byText = index.byTextKey.get(normKey(row.subject, row.topic, row.subtopic, row.microtopic)) || [];
+  if (byId.length === 0) return byText;
+  if (byText.length === 0) return byId;
+  const seen = new Set(byId.map(r => r.id));
+  return [...byId, ...byText.filter(r => !seen.has(r.id))];
+}
+
+// Classes match differently (mirrors classMatchesSyllabusRow): via
+// syllabusId, OR via any tagged microtopics entry (a Syllabus row id, or
+// for legacy tags, plain text) — a class can tag several Micro Topics at
+// once, so it's indexed under every one of them.
+function buildClassesIndex(classes) {
+  const byId = new Map();
+  const byName = new Map();
+  classes.forEach(c => {
+    const idKeys = [c.syllabusId, ...(c.microtopics || [])].filter(Boolean);
+    idKeys.forEach(k => {
+      if (!byId.has(k)) byId.set(k, []);
+      byId.get(k).push(c);
+    });
+    (c.microtopics || []).forEach(m => {
+      const key = normKey(m);
+      if (!byName.has(key)) byName.set(key, []);
+      byName.get(key).push(c);
+    });
+  });
+  return { byId, byName };
+}
+function classesForSyllabusRow(index, row) {
+  const byId = index.byId.get(row.id) || [];
+  const byName = row.microtopic ? (index.byName.get(normKey(row.microtopic)) || []) : [];
+  if (byId.length === 0) return byName;
+  if (byName.length === 0) return byId;
+  const seen = new Set(byId.map(c => c.id));
+  return [...byId, ...byName.filter(c => !seen.has(c.id))];
+}
+
+// Builds all the indexes Topic Completion needs at once from a `db`
+// snapshot — call once per component render (wrapped in the caller's own
+// useMemo keyed on the specific db.* arrays involved), not per Syllabus row.
+function buildTopicCompletionIndexes(db) {
+  return {
+    classesIdx: buildClassesIndex(db.classes),
+    ncertIdx: buildRecIndex(db.ncert),
+    stdBooksIdx: buildRecIndex(db.standardBooks),
+    spIdx: buildRecIndex(db.singlePager),
+    readingIdx: buildRecIndex(db.reading),
+  };
+}
+
+// The actual per-row computation. Class Notes/Standard Material/NCERT/
+// Single Pager are fully derived — Class Notes and Single Pager need a
+// matching record whose own status is specifically Completed (Classes and
+// Single Pager both track their own completion); Standard Material and
+// NCERT only need a matching record to exist at all, since neither of
+// those two trackers has a completion field of its own — cataloguing the
+// book/chapter there is the only signal available. Revision 1/2 are the
+// one thing still manually chosen — pulled from whatever reading record
+// (if any) is linked to this Syllabus row, defaulting "Yet to Start" for a
+// row that's never had one edited. readingRecId is exposed so the caller
+// knows whether to patch an existing reading record or lazily create one.
+function computeTopicCompletionFields(row, indexes) {
+  const matchedClasses = classesForSyllabusRow(indexes.classesIdx, row);
+  const classNotes = matchedClasses.some(c => c.status === "Completed") ? "Completed"
+    : matchedClasses.length > 0 ? "In Progress" : "Not Started";
+  const classNotesFile = (matchedClasses.find(c => c.status === "Completed" && c.driveFile)
+    || matchedClasses.find(c => c.driveFile) || {}).driveFile || null;
+
+  const standardMaterial = recsForSyllabusRow(indexes.stdBooksIdx, row).length > 0 ? "Completed" : "Not Started";
+  const ncert = recsForSyllabusRow(indexes.ncertIdx, row).length > 0 ? "Completed" : "Not Started";
+
+  const matchedSP = recsForSyllabusRow(indexes.spIdx, row);
+  const singlePager = matchedSP.some(s => s.status === "Completed") ? "Completed"
+    : matchedSP.length > 0 ? "In Progress" : "Not Started";
+
+  const readingRec = recsForSyllabusRow(indexes.readingIdx, row)[0] || null;
+  const revision1 = (readingRec && readingRec.revision1) || "Yet to Start";
+  const revision2 = (readingRec && readingRec.revision2) || "Yet to Start";
+
+  return { classNotes, classNotesFile, standardMaterial, ncert, singlePager, revision1, revision2, readingRecId: readingRec ? readingRec.id : null };
+}
+
 // Topic Master is keyed on the full Subject → Topic → Subtopic → Micro
 // Topic path — one entry per Syllabus row, since Syllabus is the single
 // source of truth for that hierarchy. Every linking tracker (Classes,
@@ -3556,11 +3728,14 @@ function breadcrumb(row) {
 // Micro Topic rows that share one Topic.
 function TopicMasterTab({ db, onNavigate }) {
   const [query, setQuery] = useState("");
+  const topicCompletionIndexes = useMemo(() => buildTopicCompletionIndexes(db),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [db.classes, db.ncert, db.standardBooks, db.singlePager, db.reading]);
   const topics = useMemo(() => {
     return db.syllabus.map(row => ({
       row,
       classes: db.classes.filter(c => classMatchesSyllabusRow(c, row)),
-      reading: db.reading.filter(r => recMatchesSyllabusRow(r, row)),
+      topicCompletion: computeTopicCompletionFields(row, topicCompletionIndexes),
       ncert: db.ncert.filter(n => recMatchesSyllabusRow(n, row)),
       standardBooks: db.standardBooks.filter(s => recMatchesSyllabusRow(s, row)),
       singlePager: db.singlePager.filter(s => recMatchesSyllabusRow(s, row)),
@@ -3595,7 +3770,7 @@ function TopicMasterTab({ db, onNavigate }) {
   const active = filtered.find(t => t.row.id === selId) || filtered[0];
 
   function countLinked(t) {
-    return t.classes.length + t.reading.length + t.ncert.length + t.standardBooks.length + t.singlePager.length
+    return t.classes.length + t.ncert.length + t.standardBooks.length + t.singlePager.length
       + t.currentAffairs.length + t.tamilReading.length + t.tamilWriting.length + t.answerWriting.length + t.topperCopies.length;
   }
 
@@ -3631,8 +3806,7 @@ function TopicMasterTab({ db, onNavigate }) {
             <div style={{ flex: 1, minWidth: 0 }}>
               <h3 style={{ fontSize: 16, textTransform: "none", letterSpacing: 0, color: "var(--ink)" }}>{breadcrumb(active.row)}</h3>
               <div className="ucc-tiny" style={{ marginBottom: 10 }}>
-                {active.row.gsPaper && `${active.row.gsPaper} · `}<Badge tone={colorFor(active.row.studyStatus)}>{active.row.studyStatus}</Badge>
-                {" "}· Source Identified: <Badge tone={isSourceIdentifiedForMicrotopic(db, active.row) ? "green" : "grey"}>{active.row.microtopic ? (isSourceIdentifiedForMicrotopic(db, active.row) ? "Yes" : "No") : "—"}</Badge>
+                {active.row.gsPaper && `${active.row.gsPaper} · `}Source Identified: <Badge tone={isSourceIdentifiedForMicrotopic(db, active.row) ? "green" : "grey"}>{active.row.microtopic ? (isSourceIdentifiedForMicrotopic(db, active.row) ? "Yes" : "No") : "—"}</Badge>
               </div>
               <TopicSection title="Classes">
                 {active.classes.length === 0 ? <EmptyState>No classes logged.</EmptyState> :
@@ -3643,17 +3817,15 @@ function TopicMasterTab({ db, onNavigate }) {
                   ))}
               </TopicSection>
               <TopicSection title="Topic completion">
-                {active.reading.length === 0 ? <EmptyState>No reading record.</EmptyState> :
-                  active.reading.map(r => (
-                    <div key={r.id} className="ucc-tiny" style={{ marginBottom: 4 }}>
-                      <Badge tone={colorFor(r.classNotes)}>Notes {r.classNotes}</Badge>{" "}
-                      <Badge tone={colorFor(r.standardMaterial)}>Std {r.standardMaterial}</Badge>{" "}
-                      <Badge tone={colorFor(r.ncert)}>NCERT {r.ncert}</Badge>{" "}
-                      <Badge tone={colorFor(r.singlePager)}>SP {r.singlePager || "Yet to Start"}</Badge>{" "}
-                      <Badge tone={colorFor(r.revision1)}>Rev1 {r.revision1}</Badge>{" "}
-                      <Badge tone={colorFor(r.revision2)}>Rev2 {r.revision2}</Badge>
-                    </div>
-                  ))}
+                <div className="ucc-tiny" style={{ marginBottom: 4 }}>
+                  <Badge tone={colorFor(active.topicCompletion.classNotes)}>Notes {active.topicCompletion.classNotes}</Badge>{" "}
+                  <Badge tone={colorFor(active.topicCompletion.standardMaterial)}>Std {active.topicCompletion.standardMaterial}</Badge>{" "}
+                  <Badge tone={colorFor(active.topicCompletion.ncert)}>NCERT {active.topicCompletion.ncert}</Badge>{" "}
+                  <Badge tone={colorFor(active.topicCompletion.singlePager)}>SP {active.topicCompletion.singlePager}</Badge>{" "}
+                  <Badge tone={colorFor(active.topicCompletion.revision1)}>Rev1 {active.topicCompletion.revision1}</Badge>{" "}
+                  <Badge tone={colorFor(active.topicCompletion.revision2)}>Rev2 {active.topicCompletion.revision2}</Badge>
+                  {active.topicCompletion.classNotesFile && <> <DriveDownloadLink driveFile={active.topicCompletion.classNotesFile} /></>}
+                </div>
               </TopicSection>
               <TopicSection title="NCERT">
                 {active.ncert.length === 0 ? <EmptyState>Not mapped.</EmptyState> :
@@ -3733,7 +3905,11 @@ function SearchTab({ db }) {
     };
     scan(db.syllabus, "Syllabus", ["subject", "topic", "subtopic"], r => `${r.subject} — ${r.topic}`);
     scan(db.classes, "Classes", ["subject", "topic"], r => `${r.subject} — Class ${r.classNumber}: ${r.topic}`);
-    scan(db.reading, "Topic Completion", ["subject", "topic"], r => `${r.subject} — ${r.topic}`);
+    // Topic Completion no longer has an independent row set — it's now a
+    // 1:1 computed overview of Syllabus (see "TOPIC COMPLETION — COMPUTED-
+    // FIELD HELPERS"), so the Syllabus scan above already covers every
+    // topic completion "row" there is; a separate db.reading scan would
+    // only surface the sparse subset of rows with a manually-set revision.
     scan(db.singlePager, "Single Pager", ["subject", "topic"], r => `${r.subject} — ${r.topic}`);
     scan(db.ncert, "NCERT", ["subject", "book", "chapter", "topic"], r => `${r.subject} — ${r.book} — ${r.chapter}`);
     scan(db.standardBooks, "Standard Books", ["bookName", "subject", "chapter", "topic"], r => `${r.bookName} — ${r.topic}`);
@@ -4206,16 +4382,11 @@ const IMPORT_TARGETS = {
     },
     dupKey: r => normKey(r.subject, r.topic, r.classNumber),
   },
-  reading: {
-    label: "Topic Completion",
-    fields: ["date", "subject", "topic", "subtopic", "microtopic", "classNumber", "classNotes", "standardMaterial", "ncert", "singlePager", "revision1", "revision2"],
-    aliases: {
-      date: ["date"], subject: ["subject"], topic: ["topic"], subtopic: ["subtopic", "sub topic"], microtopic: ["microtopic", "micro topic"],
-      classNumber: ["class number", "classno"], classNotes: ["class notes"], standardMaterial: ["standard material"], ncert: ["ncert"],
-      singlePager: ["single pager"], revision1: ["revision 1", "revision1"], revision2: ["revision 2", "revision2"],
-    },
-    dupKey: r => normKey(r.subject, r.topic),
-  },
+  // Topic Completion (reading) has no import target anymore — rows are a
+  // computed 1:1 overview of Syllabus now (see "TOPIC COMPLETION —
+  // COMPUTED-FIELD HELPERS"), not a freestanding importable list; Class
+  // Notes/Standard Material/NCERT/Single Pager are all derived, and
+  // Revision 1/2 are set directly on the Topic Completion tab itself.
   singlePager: {
     label: "Single Pager",
     fields: ["date", "subject", "topic", "subtopic", "microtopic", "classNotes", "handout", "ncert", "standardBooks", "status", "revision"],
@@ -4226,11 +4397,10 @@ const IMPORT_TARGETS = {
     dupKey: r => normKey(r.subject, r.topic),
   },
   syllabus: {
-    label: "Syllabus", fields: ["gsPaper", "subject", "topic", "subtopic", "microtopic", "studyStatus", "revisionStatus"],
+    label: "Syllabus", fields: ["gsPaper", "subject", "topic", "subtopic", "microtopic"],
     aliases: {
       gsPaper: ["gs paper", "gspaper", "paper"], subject: ["subject"], topic: ["topic"],
       subtopic: ["subtopic", "sub topic"], microtopic: ["microtopic", "micro topic"],
-      studyStatus: ["study status", "studystatus"], revisionStatus: ["revision status", "revisionstatus"],
     },
     dupKey: r => normKey(r.subject, r.topic, r.subtopic, r.microtopic),
   },
@@ -4307,11 +4477,10 @@ const IMPORT_TARGETS = {
 
 const IMPORT_FIELD_LABELS = {
   date: "Date", subject: "Subject", classNumber: "Class", eta: "ETA",
-  topic: "Topic", status: "Status", classNotes: "Class Notes", standardMaterial: "Standard Material", ncert: "NCERT",
-  singlePager: "Single Pager", revision: "Revision", revision1: "Revision 1", revision2: "Revision 2",
+  topic: "Topic", status: "Status", classNotes: "Class Notes", ncert: "NCERT",
+  singlePager: "Single Pager", revision: "Revision",
   handout: "Handout", standardBooks: "Standard Books",
   gsPaper: "GS Paper", subtopic: "Subtopic", microtopic: "Micro Topic",
-  studyStatus: "Study Status", revisionStatus: "Revision Status",
   book: "Book", chapter: "Chapter", bookName: "Book", pages: "Pages",
   source: "Source", notes: "Notes", question: "Question", wordLimit: "Word Limit",
   selfEvaluation: "Remarks Summary", marksScored: "Marks Scored", marksMax: "Max Marks",
@@ -4392,9 +4561,6 @@ function ImportExportTab({ db, updateSlice }) {
       if (shouldSkip) { skipped++; return; }
       const clean = { id: uid(), history: [] };
       cfg.fields.forEach(f => { clean[f] = rec[f]; });
-      if (target === "reading") {
-        ["classNotes", "standardMaterial", "ncert", "singlePager", "revision1", "revision2"].forEach(f => { if (!clean[f]) clean[f] = "Yet to Start"; });
-      }
       if (target === "singlePager") {
         ["classNotes", "handout", "ncert", "standardBooks"].forEach(f => { if (!clean[f]) clean[f] = "Not Included"; });
         if (!clean.status) clean.status = "Not Started";
@@ -4408,12 +4574,8 @@ function ImportExportTab({ db, updateSlice }) {
         clean.microtopics = clean.microtopic ? [clean.microtopic] : [];
         delete clean.microtopic;
       }
-      if (target === "classes" || target === "reading") {
+      if (target === "classes") {
         clean.syllabusId = findSyllabusId(db, { subject: clean.subject, topic: clean.topic, subtopic: clean.subtopic });
-      }
-      if (target === "syllabus") {
-        if (!clean.studyStatus) clean.studyStatus = "Not Started";
-        if (!clean.revisionStatus) clean.revisionStatus = "Not Started";
       }
       if (target === "tamilWriting" && !clean.status) clean.status = "Not Started";
       if (target === "currentAffairs") {
