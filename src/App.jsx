@@ -2139,6 +2139,9 @@ function SyllabusTab({ db, updateSlice }) {
           Made a typo or picked the wrong one? Click the <Pencil size={11} style={{ verticalAlign: "middle" }} /> next to any Subject/Topic/Subtopic/Micro Topic to correct it — this fixes it everywhere it's used (Classes, NCERT, Standard Books, etc.), not just on this row.
         </div>
         <div className="ucc-tiny" style={{ marginTop: 6, color: "var(--ink-muted)" }}>
+          Filed a Micro Topic under the wrong Subtopic? Just re-pick the correct Subtopic in the dropdown on that row — the Micro Topic stays as-is and moves with it.
+        </div>
+        <div className="ucc-tiny" style={{ marginTop: 6, color: "var(--ink-muted)" }}>
           <strong>Source Identified</strong> is read-only — it's Yes automatically once this exact Micro Topic appears in Classes, NCERT, or Standard Books, and No (or — with no Micro Topic set) otherwise.
         </div>
       </div>
@@ -2189,8 +2192,16 @@ function SyllabusTab({ db, updateSlice }) {
                 <CascadingSelectCell
                   value={rec.subtopic} options={syllabusSubtopicsForTopic(db, rec.subject, rec.topic)}
                   placeholder={rec.topic ? "Select subtopic…" : "Select topic first"} disabled={!rec.topic}
-                  onSelect={v => updateRecord({ subtopic: v, microtopic: "" })}
-                  onAddNew={name => updateRecord({ subtopic: name, microtopic: "" })}
+                  // Deliberately keeps the existing Micro Topic text when the
+                  // Subtopic is switched, unlike every other tracker's subtopic
+                  // cell (which clears it). On this tab a row IS the micro
+                  // topic entity — switching Subtopic here is a reparent of
+                  // that micro topic to a different existing/new Subtopic, not
+                  // a fresh classification pick, so the micro topic value
+                  // should survive the move. Safe because other trackers key
+                  // off this row's stable id (syllabusId), not this text.
+                  onSelect={v => updateRecord({ subtopic: v })}
+                  onAddNew={name => updateRecord({ subtopic: name })}
                   onRename={name => renameSyllabusValue(db, updateSlice, "subtopic", { subject: rec.subject, topic: rec.topic }, rec.subtopic, name)}
                 />
               ),
