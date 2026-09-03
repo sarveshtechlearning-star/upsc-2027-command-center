@@ -6,7 +6,7 @@ import {
   Newspaper, PenTool, Brain, Search as SearchIcon, BarChart3,
   Settings as SettingsIcon, Upload, Download, ChevronUp, ChevronDown,
   Plus, Trash2, History, Check, AlertTriangle, Clock, ChevronLeft,
-  ChevronRight as ChevronRightIcon, X, LogOut, LayoutDashboard, Copy, Pencil, Lock
+  ChevronRight as ChevronRightIcon, X, LogOut, LayoutDashboard, Copy, Pencil, Lock, Flame
 } from "lucide-react";
 
 /* ============================================================
@@ -1877,19 +1877,10 @@ function computePlanTimes(plan) {
 /* ============================================================
    PRIORITY / LINKING HELPERS
    ============================================================ */
-function readingCompletionPct(rec) {
-  const fields = ["classNotes", "standardMaterial", "ncert", "singlePager"];
-  const applicable = fields.filter(f => rec[f] !== "Not Needed");
-  if (applicable.length === 0) return 100;
-  const done = applicable.filter(f => rec[f] === "Completed").length;
-  return Math.round((done / applicable.length) * 100);
-}
-
 // Dashboard-only completion score for ONE micro topic, on a 0..1 scale with
 // partial credit (a topic with notes+NCERT done but revision pending scores
-// 0.6, not 0). Deliberately separate from readingCompletionPct above (which
-// powers Today's "pending reading" list and excludes revision on purpose,
-// since a topic should drop off that list after first read) — this one is
+// 0.6, not 0). Includes both revisions, unlike Today's Pending/Single Pager
+// widgets (computePendingTasks), which only care whether a topic still
 // purpose-built for whole-syllabus progress and includes both revisions.
 const TOPIC_COMPLETION_FIELDS = ["classNotes", "standardMaterial", "ncert", "singlePager", "revision1", "revision2"];
 function topicCompletionScore(readingRec) {
@@ -1899,41 +1890,97 @@ function topicCompletionScore(readingRec) {
   return done / applicable.length;
 }
 
+// Finds when a status field most recently flipped to "Completed", from the
+// record's own change history (every status change gets logged there —
+// see GenericTracker's updateField). Returns null if it's never been
+// Completed, or has no history at all (pre-dates history tracking).
+function statusCompletedAt(rec, fieldLabel = "Status") {
+  const entries = (rec.history || []).filter(h => h.field === fieldLabel && h.to === "Completed");
+  return entries.length > 0 ? entries[entries.length - 1].at : null;
+}
+// A day "counts" if ANY of these trackers has something dated that day —
+// the whole point being that any one kind of study activity keeps the
+// streak alive, not just one specific tracker. Counts backward from today,
+// except when today has nothing logged yet: the day isn't over, so an
+// empty today shouldn't zero out a streak that's still genuinely alive
+// (it starts counting from yesterday instead, in that case).
+function computeConsistencyStreak(db) {
+  const hasActivity = iso =>
+    db.classes.some(c => c.date === iso) ||
+    db.standardBooks.some(s => s.date === iso) ||
+    db.ncert.some(n => n.date === iso) ||
+    db.answerWriting.some(a => a.date === iso) ||
+    db.singlePager.some(s => s.date === iso) ||
+    db.tamilReading.some(t => t.date === iso) ||
+    db.tamilWriting.some(t => t.date === iso) ||
+    db.currentAffairs.some(c => c.date === iso);
+  let streak = 0;
+  let cursor = todayISO();
+  if (!hasActivity(cursor)) cursor = addDaysISO(cursor, -1);
+  while (hasActivity(cursor)) {
+    streak++;
+    cursor = addDaysISO(cursor, -1);
+  }
+  return streak;
+}
 function computePendingTasks(db) {
   const items = [];
-  // Topic Completion is a computed overview of Syllabus now (see "TOPIC
-  // COMPLETION — COMPUTED-FIELD HELPERS") — these two sections walk
-  // db.syllabus instead of db.reading, since db.reading only holds the
-  // manually-set Revision 1/2 values for a subset of rows, not a full
-  // mirror of every topic anymore. The old "Previous day's class notes"
-  // section is gone entirely: Class Notes is now derived directly from a
-  // matching Class's own Completed status, so the moment you complete a
-  // class, its topic's Class Notes reads Completed too — there's no
-  // separate manual step left for this reminder to catch anyone missing.
   const topicCompletionIndexes = buildTopicCompletionIndexes(db);
-  // 2. Revision due
+
+  // Pending: (a) a Class that's started but not finished, with an ETA set —
+  // i.e. something you've committed to a date for and haven't closed out —
+  // and (b) a topic whose Class is done but whose Single Pager isn't, since
+  // that's the natural very-next step after a class.
+  db.classes.filter(c => (c.status === "Not Started" || c.status === "In Progress") && c.eta).forEach(c => {
+    const microtopic = (c.microtopics && c.microtopics[0]) ? resolveMicrotopicLabelById(db, c.microtopics[0]) : null;
+    items.push({
+      cat: "Pending",
+      label: `${c.subject || "Class"}${c.classNumber ? ` #${c.classNumber}` : ""}${microtopic ? ` — ${microtopic}` : ""}`,
+      detail: `ETA ${c.eta}`, date: c.eta, tab: "classes",
+    });
+  });
   db.syllabus.forEach(row => {
     const f = computeTopicCompletionFields(row, topicCompletionIndexes);
-    if (f.classNotes === "Completed" && (f.revision1 === "Yet to Start" || f.revision1 === "In Progress")) {
-      items.push({ cat: "Revision due", label: `${row.subject} — ${row.topic}`, detail: "Revision 1 pending", date: "", tab: "reading" });
-    } else if (f.revision1 === "Completed" && (f.revision2 === "Yet to Start" || f.revision2 === "In Progress")) {
-      items.push({ cat: "Revision due", label: `${row.subject} — ${row.topic}`, detail: "Revision 2 pending", date: "", tab: "reading" });
+    if (f.classNotes === "Completed" && f.singlePager !== "Completed") {
+      items.push({ cat: "Pending", label: `${row.subject} — ${row.microtopic}`, detail: "Class done, Single Pager pending", date: "", tab: "singlePager" });
     }
   });
-  // 5. Pending reading (standard material / NCERT) — no longer requires Class Notes to be "Completed" first
+
+  // Revision due: a spaced-repetition schedule anchored to when the Single
+  // Pager for that topic was actually marked Completed (via its own
+  // status-change history, not just "it's Completed now" — a topic
+  // completed yesterday isn't due for Revision 1 yet). Revision 1 at 7+
+  // days, Revision 2 at 30+ days — both measured from that same anchor,
+  // not chained off each other, matching a standard spaced-repetition
+  // schedule (day 0 read, day 7, day 30).
   db.syllabus.forEach(row => {
     const f = computeTopicCompletionFields(row, topicCompletionIndexes);
-    if (f.standardMaterial !== "Completed") {
-      items.push({ cat: "Pending reading", label: `${row.subject} — ${row.topic}`, detail: `Standard material: ${f.standardMaterial}`, date: "", tab: "reading" });
-    } else if (f.ncert !== "Completed") {
-      items.push({ cat: "Pending reading", label: `${row.subject} — ${row.topic}`, detail: `NCERT: ${f.ncert}`, date: "", tab: "reading" });
+    if (f.singlePager !== "Completed") return;
+    const completedSP = taggedRecsForSyllabusRow(topicCompletionIndexes.spIdx, row).find(s => s.status === "Completed");
+    const completedAt = completedSP ? statusCompletedAt(completedSP) : null;
+    if (!completedAt) return;
+    const daysSince = Math.floor((Date.now() - new Date(completedAt).getTime()) / 86400000);
+    if (daysSince >= 7 && f.revision1 !== "Completed") {
+      items.push({ cat: "Revision due", label: `${row.subject} — ${row.microtopic}`, detail: `Revision 1 (${daysSince}d since Single Pager)`, date: "", tab: "reading" });
+    }
+    if (daysSince >= 30 && f.revision2 !== "Completed") {
+      items.push({ cat: "Revision due", label: `${row.subject} — ${row.microtopic}`, detail: `Revision 2 (${daysSince}d since Single Pager)`, date: "", tab: "reading" });
     }
   });
-  // 6. Overdue single pagers
-  db.singlePager.filter(s => s.status !== "Completed").forEach(s => {
-    items.push({ cat: "Single pager", label: `${s.subject} — ${s.topic}`, detail: `Single pager: ${s.status || "Not Started"}`, date: s.date || "", tab: "singlePager" });
+
+  // Single pager: any topic with material to draw from (Class notes,
+  // Standard Books, or NCERT) that hasn't been turned into a Single Pager
+  // yet — broader than the Class-specific Pending condition above, since a
+  // topic can get its source material from a book instead of a class.
+  db.syllabus.forEach(row => {
+    const f = computeTopicCompletionFields(row, topicCompletionIndexes);
+    const hasSource = f.classNotes === "Completed" || f.standardMaterial === "Completed" || f.ncert === "Completed";
+    if (hasSource && f.singlePager !== "Completed") {
+      items.push({ cat: "Single pager", label: `${row.subject} — ${row.microtopic}`, detail: "Source ready, Single Pager pending", date: "", tab: "singlePager" });
+    }
   });
-  const order = ["Revision due", "Pending reading", "Single pager", "Other pending"];
+
+  const order = ["Pending", "Revision due", "Single pager"];
   items.sort((a, b) => order.indexOf(a.cat) - order.indexOf(b.cat) || (a.date || "").localeCompare(b.date || ""));
   return items;
 }
@@ -2048,21 +2095,15 @@ function TodayTab({ db, updateSlice, onNavigate }) {
     .filter(b => !plan.blocks.some(pb => pb.id === b.id));
 
   const pending = useMemo(() => computePendingTasks(db), [db]);
+  const pendingOnly = pending.filter(p => p.cat === "Pending");
   const revisionDue = pending.filter(p => p.cat === "Revision due");
+  const singlePagerPending = pending.filter(p => p.cat === "Single pager");
   const yISO = addDaysISO(dateISO, -1);
   const yClasses = db.classes.filter(c => c.date === yISO && c.status === "Completed");
-  // Topic Completion is a computed overview of Syllabus now (see "TOPIC
-  // COMPLETION — COMPUTED-FIELD HELPERS"), so "pending" and "fully done"
-  // are both measured across db.syllabus, not db.reading (db.reading only
-  // holds the manually-set Revision 1/2 values for a subset of rows).
-  const topicCompletionIndexes = useMemo(() => buildTopicCompletionIndexes(db),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [db.classes, db.ncert, db.standardBooks, db.singlePager, db.reading]);
-  const pendingReadingCount = db.syllabus.filter(row => readingCompletionPct(computeTopicCompletionFields(row, topicCompletionIndexes)) < 100).length;
-  const pendingSP = db.singlePager.filter(s => s.status !== "Completed");
   const todayAnswers = db.answerWriting.filter(a => a.date === dateISO);
-  const todayCA = db.currentAffairs.filter(c => c.date === dateISO);
-  const topicsFullyDone = db.syllabus.filter(row => topicCompletionScore(computeTopicCompletionFields(row, topicCompletionIndexes)) === 1).length;
+  const consistencyStreak = useMemo(() => computeConsistencyStreak(db),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [db.classes, db.standardBooks, db.ncert, db.answerWriting, db.singlePager, db.tamilReading, db.tamilWriting, db.currentAffairs]);
 
   return (
     <div>
@@ -2114,63 +2155,81 @@ function TodayTab({ db, updateSlice, onNavigate }) {
         )}
       </div>
 
-      <div className="ucc-card">
-        <h3>Today's plan</h3>
-        <p className="ucc-tiny" style={{ marginTop: -4 }}>A quick hourly journal — jot a line on what you actually did in each slot. Detailed logging (topics, PDFs, marks) stays on each tracker's own tab.</p>
-        {timedBlocks.map((b, i) => {
-          if (b.id === "travelTo" || b.id === "travelFro") return null; // shown inside the merged Office card
-          if (b.id === "office") {
-            const travelTo = timedBlocks.find(x => x.id === "travelTo");
-            const travelFro = timedBlocks.find(x => x.id === "travelFro");
-            const groupIndices = ["travelTo", "office", "travelFro"]
-              .map(id => timedBlocks.findIndex(x => x.id === id))
-              .filter(idx => idx !== -1);
-            const firstIdx = Math.min(...groupIndices);
-            const lastIdx = Math.max(...groupIndices);
+      <div className="ucc-flex wrap" style={{ alignItems: "stretch", gap: 12 }}>
+        <div className="ucc-card" style={{ flex: "3 1 420px", margin: 0 }}>
+          <h3>Today's plan</h3>
+          <p className="ucc-tiny" style={{ marginTop: -4 }}>A quick hourly journal — jot a line on what you actually did in each slot. Detailed logging (topics, PDFs, marks) stays on each tracker's own tab.</p>
+          {timedBlocks.map((b, i) => {
+            if (b.id === "travelTo" || b.id === "travelFro") return null; // shown inside the merged Office card
+            if (b.id === "office") {
+              const travelTo = timedBlocks.find(x => x.id === "travelTo");
+              const travelFro = timedBlocks.find(x => x.id === "travelFro");
+              const groupIndices = ["travelTo", "office", "travelFro"]
+                .map(id => timedBlocks.findIndex(x => x.id === id))
+                .filter(idx => idx !== -1);
+              const firstIdx = Math.min(...groupIndices);
+              const lastIdx = Math.max(...groupIndices);
+              return (
+                <OfficePlanBlock key="office-group" office={b} travelTo={travelTo} travelFro={travelFro}
+                  onSkipAll={reason => {
+                    updateBlock("office", { skipped: true, skipReason: reason });
+                    if (travelTo) updateBlock("travelTo", { skipped: true, skipReason: reason });
+                    if (travelFro) updateBlock("travelFro", { skipped: true, skipReason: reason });
+                  }}
+                  onUnskipAll={() => {
+                    updateBlock("office", { skipped: false, skipReason: "" });
+                    if (travelTo) updateBlock("travelTo", { skipped: false, skipReason: "" });
+                    if (travelFro) updateBlock("travelFro", { skipped: false, skipReason: "" });
+                  }}
+                  onJournalChange={v => updateBlock("office", { journal: v })}
+                  onDurationChange={(blockId, duration) => updateBlock(blockId, { duration })}
+                  onMoveUp={firstIdx > 0 ? () => moveOfficeGroup(-1) : null}
+                  onMoveDown={lastIdx < timedBlocks.length - 1 ? () => moveOfficeGroup(1) : null} />
+              );
+            }
             return (
-              <OfficePlanBlock key="office-group" office={b} travelTo={travelTo} travelFro={travelFro}
-                onSkipAll={reason => {
-                  updateBlock("office", { skipped: true, skipReason: reason });
-                  if (travelTo) updateBlock("travelTo", { skipped: true, skipReason: reason });
-                  if (travelFro) updateBlock("travelFro", { skipped: true, skipReason: reason });
-                }}
-                onUnskipAll={() => {
-                  updateBlock("office", { skipped: false, skipReason: "" });
-                  if (travelTo) updateBlock("travelTo", { skipped: false, skipReason: "" });
-                  if (travelFro) updateBlock("travelFro", { skipped: false, skipReason: "" });
-                }}
-                onJournalChange={v => updateBlock("office", { journal: v })}
-                onDurationChange={(blockId, duration) => updateBlock(blockId, { duration })}
-                onMoveUp={firstIdx > 0 ? () => moveOfficeGroup(-1) : null}
-                onMoveDown={lastIdx < timedBlocks.length - 1 ? () => moveOfficeGroup(1) : null} />
+              <PlanBlock key={b.id} block={b} onUpdate={patch => updateBlock(b.id, patch)}
+                onMoveUp={i > 0 ? () => moveBlock(b.id, -1) : null}
+                onMoveDown={i < timedBlocks.length - 1 ? () => moveBlock(b.id, 1) : null}
+                onRemove={(b.custom || b.restored) ? () => removeBlock(b.id) : null} />
             );
-          }
-          return (
-            <PlanBlock key={b.id} block={b} onUpdate={patch => updateBlock(b.id, patch)}
-              onMoveUp={i > 0 ? () => moveBlock(b.id, -1) : null}
-              onMoveDown={i < timedBlocks.length - 1 ? () => moveBlock(b.id, 1) : null}
-              onRemove={(b.custom || b.restored) ? () => removeBlock(b.id) : null} />
-          );
-        })}
-        <div className="ucc-flex wrap" style={{ gap: 8 }}>
-          <button className="ucc-btn" onClick={addCustomBlock}><Plus size={14} /> Add custom task</button>
-          {missingBlocks.length > 0 && (
-            <select className="ucc-select" style={{ width: "auto", maxWidth: 240 }} value=""
-              title="Bring back a slot dropped from today's plan"
-              onChange={e => { if (e.target.value) addExistingBlock(e.target.value); }}>
-              <option value="">+ Add existing task…</option>
-              {missingBlocks.map(b => <option key={b.id} value={b.id}>{b.label}</option>)}
-            </select>
-          )}
+          })}
+          <div className="ucc-flex wrap" style={{ gap: 8 }}>
+            <button className="ucc-btn" onClick={addCustomBlock}><Plus size={14} /> Add custom task</button>
+            {missingBlocks.length > 0 && (
+              <select className="ucc-select" style={{ width: "auto", maxWidth: 240 }} value=""
+                title="Bring back a slot dropped from today's plan"
+                onChange={e => { if (e.target.value) addExistingBlock(e.target.value); }}>
+                <option value="">+ Add existing task…</option>
+                {missingBlocks.map(b => <option key={b.id} value={b.id}>{b.label}</option>)}
+              </select>
+            )}
+          </div>
+        </div>
+
+        {/* Deliberately sits beside the planner, not buried below it in the
+            summary grid — a streak is meant to nag, so it needs to be seen
+            every time this tab opens, not scrolled past. */}
+        <div className="ucc-card" style={{
+          flex: "1 1 190px", margin: 0, display: "flex", flexDirection: "column",
+          alignItems: "center", justifyContent: "center", textAlign: "center",
+          background: "var(--red-soft)", border: "2px solid var(--red)",
+        }}>
+          <Flame size={30} style={{ color: "var(--red)" }} />
+          <div style={{ fontSize: 38, fontWeight: 800, color: "var(--red)", lineHeight: 1.15, marginTop: 2 }}>{consistencyStreak}</div>
+          <div className="ucc-tiny" style={{ fontWeight: 700, color: "var(--red)" }}>day{consistencyStreak === 1 ? "" : "s"} streak</div>
+          <div className="ucc-tiny" style={{ color: "var(--ink-muted)", marginTop: 6 }}>
+            Any one of Class, Standard Books, NCERT, Answer Writing, Single Pager, Tamil Literature, or Current Affairs keeps it alive.
+          </div>
         </div>
       </div>
 
       <div className="ucc-grid">
-        <SummaryCard title="Pending" count={pending.length}>
-          {pending.length === 0 ? <EmptyState>Nothing pending — clean slate.</EmptyState> :
-            pending.slice(0, 2).map((p, i) => (
+        <SummaryCard title="Pending" count={pendingOnly.length}>
+          {pendingOnly.length === 0 ? <EmptyState>Nothing pending — clean slate.</EmptyState> :
+            pendingOnly.slice(0, 2).map((p, i) => (
               <div key={i} className="ucc-tiny" style={{ marginBottom: 4, cursor: p.tab ? "pointer" : undefined }} onClick={p.tab ? () => onNavigate(p.tab) : undefined}>
-                <Badge tone="amber">{p.cat}</Badge> {p.label} — {p.detail}
+                {p.label} — {p.detail}
               </div>
             ))}
         </SummaryCard>
@@ -2180,27 +2239,22 @@ function TodayTab({ db, updateSlice, onNavigate }) {
         </SummaryCard>
         <SummaryCard title="Class" count={yClasses.length} onTitleClick={() => onNavigate("classes")}>
           {yClasses.length === 0 ? <EmptyState>No class logged for {fmtDateLong(yISO)}.</EmptyState> :
-            yClasses.map(c => <div key={c.id} className="ucc-tiny">{c.subject} #{c.classNumber} — {c.topic}</div>)}
+            yClasses.map(c => {
+              const microtopic = (c.microtopics && c.microtopics[0]) ? resolveMicrotopicLabelById(db, c.microtopics[0]) : null;
+              return <div key={c.id} className="ucc-tiny">{c.subject} #{c.classNumber}{microtopic ? ` — ${microtopic}` : ""}</div>;
+            })}
         </SummaryCard>
-        <SummaryCard title="Topic completion" count={pendingReadingCount} onTitleClick={() => onNavigate("reading")}>
-          <div className="ucc-tiny">{pendingReadingCount} of {db.syllabus.length} topics have pending reading items.</div>
-        </SummaryCard>
-        <SummaryCard title="Single pager" count={pendingSP.length} onTitleClick={() => onNavigate("singlePager")}>
-          {pendingSP.length === 0 ? <EmptyState>All tracked single pagers are up to date.</EmptyState> :
-            pendingSP.slice(0, 2).map(s => <div key={s.id} className="ucc-tiny">{s.subject} — {s.topic}</div>)}
+        <SummaryCard title="Single pager" count={singlePagerPending.length} onTitleClick={() => onNavigate("singlePager")}>
+          {singlePagerPending.length === 0 ? <EmptyState>Nothing waiting on a Single Pager.</EmptyState> :
+            singlePagerPending.slice(0, 2).map((p, i) => <div key={i} className="ucc-tiny">{p.label}</div>)}
         </SummaryCard>
         <SummaryCard title="Answer writing today" count={todayAnswers.length} onTitleClick={() => onNavigate("answerWriting")}>
           {todayAnswers.length === 0 ? <EmptyState>No answer-writing task logged for today.</EmptyState> :
-            todayAnswers.map(a => <div key={a.id} className="ucc-tiny">{a.gsPaper} — {a.topic} <Badge tone={colorFor(a.status)}>{a.status}</Badge></div>)}
-        </SummaryCard>
-        <SummaryCard title="Current affairs today" count={todayCA.length} onTitleClick={() => onNavigate("currentAffairs")}>
-          {todayCA.length === 0 ? <EmptyState>No current affairs added for today.</EmptyState> :
-            todayCA.map(c => <div key={c.id} className="ucc-tiny">{c.title}</div>)}
-        </SummaryCard>
-        <SummaryCard title="Progress" count={topicsFullyDone} onTitleClick={() => onNavigate("reading")}>
-          <div className="ucc-tiny">{topicsFullyDone} of {db.syllabus.length} topics fully complete (notes, material, both revisions)</div>
-          <div className="ucc-tiny">{db.classes.filter(c => c.status === "Completed").length} classes completed</div>
-          <div className="ucc-tiny">{db.singlePager.filter(s => s.status === "Completed").length} single pagers completed</div>
+            todayAnswers.map(a => (
+              <div key={a.id} className="ucc-tiny" style={{ marginBottom: 4 }}>
+                {a.gsPaper} — {(a.question || "Untitled").slice(0, 70)}{(a.question || "").length > 70 ? "…" : ""} <Badge tone={colorFor(a.status)}>{a.status}</Badge>
+              </div>
+            ))}
         </SummaryCard>
       </div>
     </div>
@@ -2886,13 +2940,14 @@ function NcertTab({ db, updateSlice }) {
       <GenericTracker
         records={db.ncert} setRecords={u => updateSlice("ncert", u)}
         columns={[
+          { key: "date", label: "Date", type: "date", width: 110 },
           gsPaperColumn(),
           subjectSingleSelectColumn(db),
           microtopicTagColumn(db, "ncert", setAddTopicFor, "Topic"),
           { key: "book", label: "Book", width: 150 },
           { key: "chapter", label: "Chapter", width: 140 },
         ]}
-        newRecord={() => ({ gsPaper: "", subject: "", microtopics: [], book: "", chapter: "" })}
+        newRecord={() => ({ date: todayISO(), gsPaper: "", subject: "", microtopics: [], book: "", chapter: "" })}
       />
       {addTopicFor && (
         <AddSyllabusRowPopup
@@ -2923,6 +2978,7 @@ function StandardBooksTab({ db, updateSlice }) {
       <GenericTracker
         records={db.standardBooks} setRecords={u => updateSlice("standardBooks", u)}
         columns={[
+          { key: "date", label: "Date", type: "date", width: 110 },
           gsPaperColumn(),
           subjectSingleSelectColumn(db),
           microtopicTagColumn(db, "standardBooks", setAddTopicFor, "Topic"),
@@ -2930,7 +2986,7 @@ function StandardBooksTab({ db, updateSlice }) {
           { key: "chapter", label: "Chapter", width: 140 },
           { key: "pages", label: "Pages", width: 80 },
         ]}
-        newRecord={() => ({ bookName: "", gsPaper: "", subject: "", chapter: "", microtopics: [], pages: "" })}
+        newRecord={() => ({ date: todayISO(), bookName: "", gsPaper: "", subject: "", chapter: "", microtopics: [], pages: "" })}
       />
       {addTopicFor && (
         <AddSyllabusRowPopup
