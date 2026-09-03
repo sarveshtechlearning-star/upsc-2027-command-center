@@ -1455,13 +1455,25 @@ function TagMultiSelectCell({ values, options, placeholder, disabled, onChange, 
   );
 }
 
+// Resolves a Syllabus row id straight to its current Micro Topic text (or
+// null if id isn't a Syllabus row id at all, e.g. a legacy plain-text tag).
+// Shared by Classes' tag label resolution and its file naming, so both
+// always agree on "what is this micro topic called right now".
+function resolveMicrotopicLabelById(db, id) {
+  const row = db.syllabus.find(s => s.id === id);
+  return row ? row.microtopic : null;
+}
 // Strips everything except letters/digits, so a label like "Art & Culture"
 // becomes "ArtCulture" rather than a messy run of underscores from
 // replacing every space and special character individually.
 function fileNameToken(s) {
   return String(s || "").replace(/[^a-zA-Z0-9]/g, "");
 }
-// Builds "Subject_Subtopic_N" (no extension — DriveFileCell appends the
+// Above this length (prefix only, before the extension), a
+// Subject_Subtopic_MicroTopic_N name is judged "too large" and
+// nextFileNamePrefix drops down a tier — see its own comment.
+const MAX_FILENAME_PREFIX_LENGTH = 60;
+// Builds a Drive filename prefix (no extension — DriveFileCell appends the
 // real one) for a FRESH upload only. N is 1 + how many OTHER rows in the
 // same tracker, matching the same group key, already have a file — so the
 // numbering is per subject+subtopic (or whatever grouping the caller
@@ -1473,11 +1485,27 @@ function fileNameToken(s) {
 // would see both rows already have files and recompute "_2" again).
 // Keeping "replace always keeps the existing name" (see DriveFileCell)
 // avoids that entirely rather than trying to solve it here.
+//
+// `labelParts` is either a flat array (unchanged from before — one naming
+// scheme, no fallback) or an array of arrays: candidate part-sets tried in
+// order from most to least descriptive (e.g. Subject+Subtopic+MicroTopic,
+// then Subject+MicroTopic, then MicroTopic alone), stopping at the first
+// whose result fits MAX_FILENAME_PREFIX_LENGTH. Falls back to the last
+// (shortest) candidate if none fit, rather than erroring or truncating
+// a token mid-word.
 function nextFileNamePrefix(records, rec, groupKeyFn, labelParts) {
   const key = groupKeyFn(rec);
   const count = records.filter(r => r.id !== rec.id && r.driveFile && groupKeyFn(r) === key).length + 1;
-  const tokens = labelParts.filter(Boolean).map(fileNameToken).filter(Boolean);
-  return `${tokens.length ? tokens.join("_") : "File"}_${count}`;
+  const tiers = Array.isArray(labelParts[0]) ? labelParts : [labelParts];
+  let last = `File_${count}`;
+  for (let i = 0; i < tiers.length; i++) {
+    const tokens = tiers[i].filter(Boolean).map(fileNameToken).filter(Boolean);
+    if (tokens.length === 0) continue;
+    const candidate = `${tokens.join("_")}_${count}`;
+    last = candidate;
+    if (candidate.length <= MAX_FILENAME_PREFIX_LENGTH) return candidate;
+  }
+  return last;
 }
 
 // Upload/Download control for a Google-Drive-backed file attachment on one
@@ -2160,7 +2188,7 @@ function ClassesTab({ db, updateSlice }) {
               render: (rec, _onChange, updateRecord) => (
                 <TagMultiSelectCell
                   values={rec.microtopics} options={syllabusRowOptionsForSubtopic(db, rec.subject, rec.topic, rec.subtopic)}
-                  resolveLabel={v => { const row = db.syllabus.find(s => s.id === v); return row ? row.microtopic : null; }}
+                  resolveLabel={v => resolveMicrotopicLabelById(db, v)}
                   placeholder={rec.subtopic ? "+ Add micro topic tag" : "Select subtopic first"} disabled={!rec.subtopic}
                   allowAddNew={!!rec.subtopic}
                   onChange={v => updateRecord({ microtopics: v })}
@@ -2184,8 +2212,23 @@ function ClassesTab({ db, updateSlice }) {
             { key: "status", label: "Status", type: "status", options: TASK_STATUS, width: 150 },
             {
               key: "driveFile", label: "Class Notes PDF", width: 170, type: "custom",
-              render: (rec, onChange) => <DriveFileCell driveFile={rec.driveFile} db={db} updateSlice={updateSlice} onChange={onChange} folderKey="classes"
-                  namePrefix={nextFileNamePrefix(db.classes, rec, r => normKey(r.subject, r.subtopic || r.topic), [rec.subject, rec.subtopic || rec.topic])} />,
+              render: (rec, onChange) => {
+                // First tagged Micro Topic's current name, if any — Classes
+                // can cover several, so there's no single "the" micro topic,
+                // but the first one still gives the file a more specific
+                // name than Subject_Subtopic alone when one exists.
+                const firstMicrotopic = (rec.microtopics || []).length > 0
+                  ? (resolveMicrotopicLabelById(db, rec.microtopics[0]) || rec.microtopics[0])
+                  : null;
+                return (
+                  <DriveFileCell driveFile={rec.driveFile} db={db} updateSlice={updateSlice} onChange={onChange} folderKey="classes"
+                    namePrefix={nextFileNamePrefix(db.classes, rec, r => normKey(r.subject, r.subtopic || r.topic), [
+                      [rec.subject, rec.subtopic || rec.topic, firstMicrotopic],
+                      [rec.subject, firstMicrotopic],
+                      [firstMicrotopic],
+                    ])} />
+                );
+              },
             },
           ]}
           newRecord={() => ({ date: todayISO(), subject: db.settings.subjects[0] || "", classNumber: "", topic: "", subtopic: "", microtopics: [], eta: "", status: "Not Started", syllabusId: null, driveFile: null })}
@@ -2607,7 +2650,11 @@ function SinglePagerTab({ db, updateSlice }) {
           {
             key: "driveFile", label: "Single Page PDF", width: 170, type: "custom",
             render: (rec, onChange) => <DriveFileCell driveFile={rec.driveFile} db={db} updateSlice={updateSlice} onChange={onChange} folderKey="singlePager"
-                namePrefix={nextFileNamePrefix(db.singlePager, rec, r => normKey(r.subject, r.subtopic || r.topic), [rec.subject, rec.subtopic || rec.topic])} />,
+                namePrefix={nextFileNamePrefix(db.singlePager, rec, r => normKey(r.subject, r.subtopic || r.topic), [
+                  [rec.subject, rec.subtopic, rec.microtopic],
+                  [rec.subject, rec.microtopic],
+                  [rec.microtopic],
+                ])} />,
           },
           { key: "revision", label: "Revision", type: "status", options: READ_STATUS, width: 130 },
         ]}
@@ -2911,7 +2958,11 @@ function CurrentAffairsTab({ db, updateSlice }) {
           {
             key: "driveFile", label: "Clipping / PDF", width: 170, type: "custom",
             render: (rec, onChange) => <DriveFileCell driveFile={rec.driveFile} db={db} updateSlice={updateSlice} onChange={onChange} folderKey="currentAffairs"
-                namePrefix={nextFileNamePrefix(db.currentAffairs, rec, r => normKey(r.subject, r.subtopic || r.relevantSyllabusTopic), [rec.subject, rec.subtopic || rec.relevantSyllabusTopic])} />,
+                namePrefix={nextFileNamePrefix(db.currentAffairs, rec, r => normKey(r.subject, r.subtopic || r.relevantSyllabusTopic), [
+                  [rec.subject, rec.subtopic, rec.microtopic],
+                  [rec.subject, rec.microtopic],
+                  [rec.microtopic],
+                ])} />,
           },
         ]}
         newRecord={() => ({ date: todayISO(), title: "", source: CA_SOURCES[0], subject: "", subtopic: "", microtopic: "", relevantSyllabusTopic: "", notes: "", driveFile: null, syllabusId: null })}
