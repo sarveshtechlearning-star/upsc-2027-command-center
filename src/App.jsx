@@ -1025,6 +1025,14 @@ function GenericTracker({ records, setRecords, columns, newRecord, emptyMessage,
     // deliberate escape hatch for undoing a mistake) — every other field
     // is refused here too, not just visually disabled.
     if (completionRequiresUpload && rec.status === "Completed" && col.type !== "status") return;
+    // "Partially Completed" locks every field except Status and Date —
+    // unlike the Completed lock above, this one stays clickable and
+    // explains itself with a popup rather than silently no-op'ing, since
+    // there's no separate visual dimming to rely on for the explanation.
+    if (rec.status === "Partially Completed" && col.key !== "status" && col.key !== "date") {
+      window.alert('This row is locked because Status is "Partially Completed". Change Status back to "Not Started" or "In Progress" to edit anything other than Date.');
+      return;
+    }
     setRecords(prev => prev.map(r => {
       if (r.id !== rec.id) return r;
       const updated = { ...r, [col.key]: val };
@@ -1042,9 +1050,16 @@ function GenericTracker({ records, setRecords, columns, newRecord, emptyMessage,
   // Blocked entirely while the row is locked (Completed, completionRequiresUpload) —
   // this is a backstop behind the visual pointer-events lock on the cell,
   // since this always affects non-status fields (the status column itself
-  // goes through updateField, not this).
+  // goes through updateField, not this). Also blocked (with a popup, since
+  // there's no visual dimming here to explain it) while Status is
+  // "Partially Completed" — custom columns are never Date or Status in this
+  // app, so this is safe to block outright without checking col.key.
   function updateFields(rec, patch) {
     if (completionRequiresUpload && rec.status === "Completed") return;
+    if (rec.status === "Partially Completed") {
+      window.alert('This row is locked because Status is "Partially Completed". Change Status back to "Not Started" or "In Progress" to edit anything other than Date.');
+      return;
+    }
     setRecords(prev => prev.map(r => (r.id === rec.id ? { ...r, ...patch } : r)));
   }
 
@@ -1182,6 +1197,7 @@ function GenericTracker({ records, setRecords, columns, newRecord, emptyMessage,
           {pagedRecords.map(rec => {
             const histCount = (rec.history || []).length;
             const locked = completionRequiresUpload && rec.status === "Completed";
+            const partiallyLocked = rec.status === "Partially Completed";
             return (
               <React.Fragment key={rec.id}>
                 <tr>
@@ -1195,10 +1211,12 @@ function GenericTracker({ records, setRecords, columns, newRecord, emptyMessage,
                   )}
                   {columns.map(col => {
                     const isStatusCol = col.type === "status";
+                    const isDateCol = col.key === "date";
                     const cell = isStatusCol ? (
                       <div className="ucc-flex" style={{ gap: 4 }}>
                         <StatusSelect value={rec[col.key]} options={col.options} onChange={v => updateField(rec, col, v, true)} />
                         {locked && <Lock size={13} style={{ color: "var(--ink-muted)", flexShrink: 0 }} aria-label="Row locked — change Status to edit" />}
+                        {partiallyLocked && <Lock size={13} style={{ color: "var(--red)", flexShrink: 0 }} aria-label="Row locked while Partially Completed — change Status to edit anything but Date" />}
                       </div>
                     ) : col.type === "custom" ? (
                       col.render(rec, (val, isStatus) => updateField(rec, col, val, isStatus), patch => updateFields(rec, patch))
@@ -1218,9 +1236,15 @@ function GenericTracker({ records, setRecords, columns, newRecord, emptyMessage,
                     );
                     return (
                       <td key={col.key}>
-                        {locked && !isStatusCol
-                          ? <div style={{ pointerEvents: "none", opacity: 0.55 }} title="Completed rows are locked — change Status to edit again">{cell}</div>
-                          : cell}
+                        {locked && !isStatusCol ? (
+                          <div style={{ pointerEvents: "none", opacity: 0.55 }} title="Completed rows are locked — change Status to edit again">{cell}</div>
+                        ) : partiallyLocked && !isStatusCol && !isDateCol ? (
+                          // Stays clickable (unlike the Completed lock above) —
+                          // updateField/updateFields refuse the change and
+                          // explain with a popup, since there's no pointer-
+                          // events block here to make the lock self-evident.
+                          <div style={{ background: "var(--red-soft)", borderRadius: 5 }} title='Locked while Partially Completed — change Status to edit anything but Date'>{cell}</div>
+                        ) : cell}
                       </td>
                     );
                   })}
@@ -1395,35 +1419,33 @@ function TagMultiSelectCell({ values, options, placeholder, disabled, onChange, 
 
   return (
     <div>
-      {tags.length > 0 && (
-        <div className="ucc-flex wrap" style={{ marginBottom: 4 }}>
-          {tags.map(t => (
-            <span className="ucc-tag" key={t}>
-              {labelFor(t)}
-              <button type="button" onClick={() => removeTag(t)} title={`Remove ${labelFor(t)}`} aria-label={`Remove ${labelFor(t)}`}><X size={10} /></button>
-            </span>
-          ))}
-        </div>
-      )}
-      {adding ? (
-        <div className="ucc-flex">
-          <input className="ucc-input" autoFocus placeholder="New micro topic"
-            value={draft} onChange={e => setDraft(e.target.value)}
-            onKeyDown={e => { if (e.key === "Enter") confirmAdd(); if (e.key === "Escape") cancelAdd(); }} />
-          <IconBtn icon={Check} onClick={confirmAdd} title="Add" />
-          <IconBtn icon={X} onClick={cancelAdd} title="Cancel" />
-        </div>
-      ) : showCompactAdd ? (
-        <IconBtn icon={Plus} onClick={() => setPickerOpen(true)} title="Add another micro topic tag" />
-      ) : showDropdown && (
-        <select className="ucc-select" value="" disabled={disabled} autoFocus={pickerOpen}
-          onChange={e => addTag(e.target.value)}
-          onBlur={() => { if (tags.length > 0) setPickerOpen(false); }}>
-          <option value="">{available.length ? placeholder : (allowAddNew ? "+ Add a tag…" : "No more to add")}</option>
-          {available.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-          {allowAddNew && <option value={ADD_NEW_VALUE}>+ Add new</option>}
-        </select>
-      )}
+      <div className="ucc-flex wrap" style={{ gap: 4, rowGap: 6 }}>
+        {tags.map(t => (
+          <span className="ucc-tag" key={t}>
+            {labelFor(t)}
+            <button type="button" onClick={() => removeTag(t)} title={`Remove ${labelFor(t)}`} aria-label={`Remove ${labelFor(t)}`}><X size={10} /></button>
+          </span>
+        ))}
+        {adding ? (
+          <div className="ucc-flex" style={{ gap: 2 }}>
+            <input className="ucc-input" autoFocus placeholder="New micro topic" style={{ width: 140 }}
+              value={draft} onChange={e => setDraft(e.target.value)}
+              onKeyDown={e => { if (e.key === "Enter") confirmAdd(); if (e.key === "Escape") cancelAdd(); }} />
+            <IconBtn icon={Check} onClick={confirmAdd} title="Add" />
+            <IconBtn icon={X} onClick={cancelAdd} title="Cancel" />
+          </div>
+        ) : showCompactAdd ? (
+          <IconBtn icon={Plus} onClick={() => setPickerOpen(true)} title="Add another micro topic tag" />
+        ) : showDropdown && (
+          <select className="ucc-select" value="" disabled={disabled} autoFocus={pickerOpen} style={{ width: "auto", maxWidth: 170 }}
+            onChange={e => addTag(e.target.value)}
+            onBlur={() => { if (tags.length > 0) setPickerOpen(false); }}>
+            <option value="">{available.length ? placeholder : (allowAddNew ? "+ Add a tag…" : "No more to add")}</option>
+            {available.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+            {allowAddNew && <option value={ADD_NEW_VALUE}>+ Add new</option>}
+          </select>
+        )}
+      </div>
       {disabled && tags.length === 0 && <div className="ucc-tiny" style={{ color: "var(--ink-muted)" }}>{placeholder}</div>}
     </div>
   );
