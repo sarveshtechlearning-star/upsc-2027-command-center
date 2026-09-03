@@ -3193,6 +3193,7 @@ function gsPaperColumn() {
     key: "gsPaper", label: "GS Paper", width: 90, type: "custom",
     render: (rec, _onChange, updateRecord) => (
       <select className="ucc-select" value={rec.gsPaper || ""} onChange={e => updateRecord({ gsPaper: e.target.value })}>
+        <option value="">—</option>
         {GS_PAPERS.map(g => <option key={g} value={g}>{g}</option>)}
       </select>
     ),
@@ -4634,7 +4635,7 @@ function ImportExportTab({ db, updateSlice }) {
 
   const cfg = IMPORT_TARGETS[target];
   const existing = db[target] || [];
-  const mappedPreview = rows.slice(0, 300).map(r => {
+  const mappedPreview = rows.map(r => {
     const rec = {};
     cfg.fields.forEach(f => { rec[f] = mapping[f] ? r[mapping[f]] : ""; });
     rec.__dupKey = cfg.dupKey(rec);
