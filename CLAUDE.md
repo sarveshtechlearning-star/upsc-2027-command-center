@@ -504,10 +504,34 @@ summary will do.
   `downloadDriveFile` are generic across trackers — pass a `folderKey`
   (see `DRIVE_FOLDER_NAMES`) to keep each tracker's PDFs in their own
   Drive folder. Currently wired up for Single Pager, Classes, GS Answer
-  Writing, Tamil Reading/Writing, and Current Affairs. `ensureDriveFolder`
-  falls back to the legacy singular `settings.driveFolderId` only for the
-  `singlePager` key, to avoid creating a duplicate folder for existing
-  users; new folder ids live in `settings.driveFolders[folderKey]`.
+  Writing, Topper Copies, Tamil Reading/Writing, and Current Affairs.
+  `ensureDriveFolder` falls back to the legacy singular
+  `settings.driveFolderId` only for the `singlePager` key, to avoid
+  creating a duplicate folder for existing users; new folder ids live in
+  `settings.driveFolders[folderKey]`.
+- **Reset (both "Reset all data" and a per-section reset in `DangerZone`)
+  archives each affected tracker's Drive folder before clearing its data —
+  by request, since Reset never deletes from Drive and previously left old
+  files sitting in the same folder a fresh upload would then reuse,
+  silently mixing old and new.** `archiveDriveFolders(db, updateSlice,
+  folderKeys, label)`: for whichever of the given tracker keys actually
+  have a cached folder id (skips entirely, no Drive calls at all, if none
+  do), moves that folder (`moveDriveFolder` — Drive's "move" is really
+  add/remove parents, so it reads the current parent first) into one fresh
+  dated subfolder (`createDatedArchiveFolder`, name like "Archive
+  2026-09-03 14-32 — Classes") under a single shared root folder
+  (`ensureArchiveRootFolder`, `ARCHIVE_ROOT_FOLDER_NAME`, cached the same
+  way as `ensureDriveFolder`'s per-tracker folders via
+  `settings.driveArchiveRootFolderId`), then clears those keys from
+  `settings.driveFolders` (and the legacy `driveFolderId` if `singlePager`
+  was one of them) so the next upload there starts a genuinely new folder.
+  Best-effort and non-blocking: `DangerZone` still clears the app's own
+  data even if archiving throws (Drive not configured, offline, auth
+  expired) — it just surfaces an alert first, since a reset that silently
+  refused to run because Drive was unreachable would be worse than one
+  that clears local data but leaves old files unarchived in their normal
+  folder (which is exactly what Reset already did before this existed).
+  Don't make archiving block or fail the reset.
 - **First-time uploads get a standardized name; replacing an existing file
   never renames it.** `DriveFileCell`'s `namePrefix` prop (built per call
   site by `nextFileNamePrefix`) supplies something like
