@@ -203,6 +203,15 @@ const CA_SOURCES = ["The Hindu", "Indian Express", "PIB", "Other"];
 const AI_STATUS = ["Not Started", "In Progress", "Completed"];
 const SKIP_REASONS = ["Time shortage", "Office workload", "Fatigue", "Unexpected work", "Other"];
 const GS_PAPER_OPTIONS = ["GS Paper I", "GS Paper II", "GS Paper III", "GS Paper IV", "Essay", "CSAT", "Optional Paper I", "Optional Paper II", "Personality Test"];
+// GS_PAPERS (Answer Writing/Topper Copies' own short-form GS Paper field,
+// e.g. "GS1") and GS_PAPER_OPTIONS (Syllabus's long-form field, e.g. "GS
+// Paper I") are two different vocabularies for the same thing — comparing
+// them directly (s.gsPaper === rec.gsPaper) silently never matches. This
+// maps short to long so Answer Writing/Topper Copies can filter Syllabus
+// rows (Subject/Micro Topic options) by their own GS Paper correctly.
+const GS_PAPER_SHORT_TO_LONG = {
+  GS1: "GS Paper I", GS2: "GS Paper II", GS3: "GS Paper III", GS4: "GS Paper IV", Essay: "Essay",
+};
 
 // Maps the day-plan's generic task-status vocabulary onto whatever status
 // vocabulary a specific tracker uses, so picking a status in Today's plan
@@ -3017,7 +3026,7 @@ function gsPaperTopicColumns(db) {
     {
       key: "topic", label: "Topic", width: 180, type: "custom",
       render: (rec, _onChange, updateRecord) => {
-        const options = Array.from(new Set(db.syllabus.filter(s => s.gsPaper === rec.gsPaper && s.topic).map(s => s.topic)));
+        const options = Array.from(new Set(db.syllabus.filter(s => s.gsPaper === GS_PAPER_SHORT_TO_LONG[rec.gsPaper] && s.topic).map(s => s.topic)));
         return (
           <CascadingSelectCell
             value={rec.topic} options={options} allowAddNew={false}
@@ -3037,7 +3046,7 @@ function subjectTagColumn(db) {
   return {
     key: "subjects", label: "Subject", width: 170, type: "custom",
     render: (rec, _onChange, updateRecord) => {
-      const options = Array.from(new Set(db.syllabus.filter(s => s.gsPaper === rec.gsPaper && s.subject).map(s => s.subject)))
+      const options = Array.from(new Set(db.syllabus.filter(s => s.gsPaper === GS_PAPER_SHORT_TO_LONG[rec.gsPaper] && s.subject).map(s => s.subject)))
         .map(s => ({ value: s, label: s }));
       return (
         <TagMultiSelectCell
@@ -3051,8 +3060,99 @@ function subjectTagColumn(db) {
   };
 }
 
+// Small popup replicating the Syllabus tab's own "add a row" flow — GS
+// Paper/Subject/Topic/Subtopic pickers plus a Micro Topic text field
+// (pre-filled with whatever was just typed into the tag input) — rather
+// than silently inheriting context like Classes' Micro Topic add-new does.
+// Answer Writing's Micro Topic tags link across several Subjects at once,
+// so there's no single Subject/Topic/Subtopic to safely assume; letting
+// the person place the new row properly, the same way they would on
+// Syllabus itself, avoids guessing wrong.
+function AddSyllabusRowPopup({ db, updateSlice, initialMicrotopic, initialSubject, onCreated, onClose }) {
+  const [gsPaper, setGsPaper] = useState("");
+  const [subject, setSubject] = useState(initialSubject || "");
+  const [topic, setTopic] = useState("");
+  const [subtopic, setSubtopic] = useState("");
+  const [microtopic, setMicrotopic] = useState(initialMicrotopic || "");
+
+  const topicOptions = subject ? syllabusTopicsForSubject(db, subject) : [];
+  const subtopicOptions = (subject && topic) ? syllabusSubtopicsForTopic(db, subject, topic) : [];
+  const canAdd = subject.trim() && microtopic.trim();
+
+  function handleAdd() {
+    if (!canAdd) return;
+    const newId = uid();
+    updateSlice("syllabus", prev => [...prev, {
+      id: newId,
+      gsPaper: gsPaper || defaultGsPaperForSubject(db, subject),
+      subject: subject.trim(), topic: topic.trim(), subtopic: subtopic.trim(), microtopic: microtopic.trim(),
+      studyStatus: "Not Started", revisionStatus: "Not Started", history: [],
+    }]);
+    onCreated(newId, subject.trim());
+  }
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.35)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 50 }}
+      onClick={onClose}>
+      <div className="ucc-card" style={{ width: 360, maxWidth: "90vw", margin: 0 }} onClick={e => e.stopPropagation()}>
+        <h3>Add to Syllabus</h3>
+        <p className="ucc-tiny" style={{ marginBottom: 10 }}>
+          Creates a real row on the Syllabus tab, same as adding one there — then tags it to this answer.
+        </p>
+        <div style={{ display: "grid", gap: 8 }}>
+          <div>
+            <label className="ucc-tiny">GS Paper</label>
+            <select className="ucc-select" value={gsPaper} onChange={e => setGsPaper(e.target.value)}>
+              <option value="">Select GS Paper…</option>
+              {GS_PAPER_OPTIONS.map(g => <option key={g} value={g}>{g}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="ucc-tiny">Subject</label>
+            <CascadingSelectCell
+              value={subject} options={db.settings.subjects} placeholder="Select subject…"
+              onSelect={v => { setSubject(v); setTopic(""); setSubtopic(""); }}
+              onAddNew={name => {
+                updateSlice("settings", s => (s.subjects.includes(name) ? s : { ...s, subjects: [...s.subjects, name] }));
+                setSubject(name); setTopic(""); setSubtopic("");
+              }}
+            />
+          </div>
+          <div>
+            <label className="ucc-tiny">Topic (optional)</label>
+            <CascadingSelectCell
+              value={topic} options={topicOptions} disabled={!subject}
+              placeholder={subject ? "Select topic…" : "Select subject first"}
+              onSelect={v => { setTopic(v); setSubtopic(""); }}
+              onAddNew={name => { setTopic(name); setSubtopic(""); }}
+            />
+          </div>
+          <div>
+            <label className="ucc-tiny">Subtopic (optional)</label>
+            <CascadingSelectCell
+              value={subtopic} options={subtopicOptions} disabled={!topic}
+              placeholder={topic ? "Select subtopic…" : "Select topic first"}
+              onSelect={v => setSubtopic(v)}
+              onAddNew={name => setSubtopic(name)}
+            />
+          </div>
+          <div>
+            <label className="ucc-tiny">Micro Topic</label>
+            <input className="ucc-input" autoFocus={!initialMicrotopic} value={microtopic} onChange={e => setMicrotopic(e.target.value)} placeholder="Micro topic…" />
+          </div>
+        </div>
+        <div className="ucc-flex" style={{ marginTop: 12 }}>
+          <button className="ucc-btn primary" disabled={!canAdd} onClick={handleAdd}><Plus size={13} /> Add to Syllabus</button>
+          <button className="ucc-btn ghost" onClick={onClose}>Cancel</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function AnswerWritingTab({ db, updateSlice }) {
   const [sub, setSub] = useState("mine");
+  const [addTopicFor, setAddTopicFor] = useState(null); // { recId, typedName } | null
   return (
     <div className="ucc-card">
       <div className="ucc-tabbar">
@@ -3062,7 +3162,7 @@ function AnswerWritingTab({ db, updateSlice }) {
       {sub === "mine" ? (
         <>
           <div className="ucc-tiny" style={{ margin: "8px 0", color: "var(--ink-muted)" }}>
-            Subject is scoped to the GS Paper and comes from the Syllabus tab — new subjects can't be added here. Micro Topic tags every Micro Topic under whichever Subject(s) are picked (across all their Topics/Subtopics) — pick as many as the answer actually touched; new ones can't be added here.
+            Subject is scoped to the GS Paper and comes from the Syllabus tab — new subjects can't be added here. Micro Topic tags every Micro Topic under whichever Subject(s) are picked (across all their Topics/Subtopics) — pick as many as the answer actually touched, or use <strong>+ Add new</strong> to place a brand new one on the Syllabus tab first.
           </div>
           <GenericTracker
             records={db.answerWriting} setRecords={u => updateSlice("answerWriting", u)} completionRequiresUpload
@@ -3085,9 +3185,10 @@ function AnswerWritingTab({ db, updateSlice }) {
                 // several Subjects). Options are every Micro Topic under
                 // whichever Subject(s) are currently tagged above; picking
                 // "Economics" and "Polity" shows Micro Topics from both.
-                // allowAddNew is off — this links to real Syllabus rows
-                // (by id, survives a later rename, same mechanism as
-                // Classes' Micro Topic tags), it doesn't invent new ones.
+                // "+ Add new" doesn't invent a row inline (unlike Classes) —
+                // it opens AddSyllabusRowPopup, since there's no single
+                // Subject/Topic/Subtopic here to safely assume the way
+                // Classes can from its own row context.
                 key: "microtopics", label: "Micro Topic", width: 220, type: "custom",
                 render: (rec, _onChange, updateRecord) => {
                   const subjects = rec.subjects || [];
@@ -3095,11 +3196,11 @@ function AnswerWritingTab({ db, updateSlice }) {
                   const options = microtopicRowOptionsForSubjects(db, subjects);
                   return (
                     <TagMultiSelectCell
-                      values={values} options={options}
+                      values={values} options={options} allowAddNew
                       resolveLabel={v => resolveMicrotopicLabelById(db, v)}
-                      placeholder={subjects.length ? "+ Add micro topic" : "Add a Subject first"}
-                      disabled={subjects.length === 0}
+                      placeholder={subjects.length ? "+ Add micro topic" : "Add a Subject first, or + Add new"}
                       onChange={v => updateRecord({ microtopics: v })}
+                      onAddNew={name => setAddTopicFor({ recId: rec.id, typedName: name, subject: subjects.length === 1 ? subjects[0] : "" })}
                     />
                   );
                 },
@@ -3122,6 +3223,21 @@ function AnswerWritingTab({ db, updateSlice }) {
             ]}
             newRecord={() => ({ date: todayISO(), gsPaper: "GS1", subjects: [], microtopics: [], question: "", wordLimit: 150, answer: "", status: "Not Started", selfScore: "", improvementNotes: "", driveFile: null })}
           />
+          {addTopicFor && (
+            <AddSyllabusRowPopup
+              db={db} updateSlice={updateSlice}
+              initialMicrotopic={addTopicFor.typedName} initialSubject={addTopicFor.subject}
+              onCreated={(newId, createdSubject) => {
+                updateSlice("answerWriting", prev => prev.map(r => {
+                  if (r.id !== addTopicFor.recId) return r;
+                  const nextSubjects = (r.subjects || []).includes(createdSubject) ? (r.subjects || []) : [...(r.subjects || []), createdSubject];
+                  return { ...r, microtopics: [...(r.microtopics || []), newId], subjects: nextSubjects };
+                }));
+                setAddTopicFor(null);
+              }}
+              onClose={() => setAddTopicFor(null)}
+            />
+          )}
         </>
       ) : (
         <>
