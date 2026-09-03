@@ -1245,7 +1245,7 @@ function GenericTracker({ records, setRecords, columns, newRecord, emptyMessage,
             const partiallyLocked = rec.status === "Partially Completed";
             return (
               <React.Fragment key={rec.id}>
-                <tr>
+                <tr style={locked ? { background: "var(--green-soft)" } : undefined}>
                   {reorderMode && (
                     <td>
                       <div className="ucc-flex" style={{ gap: 2 }}>
@@ -1261,7 +1261,7 @@ function GenericTracker({ records, setRecords, columns, newRecord, emptyMessage,
                     const cell = isStatusCol ? (
                       <div className="ucc-flex" style={{ gap: 4 }}>
                         <StatusSelect value={rec[col.key]} options={col.options} onChange={v => updateField(rec, col, v, true)} />
-                        {locked && <Lock size={13} style={{ color: "var(--ink-muted)", flexShrink: 0 }} aria-label="Row locked — change Status to edit" />}
+                        {locked && <Lock size={13} style={{ color: "var(--green)", flexShrink: 0 }} aria-label="Row locked — change Status to edit" />}
                         {partiallyLocked && <Lock size={13} style={{ color: "var(--red)", flexShrink: 0 }} aria-label="Row locked while Partially Completed — change Status to edit anything but Date or the uploaded file" />}
                       </div>
                     ) : col.type === "custom" ? (
@@ -1289,9 +1289,14 @@ function GenericTracker({ records, setRecords, columns, newRecord, emptyMessage,
                           // read — updateField's own Completed-row guard
                           // already refuses any edit, so this is read-only
                           // in practice without needing a visual disable.
-                          <div style={{ opacity: 0.55 }} title="Completed rows are locked — change Status to edit again. You can still scroll to read this field.">{cell}</div>
+                          // No dimming here (or below) — the row's own
+                          // var(--green-soft) background is the "locked/
+                          // done" signal now, so the cell content stays at
+                          // full contrast/legibility instead of looking
+                          // greyed-out/disabled.
+                          <div title="Completed rows are locked — change Status to edit again. You can still scroll to read this field.">{cell}</div>
                         ) : locked && !isStatusCol ? (
-                          <div style={{ pointerEvents: "none", opacity: 0.55 }} title="Completed rows are locked — change Status to edit again">{cell}</div>
+                          <div style={{ pointerEvents: "none" }} title="Completed rows are locked — change Status to edit again">{cell}</div>
                         ) : partiallyLocked && !isStatusCol && !isDateCol && !isDriveFileCol ? (
                           // Stays clickable (unlike the Completed lock above) —
                           // updateField/updateFields refuse the change and

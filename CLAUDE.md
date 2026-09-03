@@ -266,17 +266,24 @@ summary will do.
   dispatch a change without going through the disabled UI). The status
   field itself stays fully interactive on a locked row — changing it away
   from "Completed" is the deliberate, only escape hatch for fixing a
-  mistake after the fact, not an oversight. Reading (six different status
+  mistake after the fact, not an oversight. **Visual treatment: the whole
+  locked `<tr>` gets `background: var(--green-soft)` and the lock icon
+  turns `var(--green)`** — deliberately not a grey/dimmed "disabled" look,
+  since Completed is an achieved state, not a broken one. Non-editable
+  cells are still `pointer-events: none` (or, for `readableWhenLocked`
+  columns, fully interactive for scrolling) but carry no opacity/dimming
+  of their own — the row-level green tint is the only visual signal now.
+  Reading (six different status
   columns, no `driveFile` at all) and every other tracker are unaffected
   by design — `completionRequiresUpload` is opt-in per tracker, not a
   global behavior of `GenericTracker`. **A column can also set
   `readableWhenLocked: true`** (currently only Topper Copies' Question and
-  Observations) to skip the `pointer-events: none` wrapper on lock while
-  keeping the same dimmed styling — the cell stays scrollable/readable for
-  long text, but is still effectively read-only because `updateField`'s
-  Completed-row guard refuses the write regardless of what the UI allows
-  clicking on. Use this only for long-text fields someone would want to
-  re-read on a locked row, not as a general way to loosen the lock.
+  Observations) to stay fully interactive (no `pointer-events: none`) on a
+  locked row so long text can still be scrolled — the cell stays
+  effectively read-only because `updateField`'s Completed-row guard
+  refuses the write regardless of what the UI allows clicking on. Use this
+  only for long-text fields someone would want to re-read on a locked row,
+  not as a general way to loosen the lock.
 - **Source Identified (Syllabus tab)** is read-only and fully computed —
   never add a way to set it by hand. `isSourceIdentifiedForMicrotopic(db,
   syllabusRow)` takes the whole row (not separate fields) so it can match
