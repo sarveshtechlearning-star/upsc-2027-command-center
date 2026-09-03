@@ -2155,7 +2155,7 @@ function TodayTab({ db, updateSlice, onNavigate }) {
         )}
       </div>
 
-      <div className="ucc-flex wrap" style={{ alignItems: "stretch", gap: 12 }}>
+      <div className="ucc-flex wrap" style={{ alignItems: "flex-start", gap: 12 }}>
         <div className="ucc-card" style={{ flex: "3 1 420px", margin: 0 }}>
           <h3>Today's plan</h3>
           <p className="ucc-tiny" style={{ marginTop: -4 }}>A quick hourly journal — jot a line on what you actually did in each slot. Detailed logging (topics, PDFs, marks) stays on each tracker's own tab.</p>
@@ -2209,17 +2209,22 @@ function TodayTab({ db, updateSlice, onNavigate }) {
 
         {/* Deliberately sits beside the planner, not buried below it in the
             summary grid — a streak is meant to nag, so it needs to be seen
-            every time this tab opens, not scrolled past. */}
+            every time this tab opens, not scrolled past. flex-start on the
+            row above (not stretch) plus no set height here is load-bearing:
+            stretching this to match the plan card's height (which can be
+            tall) pushed its centered content down past the fold, exactly
+            defeating the "visible without scrolling" point. */}
         <div className="ucc-card" style={{
-          flex: "1 1 190px", margin: 0, display: "flex", flexDirection: "column",
-          alignItems: "center", justifyContent: "center", textAlign: "center",
+          flex: "1 1 190px", maxWidth: 220, margin: 0, padding: "10px 14px", display: "flex",
+          alignItems: "center", gap: 10,
           background: "var(--red-soft)", border: "2px solid var(--red)",
         }}>
-          <Flame size={30} style={{ color: "var(--red)" }} />
-          <div style={{ fontSize: 38, fontWeight: 800, color: "var(--red)", lineHeight: 1.15, marginTop: 2 }}>{consistencyStreak}</div>
-          <div className="ucc-tiny" style={{ fontWeight: 700, color: "var(--red)" }}>day{consistencyStreak === 1 ? "" : "s"} streak</div>
-          <div className="ucc-tiny" style={{ color: "var(--ink-muted)", marginTop: 6 }}>
-            Any one of Class, Standard Books, NCERT, Answer Writing, Single Pager, Tamil Literature, or Current Affairs keeps it alive.
+          <Flame size={22} style={{ color: "var(--red)", flexShrink: 0 }} />
+          <div>
+            <div style={{ fontSize: 22, fontWeight: 800, color: "var(--red)", lineHeight: 1 }}>
+              {consistencyStreak} <span style={{ fontSize: 12, fontWeight: 700 }}>day{consistencyStreak === 1 ? "" : "s"} streak</span>
+            </div>
+            <div className="ucc-tiny" style={{ color: "var(--ink-muted)" }}>Any tracker logged today keeps it going.</div>
           </div>
         </div>
       </div>
