@@ -1025,12 +1025,15 @@ function GenericTracker({ records, setRecords, columns, newRecord, emptyMessage,
     // deliberate escape hatch for undoing a mistake) — every other field
     // is refused here too, not just visually disabled.
     if (completionRequiresUpload && rec.status === "Completed" && col.type !== "status") return;
-    // "Partially Completed" locks every field except Status and Date —
-    // unlike the Completed lock above, this one stays clickable and
-    // explains itself with a popup rather than silently no-op'ing, since
-    // there's no separate visual dimming to rely on for the explanation.
-    if (rec.status === "Partially Completed" && col.key !== "status" && col.key !== "date") {
-      window.alert('This row is locked because Status is "Partially Completed". Change Status back to "Not Started" or "In Progress" to edit anything other than Date.');
+    // "Partially Completed" locks every field except Status, Date, and
+    // uploading/replacing the row's file — unlike the Completed lock above,
+    // this one stays clickable and explains itself with a popup rather than
+    // silently no-op'ing, since there's no separate visual dimming to rely
+    // on for the explanation. driveFile is excluded because DriveFileCell
+    // already uploads to Drive before calling this — refusing here would
+    // leave an orphaned upload with no local record of it.
+    if (rec.status === "Partially Completed" && col.key !== "status" && col.key !== "date" && col.key !== "driveFile") {
+      window.alert('This row is locked because Status is "Partially Completed". Change Status back to "Not Started" or "In Progress" to edit anything other than Date or the uploaded file.');
       return;
     }
     setRecords(prev => prev.map(r => {
@@ -1212,11 +1215,12 @@ function GenericTracker({ records, setRecords, columns, newRecord, emptyMessage,
                   {columns.map(col => {
                     const isStatusCol = col.type === "status";
                     const isDateCol = col.key === "date";
+                    const isDriveFileCol = col.key === "driveFile";
                     const cell = isStatusCol ? (
                       <div className="ucc-flex" style={{ gap: 4 }}>
                         <StatusSelect value={rec[col.key]} options={col.options} onChange={v => updateField(rec, col, v, true)} />
                         {locked && <Lock size={13} style={{ color: "var(--ink-muted)", flexShrink: 0 }} aria-label="Row locked — change Status to edit" />}
-                        {partiallyLocked && <Lock size={13} style={{ color: "var(--red)", flexShrink: 0 }} aria-label="Row locked while Partially Completed — change Status to edit anything but Date" />}
+                        {partiallyLocked && <Lock size={13} style={{ color: "var(--red)", flexShrink: 0 }} aria-label="Row locked while Partially Completed — change Status to edit anything but Date or the uploaded file" />}
                       </div>
                     ) : col.type === "custom" ? (
                       col.render(rec, (val, isStatus) => updateField(rec, col, val, isStatus), patch => updateFields(rec, patch))
@@ -1238,12 +1242,12 @@ function GenericTracker({ records, setRecords, columns, newRecord, emptyMessage,
                       <td key={col.key}>
                         {locked && !isStatusCol ? (
                           <div style={{ pointerEvents: "none", opacity: 0.55 }} title="Completed rows are locked — change Status to edit again">{cell}</div>
-                        ) : partiallyLocked && !isStatusCol && !isDateCol ? (
+                        ) : partiallyLocked && !isStatusCol && !isDateCol && !isDriveFileCol ? (
                           // Stays clickable (unlike the Completed lock above) —
                           // updateField/updateFields refuse the change and
                           // explain with a popup, since there's no pointer-
                           // events block here to make the lock self-evident.
-                          <div style={{ background: "var(--red-soft)", borderRadius: 5 }} title='Locked while Partially Completed — change Status to edit anything but Date'>{cell}</div>
+                          <div style={{ background: "var(--red-soft)", borderRadius: 5 }} title='Locked while Partially Completed — change Status to edit anything but Date or the uploaded file'>{cell}</div>
                         ) : cell}
                       </td>
                     );
