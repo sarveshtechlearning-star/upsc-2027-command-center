@@ -150,6 +150,20 @@ summary will do.
   with non-empty `journal` text, "Skipped" counts `block.skipped`, and the
   per-day list shows each block's real start/end (via `computePlanTimes`,
   since the stored plan only has `duration`) alongside its journal text.
+- **Wake time locks after its first edit each day** (`plan.wakeTimeLocked`,
+  set `false` by `initDayPlan`, flipped to `true` inside `changeWakeTime`
+  — not inside the shared `regeneratePlan`, since that's also called by
+  `changeDayType` and a day-type change must not lock wake time). Once
+  locked the `<input type="time">` is `disabled`; the only way back in is
+  the Pencil `IconBtn` next to it (`unlockWakeTime`, sets it back to
+  `false`) — same deliberate-escape-hatch shape as `GenericTracker`'s
+  Completed-row lock. Don't move the lock-setting into `regeneratePlan`
+  itself or a day-type change will start locking wake time too.
+- **`LiveClock`** (top bar, next to today's date) is a self-contained
+  ticking clock — its own `setInterval`/`useState`, cleaned up on
+  unmount — not wired to any tracker data. If another live-updating time
+  display is ever needed, reuse this component rather than adding a
+  second interval.
 - **"Add existing task" brings back a slot `applyTrimRules` dropped** —
   computed fresh each render as `buildBaseBlocks(dayType, settings)` minus
   whatever's already in `plan.blocks` (by id), not stored anywhere or
