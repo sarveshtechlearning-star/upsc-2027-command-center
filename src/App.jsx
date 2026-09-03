@@ -615,14 +615,38 @@ function renameSyllabusValue(db, updateSlice, level, context, oldValue, newValue
 // resolve their label straight from the live Syllabus row instead (see
 // TagMultiSelectCell's resolveLabel usage on the Classes tab), which stays
 // correct without needing this sync at all.
-function syncSyllabusRowReferences(db, updateSlice, row) {
-  const patch = { subject: row.subject, topic: row.topic, subtopic: row.subtopic, microtopic: row.microtopic };
+// After a Syllabus row's own Subject/Topic/Subtopic/Micro Topic changes —
+// via the plain per-row reassignment dropdowns, or a direct Micro Topic
+// text edit — keeps every OTHER tracker record that links to this SPECIFIC
+// row showing the same current classification, instead of silently going
+// stale. Matches on syllabusId when present; for older records that predate
+// the syllabusId FK (still null/undefined), falls back to a one-time exact
+// match against the row's PREVIOUS subject/topic/subtopic/microtopic
+// (oldRow) — and backfills their syllabusId while it's at it, so they're
+// id-linked from here on. Never matches by text alone once a syllabusId
+// exists, so moving or correcting one Micro Topic can't spill onto a
+// different, unrelated row that happens to share the old Subtopic text —
+// that broader, text-matched propagation is what renameSyllabusValue is for
+// (used by "Rename a term" and by editing an existing Micro Topic's text).
+// Classes is deliberately not touched here: a Class's own Subject/Topic/
+// Subtopic is the user's classification of the class itself (it can cover
+// several Micro Topics under one Subtopic), not something that should
+// silently move because one tagged Micro Topic did. Its tags resolve their
+// label straight from the live Syllabus row instead (see
+// TagMultiSelectCell's resolveLabel usage on the Classes tab), which stays
+// correct without needing this sync at all.
+function syncSyllabusRowReferences(db, updateSlice, oldRow, newRow) {
+  const patch = { subject: newRow.subject, topic: newRow.topic, subtopic: newRow.subtopic, microtopic: newRow.microtopic, syllabusId: newRow.id };
+  const isLegacyMatch = r => !r.syllabusId && r.subject === oldRow.subject && r.topic === oldRow.topic && r.subtopic === oldRow.subtopic && r.microtopic === oldRow.microtopic;
   ["reading", "ncert", "standardBooks", "singlePager"].forEach(key => {
-    updateSlice(key, prev => prev.map(r => (r.syllabusId === row.id ? { ...r, ...patch } : r)));
+    updateSlice(key, prev => prev.map(r => (r.syllabusId === newRow.id || isLegacyMatch(r) ? { ...r, ...patch } : r)));
   });
-  updateSlice("currentAffairs", prev => prev.map(r => (r.syllabusId === row.id
-    ? { ...r, subject: row.subject, relevantSyllabusTopic: row.topic, subtopic: row.subtopic, microtopic: row.microtopic }
-    : r)));
+  updateSlice("currentAffairs", prev => prev.map(r => {
+    const legacyMatch = !r.syllabusId && r.subject === oldRow.subject && r.relevantSyllabusTopic === oldRow.topic && r.subtopic === oldRow.subtopic && r.microtopic === oldRow.microtopic;
+    return (r.syllabusId === newRow.id || legacyMatch)
+      ? { ...r, subject: newRow.subject, relevantSyllabusTopic: newRow.topic, subtopic: newRow.subtopic, microtopic: newRow.microtopic, syllabusId: newRow.id }
+      : r;
+  }));
 }
 // Strict topic/subtopic lists scoped to what's actually on the Syllabus tab
 // — the only place (besides Current Affairs, which routes new entries into
@@ -1338,6 +1362,13 @@ function CascadingSelectCell({ value, options, placeholder, disabled, onSelect, 
 function TagMultiSelectCell({ values, options, placeholder, disabled, onChange, allowAddNew = false, onAddNew, resolveLabel }) {
   const [adding, setAdding] = useState(false);
   const [draft, setDraft] = useState("");
+  // Once at least one tag is already picked, the full-width dropdown is
+  // collapsed into a small "+" — picking a first tag still shows the
+  // dropdown outright (nothing to compact yet), but every tag after that
+  // is a secondary action that shouldn't take up a whole row of table
+  // width by default. Reopens the dropdown on click; closes again once a
+  // tag is picked, "+ Add new" is confirmed/cancelled, or it loses focus.
+  const [pickerOpen, setPickerOpen] = useState(false);
   const tags = values || [];
   const tagSet = new Set(tags);
   const available = options.filter(o => !tagSet.has(o.value));
@@ -1349,15 +1380,18 @@ function TagMultiSelectCell({ values, options, placeholder, disabled, onChange, 
   };
   function addTag(v) {
     if (v === ADD_NEW_VALUE) { setAdding(true); setDraft(""); return; }
-    if (v) onChange([...tags, v]);
+    if (v) { onChange([...tags, v]); setPickerOpen(false); }
   }
   function removeTag(v) { onChange(tags.filter(t => t !== v)); }
   function confirmAdd() {
     const name = draft.trim();
-    setAdding(false); setDraft("");
+    setAdding(false); setDraft(""); setPickerOpen(false);
     if (name && onAddNew) onAddNew(name);
   }
-  function cancelAdd() { setAdding(false); setDraft(""); }
+  function cancelAdd() { setAdding(false); setDraft(""); setPickerOpen(false); }
+
+  const showDropdown = !disabled && !adding && (tags.length === 0 || pickerOpen);
+  const showCompactAdd = !disabled && !adding && tags.length > 0 && !pickerOpen;
 
   return (
     <div>
@@ -1379,8 +1413,12 @@ function TagMultiSelectCell({ values, options, placeholder, disabled, onChange, 
           <IconBtn icon={Check} onClick={confirmAdd} title="Add" />
           <IconBtn icon={X} onClick={cancelAdd} title="Cancel" />
         </div>
-      ) : !disabled && (
-        <select className="ucc-select" value="" disabled={disabled} onChange={e => addTag(e.target.value)}>
+      ) : showCompactAdd ? (
+        <IconBtn icon={Plus} onClick={() => setPickerOpen(true)} title="Add another micro topic tag" />
+      ) : showDropdown && (
+        <select className="ucc-select" value="" disabled={disabled} autoFocus={pickerOpen}
+          onChange={e => addTag(e.target.value)}
+          onBlur={() => { if (tags.length > 0) setPickerOpen(false); }}>
           <option value="">{available.length ? placeholder : (allowAddNew ? "+ Add a tag…" : "No more to add")}</option>
           {available.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
           {allowAddNew && <option value={ADD_NEW_VALUE}>+ Add new</option>}
@@ -2266,7 +2304,7 @@ function SyllabusTab({ db, updateSlice }) {
                   onSelect={v => {
                     const nextRow = { ...rec, subject: v };
                     updateRecord({ subject: v });
-                    syncSyllabusRowReferences(db, updateSlice, nextRow);
+                    syncSyllabusRowReferences(db, updateSlice, rec, nextRow);
                   }}
                   onAddNew={name => {
                     // New subjects join the shared master list (Settings tab)
@@ -2274,7 +2312,7 @@ function SyllabusTab({ db, updateSlice }) {
                     updateSlice("settings", s => (s.subjects.includes(name) ? s : { ...s, subjects: [...s.subjects, name] }));
                     const nextRow = { ...rec, subject: name };
                     updateRecord({ subject: name });
-                    syncSyllabusRowReferences(db, updateSlice, nextRow);
+                    syncSyllabusRowReferences(db, updateSlice, rec, nextRow);
                   }}
                 />
               ),
@@ -2288,12 +2326,12 @@ function SyllabusTab({ db, updateSlice }) {
                   onSelect={v => {
                     const nextRow = { ...rec, topic: v };
                     updateRecord({ topic: v });
-                    syncSyllabusRowReferences(db, updateSlice, nextRow);
+                    syncSyllabusRowReferences(db, updateSlice, rec, nextRow);
                   }}
                   onAddNew={name => {
                     const nextRow = { ...rec, topic: name };
                     updateRecord({ topic: name });
-                    syncSyllabusRowReferences(db, updateSlice, nextRow);
+                    syncSyllabusRowReferences(db, updateSlice, rec, nextRow);
                   }}
                 />
               ),
@@ -2307,12 +2345,12 @@ function SyllabusTab({ db, updateSlice }) {
                   onSelect={v => {
                     const nextRow = { ...rec, subtopic: v };
                     updateRecord({ subtopic: v });
-                    syncSyllabusRowReferences(db, updateSlice, nextRow);
+                    syncSyllabusRowReferences(db, updateSlice, rec, nextRow);
                   }}
                   onAddNew={name => {
                     const nextRow = { ...rec, subtopic: name };
                     updateRecord({ subtopic: name });
-                    syncSyllabusRowReferences(db, updateSlice, nextRow);
+                    syncSyllabusRowReferences(db, updateSlice, rec, nextRow);
                   }}
                 />
               ),
