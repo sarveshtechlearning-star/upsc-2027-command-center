@@ -568,12 +568,13 @@ function findSyllabusId(db, { subject, topic, subtopic, microtopic }) {
 // an explicit delete click, not during render, so it doesn't need the
 // caching above.
 function countSyllabusRowReferences(db, row) {
+  const taggedRefs = (arr) => arr.filter(r => r.syllabusId === row.id || (r.microtopics || []).includes(row.id)).length;
   let count = 0;
-  count += db.classes.filter(c => c.syllabusId === row.id || (c.microtopics || []).some(m => m === row.id || (row.microtopic && normKey(m) === normKey(row.microtopic)))).length;
+  count += taggedRefs(db.classes);
   count += db.reading.filter(r => r.syllabusId === row.id).length;
-  count += db.ncert.filter(n => n.syllabusId === row.id).length;
-  count += db.standardBooks.filter(s => s.syllabusId === row.id).length;
-  count += db.singlePager.filter(s => s.syllabusId === row.id).length;
+  count += taggedRefs(db.ncert);
+  count += taggedRefs(db.standardBooks);
+  count += taggedRefs(db.singlePager);
   count += db.currentAffairs.filter(c => c.syllabusId === row.id).length;
   count += db.answerWriting.filter(a => (a.microtopics || []).includes(row.id)).length;
   count += db.topperCopies.filter(a => (a.microtopics || []).includes(row.id)).length;
@@ -612,7 +613,7 @@ function renameSyllabusValue(db, updateSlice, level, context, oldValue, newValue
   }
   if (level === "topic") {
     const matches = r => r.subject === subject && r.topic === oldValue;
-    ["syllabus", "classes", "reading", "singlePager", "ncert", "standardBooks"].forEach(key => {
+    ["syllabus", "reading"].forEach(key => {
       updateSlice(key, prev => prev.map(r => matches(r) ? { ...r, topic: newValue } : r));
     });
     updateSlice("currentAffairs", prev => prev.map(r => (r.subject === subject && r.relevantSyllabusTopic === oldValue) ? { ...r, relevantSyllabusTopic: newValue } : r));
@@ -624,7 +625,7 @@ function renameSyllabusValue(db, updateSlice, level, context, oldValue, newValue
   }
   if (level === "subtopic") {
     const matches = r => r.subject === subject && r.topic === topic && r.subtopic === oldValue;
-    ["syllabus", "classes", "reading", "singlePager", "ncert", "standardBooks"].forEach(key => {
+    ["syllabus", "reading"].forEach(key => {
       updateSlice(key, prev => prev.map(r => matches(r) ? { ...r, subtopic: newValue } : r));
     });
     updateSlice("currentAffairs", prev => prev.map(r =>
@@ -633,40 +634,29 @@ function renameSyllabusValue(db, updateSlice, level, context, oldValue, newValue
   }
   if (level === "microtopic") {
     const matches = r => r.subject === subject && r.topic === topic && r.subtopic === subtopic && r.microtopic === oldValue;
-    ["syllabus", "reading", "singlePager", "ncert", "standardBooks"].forEach(key => {
+    ["syllabus", "reading"].forEach(key => {
       updateSlice(key, prev => prev.map(r => matches(r) ? { ...r, microtopic: newValue } : r));
     });
     updateSlice("currentAffairs", prev => prev.map(r =>
       (r.subject === subject && r.relevantSyllabusTopic === topic && r.subtopic === subtopic && r.microtopic === oldValue) ? { ...r, microtopic: newValue } : r));
-    // Classes' microtopics tags store a Syllabus row id for anything tagged
-    // after that linking existed — those resolve their displayed label from
-    // the Syllabus row itself, which the update above already renamed, so
-    // nothing more to do there. Only a legacy tag whose stored value IS the
-    // old text (predating id-based tags) needs updating here.
-    updateSlice("classes", prev => prev.map(r => {
-      if (!(r.microtopics || []).includes(oldValue)) return r;
-      return { ...r, microtopics: r.microtopics.map(m => m === oldValue ? newValue : m) };
-    }));
+    // Classes/NCERT/Standard Books/Single Pager's microtopics tags store a
+    // Syllabus row id for anything tagged after id-based linking existed —
+    // those resolve their displayed label from the Syllabus row itself,
+    // which the update above already renamed, so nothing more to do there.
+    // Only a legacy tag whose stored value IS the old text (predating
+    // id-based tags) needs updating here — NCERT/Standard Books/Single
+    // Pager never had free-text tags (they only gained microtopics once
+    // id-based), so this is really only ever relevant for Classes, but
+    // it's harmless to check all four uniformly.
+    ["classes", "ncert", "standardBooks", "singlePager"].forEach(key => {
+      updateSlice(key, prev => prev.map(r => {
+        if (!(r.microtopics || []).includes(oldValue)) return r;
+        return { ...r, microtopics: r.microtopics.map(m => m === oldValue ? newValue : m) };
+      }));
+    });
     return;
   }
 }
-// After a Syllabus row's own Subject/Topic/Subtopic/Micro Topic changes —
-// via the plain per-row reassignment dropdowns, or a direct Micro Topic
-// text edit — keeps every OTHER tracker record that links to this SPECIFIC
-// row (via syllabusId) showing the same current classification, instead of
-// silently going stale. Deliberately matched by id only, never by text, so
-// moving or correcting one micro topic can never spill over onto a
-// different, unrelated row that happens to share the old Subject/Topic/
-// Subtopic text — that broader, text-matched propagation is what
-// renameSyllabusValue is for (used by "Rename a term" and by editing an
-// existing Micro Topic's text, both genuine "this name is wrong everywhere"
-// corrections). Classes is deliberately not touched here: a Class's own
-// Subject/Topic/Subtopic is the user's classification of the class itself
-// (it can cover several Micro Topics under one Subtopic), not something
-// that should silently move because one tagged Micro Topic did. Its tags
-// resolve their label straight from the live Syllabus row instead (see
-// TagMultiSelectCell's resolveLabel usage on the Classes tab), which stays
-// correct without needing this sync at all.
 // After a Syllabus row's own Subject/Topic/Subtopic/Micro Topic changes —
 // via the plain per-row reassignment dropdowns, or a direct Micro Topic
 // text edit — keeps every OTHER tracker record that links to this SPECIFIC
@@ -680,19 +670,21 @@ function renameSyllabusValue(db, updateSlice, level, context, oldValue, newValue
 // different, unrelated row that happens to share the old Subtopic text —
 // that broader, text-matched propagation is what renameSyllabusValue is for
 // (used by "Rename a term" and by editing an existing Micro Topic's text).
-// Classes is deliberately not touched here: a Class's own Subject/Topic/
-// Subtopic is the user's classification of the class itself (it can cover
-// several Micro Topics under one Subtopic), not something that should
-// silently move because one tagged Micro Topic did. Its tags resolve their
-// label straight from the live Syllabus row instead (see
-// TagMultiSelectCell's resolveLabel usage on the Classes tab), which stays
-// correct without needing this sync at all.
+// Only Reading's own lazily-created revision records are synced this way
+// now — Classes, NCERT, Standard Books, and Single Pager all tag Micro
+// Topics via a `microtopics` array instead of a scalar Subject/Topic/
+// Subtopic copy (their own Subject field is the user's classification of
+// the whole row, not tied 1:1 to one Micro Topic, so it shouldn't silently
+// move because a tagged Micro Topic did); their tags resolve their label
+// straight from the live Syllabus row instead (see TagMultiSelectCell's
+// resolveLabel usage), which stays correct without needing this sync at
+// all. Current Affairs still has its own real Subject/Topic/Subtopic/
+// Micro Topic fields (unchanged, not part of this conversation's tag
+// rework), so it's still synced here.
 function syncSyllabusRowReferences(db, updateSlice, oldRow, newRow) {
   const patch = { subject: newRow.subject, topic: newRow.topic, subtopic: newRow.subtopic, microtopic: newRow.microtopic, syllabusId: newRow.id };
   const isLegacyMatch = r => !r.syllabusId && r.subject === oldRow.subject && r.topic === oldRow.topic && r.subtopic === oldRow.subtopic && r.microtopic === oldRow.microtopic;
-  ["reading", "ncert", "standardBooks", "singlePager"].forEach(key => {
-    updateSlice(key, prev => prev.map(r => (r.syllabusId === newRow.id || isLegacyMatch(r) ? { ...r, ...patch } : r)));
-  });
+  updateSlice("reading", prev => prev.map(r => (r.syllabusId === newRow.id || isLegacyMatch(r) ? { ...r, ...patch } : r)));
   updateSlice("currentAffairs", prev => prev.map(r => {
     const legacyMatch = !r.syllabusId && r.subject === oldRow.subject && r.relevantSyllabusTopic === oldRow.topic && r.subtopic === oldRow.subtopic && r.microtopic === oldRow.microtopic;
     return (r.syllabusId === newRow.id || legacyMatch)
@@ -740,11 +732,13 @@ function getSourceIdentifiedIndex(db) {
   });
   db.ncert.forEach(n => {
     if (n.syllabusId) idSet.add(n.syllabusId);
-    textKeySet.add(normKey(n.subject, n.topic, n.subtopic, n.microtopic));
+    (n.microtopics || []).forEach(m => idSet.add(m));
+    if (n.microtopic) textKeySet.add(normKey(n.subject, n.topic, n.subtopic, n.microtopic));
   });
   db.standardBooks.forEach(s => {
     if (s.syllabusId) idSet.add(s.syllabusId);
-    textKeySet.add(normKey(s.subject, s.topic, s.subtopic, s.microtopic));
+    (s.microtopics || []).forEach(m => idSet.add(m));
+    if (s.microtopic) textKeySet.add(normKey(s.subject, s.topic, s.subtopic, s.microtopic));
   });
   idx = { idSet, textKeySet };
   _sourceIdentifiedCache.set(db, idx);
@@ -2262,6 +2256,7 @@ function PlanBlock({ block, onUpdate, onMoveUp, onMoveDown, onRemove }) {
    TRACKER TABS
    ============================================================ */
 function ClassesTab({ db, updateSlice }) {
+  const [addTopicFor, setAddTopicFor] = useState(null); // { trackerKey, recId, typedName, subject } | null
   const bySubject = useMemo(() => {
     const m = {};
     db.classes.forEach(c => { m[c.subject] = m[c.subject] || []; m[c.subject].push(c); });
@@ -2284,83 +2279,25 @@ function ClassesTab({ db, updateSlice }) {
       <div className="ucc-card">
         <h3>Class completion tracker</h3>
         <div className="ucc-tiny" style={{ marginBottom: 8, color: "var(--ink-muted)" }}>
-          Topic and Subtopic are chosen from the Syllabus tab — new ones can't be added here. Once a Subtopic is set, tag the Micro Topics this class covered — pick an existing one, or type a new one and hit + Add new (it's saved to Syllabus automatically, so it shows up everywhere else too).
+          Subject is scoped to GS Paper and comes from the Syllabus tab — new subjects can't be added here. Tag the Topics this class covered — pick an existing one, or use + Add new to place a brand new one on the Syllabus tab first.
         </div>
         <GenericTracker
           records={db.classes} setRecords={u => updateSlice("classes", u)} completionRequiresUpload
           columns={[
             { key: "date", label: "Date", type: "date", width: 120 },
             { key: "classNumber", label: "Class", type: "number", width: 70 },
-            {
-              key: "subject", label: "Subject", width: 140, type: "custom",
-              render: (rec, _onChange, updateRecord) => (
-                <CascadingSelectCell
-                  value={rec.subject} options={db.settings.subjects} placeholder="Select subject…" allowAddNew={false}
-                  onSelect={v => updateRecord({ subject: v, topic: "", subtopic: "", syllabusId: null, microtopics: [] })}
-                />
-              ),
-            },
-            {
-              key: "topic", label: "Topic", width: 200, type: "custom",
-              render: (rec, _onChange, updateRecord) => (
-                <CascadingSelectCell
-                  value={rec.topic} options={syllabusTopicsForSubject(db, rec.subject)} allowAddNew={false}
-                  placeholder={rec.subject ? "Select topic…" : "Select subject first"} disabled={!rec.subject}
-                  onSelect={v => updateRecord({ topic: v, subtopic: "", microtopics: [], syllabusId: findSyllabusId(db, { subject: rec.subject, topic: v }) })}
-                />
-              ),
-            },
-            {
-              key: "subtopic", label: "Subtopic", width: 200, type: "custom",
-              render: (rec, _onChange, updateRecord) => (
-                <CascadingSelectCell
-                  value={rec.subtopic} options={syllabusSubtopicsForTopic(db, rec.subject, rec.topic)} allowAddNew={false}
-                  placeholder={rec.topic ? "Select subtopic (optional)…" : "Select topic first"} disabled={!rec.topic}
-                  onSelect={v => updateRecord({ subtopic: v, microtopics: [], syllabusId: findSyllabusId(db, { subject: rec.subject, topic: rec.topic, subtopic: v }) })}
-                />
-              ),
-            },
-            {
-              key: "microtopics", label: "Micro Topic", width: 200, type: "custom",
-              render: (rec, _onChange, updateRecord) => (
-                <TagMultiSelectCell
-                  values={rec.microtopics} options={syllabusRowOptionsForSubtopic(db, rec.subject, rec.topic, rec.subtopic)}
-                  resolveLabel={v => resolveMicrotopicLabelById(db, v)}
-                  placeholder={rec.subtopic ? "+ Add micro topic tag" : "Select subtopic first"} disabled={!rec.subtopic}
-                  allowAddNew={!!rec.subtopic}
-                  onChange={v => updateRecord({ microtopics: v })}
-                  onAddNew={name => {
-                    // A genuinely new micro topic typed here is added to the
-                    // Syllabus tracker itself (the single source of truth,
-                    // same as Current Affairs' add-new flow), then tagged
-                    // directly using the row it just created — no need to
-                    // search for it, we already know its id.
-                    const newId = uid();
-                    updateSlice("syllabus", prev => [...prev, {
-                      id: newId, gsPaper: defaultGsPaperForSubject(db, rec.subject), subject: rec.subject, topic: rec.topic, subtopic: rec.subtopic, microtopic: name,
-                      history: [],
-                    }]);
-                    updateRecord({ microtopics: [...(rec.microtopics || []), newId] });
-                  }}
-                />
-              ),
-            },
+            gsPaperColumn(),
+            subjectSingleSelectColumn(db),
+            microtopicTagColumn(db, "classes", setAddTopicFor, "Topic"),
             { key: "eta", label: "ETA", type: "date", width: 120 },
             { key: "status", label: "Status", type: "status", options: TASK_STATUS, width: 150 },
             {
               key: "driveFile", label: "Class Notes PDF", width: 170, type: "custom",
               render: (rec, onChange) => {
-                // First tagged Micro Topic's current name, if any — Classes
-                // can cover several, so there's no single "the" micro topic,
-                // but the first one still gives the file a more specific
-                // name than Subject_Subtopic alone when one exists.
-                const firstMicrotopic = (rec.microtopics || []).length > 0
-                  ? (resolveMicrotopicLabelById(db, rec.microtopics[0]) || rec.microtopics[0])
-                  : null;
+                const firstMicrotopic = (rec.microtopics && rec.microtopics[0] && resolveMicrotopicLabelById(db, rec.microtopics[0])) || null;
                 return (
                   <DriveFileCell driveFile={rec.driveFile} db={db} updateSlice={updateSlice} onChange={onChange} folderKey="classes"
-                    namePrefix={nextFileNamePrefix(db.classes, rec, r => normKey(r.subject, r.subtopic || r.topic), [
-                      [rec.subject, rec.subtopic || rec.topic, firstMicrotopic],
+                    namePrefix={nextFileNamePrefix(db.classes, rec, r => normKey(r.gsPaper, r.microtopics && r.microtopics[0]), [
                       [rec.subject, firstMicrotopic],
                       [firstMicrotopic],
                     ])} />
@@ -2368,9 +2305,23 @@ function ClassesTab({ db, updateSlice }) {
               },
             },
           ]}
-          newRecord={() => ({ date: todayISO(), subject: db.settings.subjects[0] || "", classNumber: "", topic: "", subtopic: "", microtopics: [], eta: "", status: "Not Started", syllabusId: null, driveFile: null })}
+          newRecord={() => ({ date: todayISO(), gsPaper: "", subject: "", classNumber: "", microtopics: [], eta: "", status: "Not Started", driveFile: null })}
         />
       </div>
+      {addTopicFor && (
+        <AddSyllabusRowPopup
+          db={db} updateSlice={updateSlice}
+          initialMicrotopic={addTopicFor.typedName} initialSubject={addTopicFor.subject}
+          onCreated={(newId, createdSubject) => {
+            updateSlice(addTopicFor.trackerKey, prev => prev.map(r => {
+              if (r.id !== addTopicFor.recId) return r;
+              return { ...r, microtopics: [...(r.microtopics || []), newId], subject: r.subject || createdSubject };
+            }));
+            setAddTopicFor(null);
+          }}
+          onClose={() => setAddTopicFor(null)}
+        />
+      )}
     </div>
   );
 }
@@ -2779,6 +2730,7 @@ function SyllabusTermRenamer({ db, updateSlice }) {
 }
 
 function SinglePagerTab({ db, updateSlice }) {
+  const [addTopicFor, setAddTopicFor] = useState(null);
   return (
     <div className="ucc-card">
       <h3>Single pager notes</h3>
@@ -2788,51 +2740,15 @@ function SinglePagerTab({ db, updateSlice }) {
         </div>
       )}
       <div className="ucc-tiny" style={{ marginBottom: 8, color: "var(--ink-muted)" }}>
-        Topic/Subtopic/Micro Topic are chosen from the Syllabus tab — new ones can't be added here.
+        Subject is scoped to GS Paper and comes from the Syllabus tab — new subjects can't be added here. Tag the Topics this single-pager covers — pick an existing one, or use + Add new to place a brand new one on the Syllabus tab first.
       </div>
       <GenericTracker
         records={db.singlePager} setRecords={u => updateSlice("singlePager", u)} completionRequiresUpload
         columns={[
           { key: "date", label: "Date", type: "date", width: 110 },
-          {
-            key: "subject", label: "Subject", width: 130, type: "custom",
-            render: (rec, _onChange, updateRecord) => (
-              <CascadingSelectCell
-                value={rec.subject} options={db.settings.subjects} placeholder="Select subject…" allowAddNew={false}
-                onSelect={v => updateRecord({ subject: v, topic: "", subtopic: "", microtopic: "", syllabusId: null })}
-              />
-            ),
-          },
-          {
-            key: "topic", label: "Topic", width: 180, type: "custom",
-            render: (rec, _onChange, updateRecord) => (
-              <CascadingSelectCell
-                value={rec.topic} options={syllabusTopicsForSubject(db, rec.subject)} allowAddNew={false}
-                placeholder={rec.subject ? "Select topic…" : "Select subject first"} disabled={!rec.subject}
-                onSelect={v => updateRecord({ topic: v, subtopic: "", microtopic: "", syllabusId: findSyllabusId(db, { subject: rec.subject, topic: v }) })}
-              />
-            ),
-          },
-          {
-            key: "subtopic", label: "Subtopic", width: 180, type: "custom",
-            render: (rec, _onChange, updateRecord) => (
-              <CascadingSelectCell
-                value={rec.subtopic} options={syllabusSubtopicsForTopic(db, rec.subject, rec.topic)} allowAddNew={false}
-                placeholder={rec.topic ? "Select subtopic (optional)…" : "Select topic first"} disabled={!rec.topic}
-                onSelect={v => updateRecord({ subtopic: v, microtopic: "", syllabusId: findSyllabusId(db, { subject: rec.subject, topic: rec.topic, subtopic: v }) })}
-              />
-            ),
-          },
-          {
-            key: "microtopic", label: "Micro Topic", width: 180, type: "custom",
-            render: (rec, _onChange, updateRecord) => (
-              <CascadingSelectCell
-                value={rec.microtopic} options={microtopicOptionsForSubtopic(db, rec.subject, rec.topic, rec.subtopic)} allowAddNew={false}
-                placeholder={rec.subtopic ? "Select micro topic (optional)…" : "Select subtopic first"} disabled={!rec.subtopic}
-                onSelect={v => updateRecord({ microtopic: v, syllabusId: findSyllabusId(db, { subject: rec.subject, topic: rec.topic, subtopic: rec.subtopic, microtopic: v }) })}
-              />
-            ),
-          },
+          gsPaperColumn(),
+          subjectSingleSelectColumn(db),
+          microtopicTagColumn(db, "singlePager", setAddTopicFor, "Topic"),
           { key: "classNotes", label: "Class Notes", type: "select", options: INCLUSION_OPTIONS, width: 120 },
           { key: "handout", label: "Handout", type: "select", options: INCLUSION_OPTIONS, width: 120 },
           { key: "ncert", label: "NCERT", type: "select", options: INCLUSION_OPTIONS, width: 120 },
@@ -2840,154 +2756,110 @@ function SinglePagerTab({ db, updateSlice }) {
           { key: "status", label: "Status", type: "status", options: SP_STATUS, width: 120 },
           {
             key: "driveFile", label: "Single Page PDF", width: 170, type: "custom",
-            render: (rec, onChange) => <DriveFileCell driveFile={rec.driveFile} db={db} updateSlice={updateSlice} onChange={onChange} folderKey="singlePager"
-                namePrefix={nextFileNamePrefix(db.singlePager, rec, r => normKey(r.subject, r.subtopic || r.topic), [
-                  [rec.subject, rec.subtopic, rec.microtopic],
-                  [rec.subject, rec.microtopic],
-                  [rec.microtopic],
-                ])} />,
+            render: (rec, onChange) => {
+              const firstMicrotopic = (rec.microtopics && rec.microtopics[0] && resolveMicrotopicLabelById(db, rec.microtopics[0])) || null;
+              return (
+                <DriveFileCell driveFile={rec.driveFile} db={db} updateSlice={updateSlice} onChange={onChange} folderKey="singlePager"
+                  namePrefix={nextFileNamePrefix(db.singlePager, rec, r => normKey(r.gsPaper, r.microtopics && r.microtopics[0]), [
+                    [rec.subject, firstMicrotopic],
+                    [firstMicrotopic],
+                  ])} />
+              );
+            },
           },
           { key: "revision", label: "Revision", type: "status", options: READ_STATUS, width: 130 },
         ]}
-        newRecord={() => ({ date: todayISO(), subject: db.settings.subjects[0] || "", topic: "", subtopic: "", microtopic: "", classNotes: "Not Included", handout: "Not Included", ncert: "Not Included", standardBooks: "Not Included", status: "Not Started", driveFile: null, revision: "Yet to Start", syllabusId: null })}
+        newRecord={() => ({ date: todayISO(), gsPaper: "", subject: "", microtopics: [], classNotes: "Not Included", handout: "Not Included", ncert: "Not Included", standardBooks: "Not Included", status: "Not Started", driveFile: null, revision: "Yet to Start" })}
       />
+      {addTopicFor && (
+        <AddSyllabusRowPopup
+          db={db} updateSlice={updateSlice}
+          initialMicrotopic={addTopicFor.typedName} initialSubject={addTopicFor.subject}
+          onCreated={(newId, createdSubject) => {
+            updateSlice(addTopicFor.trackerKey, prev => prev.map(r => {
+              if (r.id !== addTopicFor.recId) return r;
+              return { ...r, microtopics: [...(r.microtopics || []), newId], subject: r.subject || createdSubject };
+            }));
+            setAddTopicFor(null);
+          }}
+          onClose={() => setAddTopicFor(null)}
+        />
+      )}
     </div>
   );
 }
 
 function NcertTab({ db, updateSlice }) {
+  const [addTopicFor, setAddTopicFor] = useState(null);
   return (
     <div className="ucc-card">
       <h3>NCERT tracker</h3>
       <div className="ucc-tiny" style={{ marginBottom: 8, color: "var(--ink-muted)" }}>
-        Topic and Subtopic are chosen from the Syllabus tab — new ones can't be added here. Micro Topic can be typed fresh: pick + Add new and it's saved to Syllabus automatically, so it shows up everywhere else too.
+        Subject is scoped to GS Paper and comes from the Syllabus tab — new subjects can't be added here. Tag the Topics this book/chapter covers — pick an existing one, or use + Add new to place a brand new one on the Syllabus tab first.
       </div>
       <GenericTracker
         records={db.ncert} setRecords={u => updateSlice("ncert", u)}
         columns={[
-          {
-            key: "subject", label: "Subject", width: 130, type: "custom",
-            render: (rec, _onChange, updateRecord) => (
-              <CascadingSelectCell
-                value={rec.subject} options={db.settings.subjects} placeholder="Select subject…" allowAddNew={false}
-                onSelect={v => updateRecord({ subject: v, topic: "", subtopic: "", microtopic: "", syllabusId: null })}
-              />
-            ),
-          },
-          {
-            key: "topic", label: "Topic", width: 180, type: "custom",
-            render: (rec, _onChange, updateRecord) => (
-              <CascadingSelectCell
-                value={rec.topic} options={syllabusTopicsForSubject(db, rec.subject)} allowAddNew={false}
-                placeholder={rec.subject ? "Select topic…" : "Select subject first"} disabled={!rec.subject}
-                onSelect={v => updateRecord({ topic: v, subtopic: "", microtopic: "", syllabusId: findSyllabusId(db, { subject: rec.subject, topic: v }) })}
-              />
-            ),
-          },
-          {
-            key: "subtopic", label: "Subtopic", width: 180, type: "custom",
-            render: (rec, _onChange, updateRecord) => (
-              <CascadingSelectCell
-                value={rec.subtopic} options={syllabusSubtopicsForTopic(db, rec.subject, rec.topic)} allowAddNew={false}
-                placeholder={rec.topic ? "Select subtopic (optional)…" : "Select topic first"} disabled={!rec.topic}
-                onSelect={v => updateRecord({ subtopic: v, microtopic: "", syllabusId: findSyllabusId(db, { subject: rec.subject, topic: rec.topic, subtopic: v }) })}
-              />
-            ),
-          },
-          {
-            key: "microtopic", label: "Micro Topic", width: 180, type: "custom",
-            render: (rec, _onChange, updateRecord) => (
-              <CascadingSelectCell
-                value={rec.microtopic} options={microtopicOptionsForSubtopic(db, rec.subject, rec.topic, rec.subtopic)}
-                placeholder={rec.subtopic ? "Select micro topic (optional)…" : "Select subtopic first"} disabled={!rec.subtopic}
-                onSelect={v => updateRecord({ microtopic: v, syllabusId: findSyllabusId(db, { subject: rec.subject, topic: rec.topic, subtopic: rec.subtopic, microtopic: v }) })}
-                onAddNew={name => {
-                  // A genuinely new micro topic typed here is added to the
-                  // Syllabus tracker itself (same pattern as Current Affairs
-                  // and Classes' Micro Topic tags), not stored only as free
-                  // text on this row.
-                  const newId = uid();
-                  updateSlice("syllabus", prev => [...prev, {
-                    id: newId, gsPaper: defaultGsPaperForSubject(db, rec.subject), subject: rec.subject, topic: rec.topic, subtopic: rec.subtopic, microtopic: name,
-                    history: [],
-                  }]);
-                  updateRecord({ microtopic: name, syllabusId: newId });
-                }}
-              />
-            ),
-          },
+          gsPaperColumn(),
+          subjectSingleSelectColumn(db),
+          microtopicTagColumn(db, "ncert", setAddTopicFor, "Topic"),
           { key: "book", label: "Book", width: 150 },
           { key: "chapter", label: "Chapter", width: 140 },
         ]}
-        newRecord={() => ({ subject: db.settings.subjects[0] || "", topic: "", subtopic: "", microtopic: "", book: "", chapter: "", syllabusId: null })}
+        newRecord={() => ({ gsPaper: "", subject: "", microtopics: [], book: "", chapter: "" })}
       />
+      {addTopicFor && (
+        <AddSyllabusRowPopup
+          db={db} updateSlice={updateSlice}
+          initialMicrotopic={addTopicFor.typedName} initialSubject={addTopicFor.subject}
+          onCreated={(newId, createdSubject) => {
+            updateSlice(addTopicFor.trackerKey, prev => prev.map(r => {
+              if (r.id !== addTopicFor.recId) return r;
+              return { ...r, microtopics: [...(r.microtopics || []), newId], subject: r.subject || createdSubject };
+            }));
+            setAddTopicFor(null);
+          }}
+          onClose={() => setAddTopicFor(null)}
+        />
+      )}
     </div>
   );
 }
 
 function StandardBooksTab({ db, updateSlice }) {
+  const [addTopicFor, setAddTopicFor] = useState(null);
   return (
     <div className="ucc-card">
       <h3>Standard book tracker</h3>
       <div className="ucc-tiny" style={{ marginBottom: 8, color: "var(--ink-muted)" }}>
-        Topic and Subtopic are chosen from the Syllabus tab — new ones can't be added here. Micro Topic can be typed fresh: pick + Add new and it's saved to Syllabus automatically, so it shows up everywhere else too.
+        Subject is scoped to GS Paper and comes from the Syllabus tab — new subjects can't be added here. Tag the Topics this book/chapter covers — pick an existing one, or use + Add new to place a brand new one on the Syllabus tab first.
       </div>
       <GenericTracker
         records={db.standardBooks} setRecords={u => updateSlice("standardBooks", u)}
         columns={[
-          {
-            key: "subject", label: "Subject", width: 130, type: "custom",
-            render: (rec, _onChange, updateRecord) => (
-              <CascadingSelectCell
-                value={rec.subject} options={db.settings.subjects} placeholder="Select subject…" allowAddNew={false}
-                onSelect={v => updateRecord({ subject: v, topic: "", subtopic: "", microtopic: "", syllabusId: null })}
-              />
-            ),
-          },
-          {
-            key: "topic", label: "Topic", width: 160, type: "custom",
-            render: (rec, _onChange, updateRecord) => (
-              <CascadingSelectCell
-                value={rec.topic} options={syllabusTopicsForSubject(db, rec.subject)} allowAddNew={false}
-                placeholder={rec.subject ? "Select topic…" : "Select subject first"} disabled={!rec.subject}
-                onSelect={v => updateRecord({ topic: v, subtopic: "", microtopic: "", syllabusId: findSyllabusId(db, { subject: rec.subject, topic: v }) })}
-              />
-            ),
-          },
-          {
-            key: "subtopic", label: "Subtopic", width: 160, type: "custom",
-            render: (rec, _onChange, updateRecord) => (
-              <CascadingSelectCell
-                value={rec.subtopic} options={syllabusSubtopicsForTopic(db, rec.subject, rec.topic)} allowAddNew={false}
-                placeholder={rec.topic ? "Select subtopic (optional)…" : "Select topic first"} disabled={!rec.topic}
-                onSelect={v => updateRecord({ subtopic: v, microtopic: "", syllabusId: findSyllabusId(db, { subject: rec.subject, topic: rec.topic, subtopic: v }) })}
-              />
-            ),
-          },
-          {
-            key: "microtopic", label: "Micro Topic", width: 160, type: "custom",
-            render: (rec, _onChange, updateRecord) => (
-              <CascadingSelectCell
-                value={rec.microtopic} options={microtopicOptionsForSubtopic(db, rec.subject, rec.topic, rec.subtopic)}
-                placeholder={rec.subtopic ? "Select micro topic (optional)…" : "Select subtopic first"} disabled={!rec.subtopic}
-                onSelect={v => updateRecord({ microtopic: v, syllabusId: findSyllabusId(db, { subject: rec.subject, topic: rec.topic, subtopic: rec.subtopic, microtopic: v }) })}
-                onAddNew={name => {
-                  const newId = uid();
-                  updateSlice("syllabus", prev => [...prev, {
-                    id: newId, gsPaper: defaultGsPaperForSubject(db, rec.subject), subject: rec.subject, topic: rec.topic, subtopic: rec.subtopic, microtopic: name,
-                    history: [],
-                  }]);
-                  updateRecord({ microtopic: name, syllabusId: newId });
-                }}
-              />
-            ),
-          },
+          gsPaperColumn(),
+          subjectSingleSelectColumn(db),
+          microtopicTagColumn(db, "standardBooks", setAddTopicFor, "Topic"),
           { key: "bookName", label: "Book", width: 150 },
           { key: "chapter", label: "Chapter", width: 140 },
           { key: "pages", label: "Pages", width: 80 },
         ]}
-        newRecord={() => ({ bookName: "", subject: db.settings.subjects[0] || "", chapter: "", topic: "", subtopic: "", microtopic: "", pages: "", syllabusId: null })}
+        newRecord={() => ({ bookName: "", gsPaper: "", subject: "", chapter: "", microtopics: [], pages: "" })}
       />
+      {addTopicFor && (
+        <AddSyllabusRowPopup
+          db={db} updateSlice={updateSlice}
+          initialMicrotopic={addTopicFor.typedName} initialSubject={addTopicFor.subject}
+          onCreated={(newId, createdSubject) => {
+            updateSlice(addTopicFor.trackerKey, prev => prev.map(r => {
+              if (r.id !== addTopicFor.recId) return r;
+              return { ...r, microtopics: [...(r.microtopics || []), newId], subject: r.subject || createdSubject };
+            }));
+            setAddTopicFor(null);
+          }}
+          onClose={() => setAddTopicFor(null)}
+        />
+      )}
     </div>
   );
 }
@@ -3162,12 +3034,11 @@ function CurrentAffairsTab({ db, updateSlice }) {
   );
 }
 
-// GS Paper + Topic pair used by Topper Copies — Topic options are scoped
-// to whichever GS Paper is currently picked, Syllabus-backed, single-select
-// (Topper Copies doesn't use the Subject → Micro Topic tag linkage below).
-// GS Paper column shared by both Answer Writing sub-tabs — plain select,
-// no side effects on change (Subject/Micro Topic below use their own
-// scoping and deliberately aren't cleared just because GS Paper changed).
+// GS Paper column, shared by every tracker using this paper/subject/micro
+// topic pattern (both Answer Writing sub-tabs, and Classes/NCERT/Standard
+// Books/Single Pager) — plain select, no side effects on change
+// (Subject/Micro Topic below use their own scoping and deliberately
+// aren't cleared just because GS Paper changed).
 function gsPaperColumn() {
   return {
     key: "gsPaper", label: "GS Paper", width: 90, type: "custom",
@@ -3178,10 +3049,10 @@ function gsPaperColumn() {
     ),
   };
 }
-// Subject tag column shared by both Answer Writing sub-tabs — a tag
-// multi-select (one answer/topper copy can span several Subjects), options
-// strictly the Subjects already on Syllabus under this row's GS Paper, no
-// add-new: Subject stays Syllabus-governed on both sub-tabs.
+// Subject tag column — Answer Writing/Topper Copies only, where one row can
+// legitimately span several Subjects. A tag multi-select, options strictly
+// the Subjects already on Syllabus under this row's GS Paper, no add-new:
+// Subject stays Syllabus-governed.
 function subjectTagColumn(db) {
   return {
     key: "subjects", label: "Subject", width: 170, type: "custom",
@@ -3199,28 +3070,51 @@ function subjectTagColumn(db) {
     },
   };
 }
-// Micro Topic tag column shared by both Answer Writing sub-tabs — tag
+// Subject single-select column — Classes/NCERT/Standard Books/Single
+// Pager, where (unlike Answer Writing) one row is always one Subject's
+// material (one class, one chapter, one single-pager). allowAddNew is off
+// here too: Subject stays purely Syllabus-governed on every tracker using
+// this pattern now, not just Answer Writing — a genuinely new Subject is
+// added on the Syllabus/Settings tab instead.
+function subjectSingleSelectColumn(db) {
+  return {
+    key: "subject", label: "Subject", width: 150, type: "custom",
+    render: (rec, _onChange, updateRecord) => {
+      const options = Array.from(new Set(db.syllabus.filter(s => s.gsPaper === GS_PAPER_SHORT_TO_LONG[rec.gsPaper] && s.subject).map(s => s.subject)));
+      return (
+        <CascadingSelectCell
+          value={rec.subject} options={options} allowAddNew={false}
+          placeholder={rec.gsPaper ? "Select subject…" : "Select GS Paper first"} disabled={!rec.gsPaper}
+          onSelect={v => updateRecord({ subject: v })}
+        />
+      );
+    },
+  };
+}
+// Micro Topic tag column — shared by Answer Writing/Topper Copies (Subject
+// is a tag array there, rec.subjects) and Classes/NCERT/Standard Books/
+// Single Pager (Subject is single-select there, rec.subject); works with
+// either, since it just needs a list of Subjects to scope by. Tag
 // multi-select linked straight to Syllabus Micro Topics, deliberately
 // skipping Syllabus's own Topic/Subtopic levels: options are every Micro
-// Topic under whichever Subject(s) are tagged above (across all their
-// Topics/Subtopics), since one answer/topper copy can draw on several.
-// "+ Add new" doesn't invent a row inline (unlike Classes) — it opens
-// AddSyllabusRowPopup via setAddTopicFor, tagged with which tracker
-// (`trackerKey`: "answerWriting" or "topperCopies") the new row should
-// attach to, since there's no single Subject/Topic/Subtopic here to
-// safely assume the way Classes can from its own row's context.
-function microtopicTagColumn(db, trackerKey, setAddTopicFor) {
+// Topic under whichever Subject(s) apply to this row (across all their
+// Topics/Subtopics), since one row can draw on several. "+ Add new"
+// doesn't invent a row inline — it opens AddSyllabusRowPopup via
+// setAddTopicFor, tagged with which tracker (`trackerKey`) the new row
+// should attach to, since there's no single Topic/Subtopic here to safely
+// assume (even with one Subject, there could be many Topics under it).
+function microtopicTagColumn(db, trackerKey, setAddTopicFor, label = "Micro Topic") {
   return {
-    key: "microtopics", label: "Micro Topic", width: 220, type: "custom",
+    key: "microtopics", label, width: 220, type: "custom",
     render: (rec, _onChange, updateRecord) => {
-      const subjects = rec.subjects || [];
+      const subjects = rec.subjects || (rec.subject ? [rec.subject] : []);
       const values = rec.microtopics || (rec.topic ? [rec.topic] : []);
       const options = microtopicRowOptionsForSubjects(db, subjects);
       return (
         <TagMultiSelectCell
           values={values} options={options} allowAddNew
           resolveLabel={v => resolveMicrotopicLabelById(db, v)}
-          placeholder={subjects.length ? "+ Add micro topic" : "Add a Subject first, or + Add new"}
+          placeholder={subjects.length ? `+ Add ${label.toLowerCase()}` : "Add a Subject first, or + Add new"}
           onChange={v => updateRecord({ microtopics: v })}
           onAddNew={name => setAddTopicFor({ trackerKey, recId: rec.id, typedName: name, subject: subjects.length === 1 ? subjects[0] : "" })}
         />
@@ -3599,7 +3493,8 @@ function DashboardTab({ db }) {
 
 function classMatchesSyllabusRow(c, row) {
   if (c.syllabusId === row.id) return true;
-  return row.microtopic ? (c.microtopics || []).some(m => m === row.id || normKey(m) === normKey(row.microtopic)) : false;
+  if ((c.microtopics || []).includes(row.id)) return true;
+  return row.microtopic ? (c.microtopics || []).some(m => normKey(m) === normKey(row.microtopic)) : false;
 }
 function recMatchesSyllabusRow(rec, row, topicField = "topic") {
   if (rec.syllabusId === row.id) return true;
@@ -3647,34 +3542,38 @@ function recsForSyllabusRow(index, row) {
   return [...byId, ...byText.filter(r => !seen.has(r.id))];
 }
 
-// Classes match differently (mirrors classMatchesSyllabusRow): via
-// syllabusId, OR via any tagged microtopics entry (a Syllabus row id, or
-// for legacy tags, plain text) — a class can tag several Micro Topics at
-// once, so it's indexed under every one of them.
-function buildClassesIndex(classes) {
+// Index for any tracker whose records tag Syllabus rows via a `microtopics`
+// array (Classes always has; NCERT/Standard Books/Single Pager once
+// converted to the same tag model) — mirrors classMatchesSyllabusRow: a
+// record's own syllabusId (legacy single-link field, still checked for
+// records saved before microtopics existed) OR any id in its microtopics
+// array, OR for legacy plain-text tags, a name match. A record with several
+// tagged Micro Topics is indexed under every one of them, since it
+// genuinely relates to all of them, not just one.
+function buildTaggedIndex(records) {
   const byId = new Map();
   const byName = new Map();
-  classes.forEach(c => {
-    const idKeys = [c.syllabusId, ...(c.microtopics || [])].filter(Boolean);
+  records.forEach(rec => {
+    const idKeys = [rec.syllabusId, ...(rec.microtopics || [])].filter(Boolean);
     idKeys.forEach(k => {
       if (!byId.has(k)) byId.set(k, []);
-      byId.get(k).push(c);
+      byId.get(k).push(rec);
     });
-    (c.microtopics || []).forEach(m => {
+    (rec.microtopics || []).forEach(m => {
       const key = normKey(m);
       if (!byName.has(key)) byName.set(key, []);
-      byName.get(key).push(c);
+      byName.get(key).push(rec);
     });
   });
   return { byId, byName };
 }
-function classesForSyllabusRow(index, row) {
+function taggedRecsForSyllabusRow(index, row) {
   const byId = index.byId.get(row.id) || [];
   const byName = row.microtopic ? (index.byName.get(normKey(row.microtopic)) || []) : [];
   if (byId.length === 0) return byName;
   if (byName.length === 0) return byId;
-  const seen = new Set(byId.map(c => c.id));
-  return [...byId, ...byName.filter(c => !seen.has(c.id))];
+  const seen = new Set(byId.map(r => r.id));
+  return [...byId, ...byName.filter(r => !seen.has(r.id))];
 }
 
 // Builds all the indexes Topic Completion needs at once from a `db`
@@ -3682,10 +3581,10 @@ function classesForSyllabusRow(index, row) {
 // useMemo keyed on the specific db.* arrays involved), not per Syllabus row.
 function buildTopicCompletionIndexes(db) {
   return {
-    classesIdx: buildClassesIndex(db.classes),
-    ncertIdx: buildRecIndex(db.ncert),
-    stdBooksIdx: buildRecIndex(db.standardBooks),
-    spIdx: buildRecIndex(db.singlePager),
+    classesIdx: buildTaggedIndex(db.classes),
+    ncertIdx: buildTaggedIndex(db.ncert),
+    stdBooksIdx: buildTaggedIndex(db.standardBooks),
+    spIdx: buildTaggedIndex(db.singlePager),
     readingIdx: buildRecIndex(db.reading),
   };
 }
@@ -3702,16 +3601,16 @@ function buildTopicCompletionIndexes(db) {
 // row that's never had one edited. readingRecId is exposed so the caller
 // knows whether to patch an existing reading record or lazily create one.
 function computeTopicCompletionFields(row, indexes) {
-  const matchedClasses = classesForSyllabusRow(indexes.classesIdx, row);
+  const matchedClasses = taggedRecsForSyllabusRow(indexes.classesIdx, row);
   const classNotes = matchedClasses.some(c => c.status === "Completed") ? "Completed"
     : matchedClasses.length > 0 ? "In Progress" : "Not Started";
   const classNotesFile = (matchedClasses.find(c => c.status === "Completed" && c.driveFile)
     || matchedClasses.find(c => c.driveFile) || {}).driveFile || null;
 
-  const standardMaterial = recsForSyllabusRow(indexes.stdBooksIdx, row).length > 0 ? "Completed" : "Not Started";
-  const ncert = recsForSyllabusRow(indexes.ncertIdx, row).length > 0 ? "Completed" : "Not Started";
+  const standardMaterial = taggedRecsForSyllabusRow(indexes.stdBooksIdx, row).length > 0 ? "Completed" : "Not Started";
+  const ncert = taggedRecsForSyllabusRow(indexes.ncertIdx, row).length > 0 ? "Completed" : "Not Started";
 
-  const matchedSP = recsForSyllabusRow(indexes.spIdx, row);
+  const matchedSP = taggedRecsForSyllabusRow(indexes.spIdx, row);
   const singlePager = matchedSP.some(s => s.status === "Completed") ? "Completed"
     : matchedSP.length > 0 ? "In Progress" : "Not Started";
 
@@ -3741,18 +3640,13 @@ function TopicMasterTab({ db, onNavigate }) {
       row,
       classes: db.classes.filter(c => classMatchesSyllabusRow(c, row)),
       topicCompletion: computeTopicCompletionFields(row, topicCompletionIndexes),
-      ncert: db.ncert.filter(n => recMatchesSyllabusRow(n, row)),
-      standardBooks: db.standardBooks.filter(s => recMatchesSyllabusRow(s, row)),
-      singlePager: db.singlePager.filter(s => recMatchesSyllabusRow(s, row)),
+      ncert: db.ncert.filter(n => classMatchesSyllabusRow(n, row)),
+      standardBooks: db.standardBooks.filter(s => classMatchesSyllabusRow(s, row)),
+      singlePager: db.singlePager.filter(s => classMatchesSyllabusRow(s, row)),
       currentAffairs: db.currentAffairs.filter(c => recMatchesSyllabusRow(c, row, "relevantSyllabusTopic")),
       tamilReading: row.subject === "Tamil Literature" ? db.tamilReading.filter(t => t.topic === row.topic) : [],
       tamilWriting: row.subject === "Tamil Literature" ? db.tamilWriting.filter(t => t.topic === row.topic) : [],
-      // Answer Writing's Topic is now the user's own free-form tag(s),
-      // deliberately decoupled from Syllabus topics (see AnswerWritingTab) —
-      // this only catches a coincidental exact match (or a legacy
-      // single-topic record saved before tags existed), it's not expected
-      // to reliably link every answer to a Syllabus row anymore.
-      // Answer Writing's Micro Topic tags link by Syllabus row id now (see
+      // Answer Writing's Micro Topic tags link by Syllabus row id (see
       // AnswerWritingTab) — matches this row directly, same mechanism as
       // Classes. Falls back to a GS Paper + Topic text match only for
       // legacy rows saved before that existed (a plain rec.topic string,
@@ -3909,15 +3803,27 @@ function SearchTab({ db }) {
       });
     };
     scan(db.syllabus, "Syllabus", ["subject", "topic", "subtopic"], r => `${r.subject} — ${r.topic}`);
-    scan(db.classes, "Classes", ["subject", "topic"], r => `${r.subject} — Class ${r.classNumber}: ${r.topic}`);
+    // Bespoke rather than the generic scan() above — Classes/NCERT/Standard
+    // Books/Single Pager's Micro Topic tags store Syllabus row ids (see
+    // ClassesTab et al.), which need resolving to their current text before
+    // they mean anything as search terms.
+    const scanTagged = (arr, module, otherFields, labelFn) => {
+      arr.forEach(r => {
+        const microtopicLabels = (r.microtopics || []).map(id => resolveMicrotopicLabelById(db, id)).filter(Boolean);
+        const legacyTopic = r.microtopics ? "" : (r.topic || "");
+        const hay = [...otherFields.map(f => r[f] || ""), ...microtopicLabels, legacyTopic].join(" ").toLowerCase();
+        if (hay.includes(needle)) out.push({ module, label: labelFn(r, microtopicLabels.join(", ") || legacyTopic || "Untitled") });
+      });
+    };
+    scanTagged(db.classes, "Classes", ["subject"], (r, topics) => `${r.subject} — Class ${r.classNumber}: ${topics}`);
     // Topic Completion no longer has an independent row set — it's now a
     // 1:1 computed overview of Syllabus (see "TOPIC COMPLETION — COMPUTED-
     // FIELD HELPERS"), so the Syllabus scan above already covers every
     // topic completion "row" there is; a separate db.reading scan would
     // only surface the sparse subset of rows with a manually-set revision.
-    scan(db.singlePager, "Single Pager", ["subject", "topic"], r => `${r.subject} — ${r.topic}`);
-    scan(db.ncert, "NCERT", ["subject", "book", "chapter", "topic"], r => `${r.subject} — ${r.book} — ${r.chapter}`);
-    scan(db.standardBooks, "Standard Books", ["bookName", "subject", "chapter", "topic"], r => `${r.bookName} — ${r.topic}`);
+    scanTagged(db.singlePager, "Single Pager", ["subject"], (r, topics) => `${r.subject} — ${topics}`);
+    scanTagged(db.ncert, "NCERT", ["subject", "book", "chapter"], (r, topics) => `${r.subject} — ${r.book} — ${r.chapter} — ${topics}`);
+    scanTagged(db.standardBooks, "Standard Books", ["bookName", "subject", "chapter"], (r, topics) => `${r.bookName} — ${topics}`);
     scan(db.tamilReading, "Tamil Reading", ["topic", "source"], r => r.topic);
     scan(db.tamilWriting, "Tamil Writing", ["topic", "question"], r => r.topic);
     scan(db.currentAffairs, "Current Affairs", ["title", "subject", "relevantSyllabusTopic"], r => r.title);
@@ -4267,9 +4173,9 @@ function countRecordsLinkedToSyllabus(db) {
   let count = 0;
   count += db.classes.filter(c => c.syllabusId || (c.microtopics || []).length > 0).length;
   count += db.reading.filter(r => r.syllabusId).length;
-  count += db.ncert.filter(n => n.syllabusId).length;
-  count += db.standardBooks.filter(s => s.syllabusId).length;
-  count += db.singlePager.filter(s => s.syllabusId).length;
+  count += db.ncert.filter(n => n.syllabusId || (n.microtopics || []).length > 0).length;
+  count += db.standardBooks.filter(s => s.syllabusId || (s.microtopics || []).length > 0).length;
+  count += db.singlePager.filter(s => s.syllabusId || (s.microtopics || []).length > 0).length;
   count += db.currentAffairs.filter(c => c.syllabusId).length;
   count += db.answerWriting.filter(a => (a.microtopics || []).length > 0).length;
   count += db.topperCopies.filter(a => (a.microtopics || []).length > 0).length;
@@ -4328,7 +4234,7 @@ function DangerZone({ db, updateSlice }) {
                 {sectionKey === "syllabus" && (
                   <> <strong>Heads up:</strong> other trackers still reference Syllabus rows
                   {linkedToSyllabusCount > 0 ? ` (${linkedToSyllabusCount} record${linkedToSyllabusCount === 1 ? "" : "s"} right now)` : ""} —
-                  Classes', GS Answer Writing's, and Topper Copies' Micro Topic tags in particular may show an unreadable value once those rows are gone, and
+                  Classes', NCERT's, Standard Books', Single Pager's, GS Answer Writing's, and Topper Copies' Micro Topic tags in particular may show an unreadable value once those rows are gone, and
                   every tracker's Topic/Subtopic/Micro Topic dropdowns won't offer anything new until Syllabus is
                   repopulated.</>
                 )}
@@ -4571,17 +4477,18 @@ function ImportExportTab({ db, updateSlice }) {
         if (!clean.status) clean.status = "Not Started";
         if (!clean.revision) clean.revision = "Yet to Start";
       }
-      if (target === "classes") {
-        if (!clean.status) clean.status = "Completed";
-        // Classes tags multiple micro topics; a plain import column can only
-        // give us one, so it becomes the sole starting tag (more can be
-        // added on the Classes tab afterwards).
+      // Classes/NCERT/Standard Books/Single Pager all tag Micro Topics as an
+      // array now (rec.microtopics) instead of the single rec.microtopic a
+      // plain import column can give us — that one value becomes the sole
+      // starting tag; more can be added on the tracker's own tab afterwards.
+      // GS Paper isn't part of any of these four's import columns yet, so an
+      // imported row starts with it blank — set it on the tracker's own tab
+      // (needed before Subject options will show up there).
+      if (["classes", "ncert", "standardBooks", "singlePager"].includes(target)) {
         clean.microtopics = clean.microtopic ? [clean.microtopic] : [];
         delete clean.microtopic;
       }
-      if (target === "classes") {
-        clean.syllabusId = findSyllabusId(db, { subject: clean.subject, topic: clean.topic, subtopic: clean.subtopic });
-      }
+      if (target === "classes" && !clean.status) clean.status = "Completed";
       if (target === "tamilWriting" && !clean.status) clean.status = "Not Started";
       if (target === "currentAffairs") {
         clean.driveFile = null;
