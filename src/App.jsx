@@ -376,7 +376,7 @@ const SYLLABUS_SEED = [
 
 const STORAGE_KEYS = [
   "settings", "syllabus", "classes", "reading", "singlePager", "ncert", "standardBooks",
-  "tamilReading", "tamilWriting", "currentAffairs", "answerWriting", "aiLearning",
+  "tamilReading", "tamilWriting", "currentAffairs", "answerWriting", "topperCopies", "aiLearning",
   "dailyPlans", "dailyReviews", "weeklyReviews"
 ];
 
@@ -395,7 +395,7 @@ function defaultDB() {
     },
     syllabus: SYLLABUS_SEED.map(s => ({ id: uid(), ...s, subtopic: "", microtopic: "", studyStatus: "Not Started", revisionStatus: "Not Started", history: [] })),
     classes: [], reading: [], singlePager: [], ncert: [], standardBooks: [],
-    tamilReading: [], tamilWriting: [], currentAffairs: [], answerWriting: [], aiLearning: [],
+    tamilReading: [], tamilWriting: [], currentAffairs: [], answerWriting: [], topperCopies: [], aiLearning: [],
     dailyPlans: {}, dailyReviews: {}, weeklyReviews: {},
   };
 }
@@ -732,6 +732,7 @@ function downloadBlob(content, filename, mime) {
 const DRIVE_FOLDER_NAMES = {
   singlePager: "UPSC 2027 Command Center - Single Pagers",
   answerWriting: "UPSC 2027 Command Center - GS Answer Writing",
+  topperCopies: "UPSC 2027 Command Center - Topper Copies",
   tamilWriting: "UPSC 2027 Command Center - Tamil Literature Writing",
   tamilReading: "UPSC 2027 Command Center - Tamil Literature Reading",
   classes: "UPSC 2027 Command Center - Class Notes",
@@ -2971,51 +2972,88 @@ function CurrentAffairsTab({ db, updateSlice }) {
   );
 }
 
+// GS Paper + Topic pair shared by both Answer Writing sub-tabs — Topic
+// options are scoped to whichever GS Paper is currently picked, same
+// Syllabus-backed list either way.
+function gsPaperTopicColumns(db) {
+  return [
+    {
+      key: "gsPaper", label: "GS Paper", width: 90, type: "custom",
+      render: (rec, _onChange, updateRecord) => (
+        <select className="ucc-select" value={rec.gsPaper || ""} onChange={e => updateRecord({ gsPaper: e.target.value, topic: "" })}>
+          {GS_PAPERS.map(g => <option key={g} value={g}>{g}</option>)}
+        </select>
+      ),
+    },
+    {
+      key: "topic", label: "Topic", width: 180, type: "custom",
+      render: (rec, _onChange, updateRecord) => {
+        const options = Array.from(new Set(db.syllabus.filter(s => s.gsPaper === rec.gsPaper && s.topic).map(s => s.topic)));
+        return (
+          <CascadingSelectCell
+            value={rec.topic} options={options} allowAddNew={false}
+            placeholder={options.length ? "Select topic…" : "Set GS Paper on Syllabus topics first"}
+            onSelect={v => updateRecord({ topic: v })}
+          />
+        );
+      },
+    },
+  ];
+}
+
 function AnswerWritingTab({ db, updateSlice }) {
+  const [sub, setSub] = useState("mine");
   return (
     <div className="ucc-card">
-      <h3>GS answer writing</h3>
-      <div className="ucc-tiny" style={{ marginBottom: 8, color: "var(--ink-muted)" }}>
+      <div className="ucc-tabbar">
+        <button className={sub === "mine" ? "active" : ""} onClick={() => setSub("mine")}>Answer Writing</button>
+        <button className={sub === "topper" ? "active" : ""} onClick={() => setSub("topper")}>Topper Copies</button>
+      </div>
+      <div className="ucc-tiny" style={{ margin: "8px 0", color: "var(--ink-muted)" }}>
         Topic is chosen from the Syllabus tab (matched by GS Paper) — new topics can't be added here.
       </div>
-      <GenericTracker
-        records={db.answerWriting} setRecords={u => updateSlice("answerWriting", u)} completionRequiresUpload
-        columns={[
-          { key: "date", label: "Date", type: "date", width: 110 },
-          {
-            key: "gsPaper", label: "GS Paper", width: 90, type: "custom",
-            render: (rec, _onChange, updateRecord) => (
-              <select className="ucc-select" value={rec.gsPaper || ""} onChange={e => updateRecord({ gsPaper: e.target.value, topic: "" })}>
-                {GS_PAPERS.map(g => <option key={g} value={g}>{g}</option>)}
-              </select>
-            ),
-          },
-          {
-            key: "topic", label: "Topic", width: 180, type: "custom",
-            render: (rec, _onChange, updateRecord) => {
-              const options = Array.from(new Set(db.syllabus.filter(s => s.gsPaper === rec.gsPaper && s.topic).map(s => s.topic)));
-              return (
-                <CascadingSelectCell
-                  value={rec.topic} options={options} allowAddNew={false}
-                  placeholder={options.length ? "Select topic…" : "Set GS Paper on Syllabus topics first"}
-                  onSelect={v => updateRecord({ topic: v })}
-                />
-              );
+      {sub === "mine" ? (
+        <GenericTracker
+          records={db.answerWriting} setRecords={u => updateSlice("answerWriting", u)} completionRequiresUpload
+          columns={[
+            { key: "date", label: "Date", type: "date", width: 110 },
+            ...gsPaperTopicColumns(db),
+            { key: "question", label: "Question", type: "textarea", width: 240 },
+            { key: "wordLimit", label: "Word Limit", type: "number", width: 90 },
+            { key: "status", label: "Status", type: "status", options: TASK_STATUS, width: 140 },
+            { key: "selfScore", label: "Self Score", width: 80 },
+            { key: "improvementNotes", label: "Improvement Notes", type: "textarea", width: 200 },
+            {
+              key: "driveFile", label: "Answer PDF", width: 170, type: "custom",
+              render: (rec, onChange) => <DriveFileCell driveFile={rec.driveFile} db={db} updateSlice={updateSlice} onChange={onChange} folderKey="answerWriting"
+                  namePrefix={nextFileNamePrefix(db.answerWriting, rec, r => normKey(r.gsPaper, r.topic), [rec.gsPaper, rec.topic])} />,
             },
-          },
-          { key: "question", label: "Question", type: "textarea", width: 240 },
-          { key: "wordLimit", label: "Word Limit", type: "number", width: 90 },
-          { key: "status", label: "Status", type: "status", options: TASK_STATUS, width: 140 },
-          { key: "selfScore", label: "Self Score", width: 80 },
-          { key: "improvementNotes", label: "Improvement Notes", type: "textarea", width: 200 },
-          {
-            key: "driveFile", label: "Answer PDF", width: 170, type: "custom",
-            render: (rec, onChange) => <DriveFileCell driveFile={rec.driveFile} db={db} updateSlice={updateSlice} onChange={onChange} folderKey="answerWriting"
-                namePrefix={nextFileNamePrefix(db.answerWriting, rec, r => normKey(r.gsPaper, r.topic), [rec.gsPaper, rec.topic])} />,
-          },
-        ]}
-        newRecord={() => ({ date: todayISO(), gsPaper: "GS1", topic: "", question: "", wordLimit: 150, answer: "", status: "Not Started", selfScore: "", improvementNotes: "", driveFile: null })}
-      />
+          ]}
+          newRecord={() => ({ date: todayISO(), gsPaper: "GS1", topic: "", question: "", wordLimit: 150, answer: "", status: "Not Started", selfScore: "", improvementNotes: "", driveFile: null })}
+        />
+      ) : (
+        <>
+          <div className="ucc-tiny" style={{ marginBottom: 8, color: "var(--ink-muted)" }}>
+            For a topper's own answer — no Word Limit, Status, or Self Score to fill in, since you didn't write it. Use Observations for what stands out about their approach.
+          </div>
+          <GenericTracker
+            records={db.topperCopies} setRecords={u => updateSlice("topperCopies", u)}
+            columns={[
+              { key: "date", label: "Date", type: "date", width: 110 },
+              ...gsPaperTopicColumns(db),
+              { key: "question", label: "Question", type: "textarea", width: 240 },
+              { key: "observations", label: "Observations", type: "textarea", width: 220 },
+              {
+                key: "driveFile", label: "Topper Copy PDF", width: 170, type: "custom",
+                render: (rec, onChange) => <DriveFileCell driveFile={rec.driveFile} db={db} updateSlice={updateSlice} onChange={onChange} folderKey="topperCopies"
+                    namePrefix={nextFileNamePrefix(db.topperCopies, rec, r => normKey(r.gsPaper, r.topic), [rec.gsPaper, rec.topic])} />,
+              },
+            ]}
+            newRecord={() => ({ date: todayISO(), gsPaper: "GS1", topic: "", question: "", observations: "", driveFile: null })}
+            emptyMessage="No topper copies logged yet — click Add row below to add your first one."
+          />
+        </>
+      )}
     </div>
   );
 }
@@ -3229,6 +3267,7 @@ function TopicMasterTab({ db, onNavigate }) {
       tamilReading: row.subject === "Tamil Literature" ? db.tamilReading.filter(t => t.topic === row.topic) : [],
       tamilWriting: row.subject === "Tamil Literature" ? db.tamilWriting.filter(t => t.topic === row.topic) : [],
       answerWriting: row.gsPaper ? db.answerWriting.filter(a => a.gsPaper === row.gsPaper && a.topic === row.topic) : [],
+      topperCopies: row.gsPaper ? db.topperCopies.filter(a => a.gsPaper === row.gsPaper && a.topic === row.topic) : [],
     })).sort((a, b) => breadcrumb(a.row).localeCompare(breadcrumb(b.row)));
   }, [db]);
 
@@ -3241,7 +3280,7 @@ function TopicMasterTab({ db, onNavigate }) {
 
   function countLinked(t) {
     return t.classes.length + t.reading.length + t.ncert.length + t.standardBooks.length + t.singlePager.length
-      + t.currentAffairs.length + t.tamilReading.length + t.tamilWriting.length + t.answerWriting.length;
+      + t.currentAffairs.length + t.tamilReading.length + t.tamilWriting.length + t.answerWriting.length + t.topperCopies.length;
   }
 
   return (
@@ -3342,6 +3381,14 @@ function TopicMasterTab({ db, onNavigate }) {
                     </div>
                   ))}
               </TopicSection>
+              <TopicSection title="Topper copies">
+                {active.topperCopies.length === 0 ? <EmptyState>No related topper copies.</EmptyState> :
+                  active.topperCopies.map(a => (
+                    <div key={a.id} className="ucc-tiny" style={{ marginBottom: 4 }}>
+                      {a.date} — {a.gsPaper} <DriveDownloadLink driveFile={a.driveFile} />
+                    </div>
+                  ))}
+              </TopicSection>
             </div>
           )}
         </div>
@@ -3378,6 +3425,7 @@ function SearchTab({ db }) {
     scan(db.tamilWriting, "Tamil Writing", ["topic", "question"], r => r.topic);
     scan(db.currentAffairs, "Current Affairs", ["title", "subject", "relevantSyllabusTopic"], r => r.title);
     scan(db.answerWriting, "Answer Writing", ["topic", "question", "gsPaper"], r => `${r.gsPaper} — ${r.topic}`);
+    scan(db.topperCopies, "Topper Copies", ["topic", "question", "gsPaper", "observations"], r => `${r.gsPaper} — ${r.topic}`);
     scan(db.aiLearning, "AI Learning", ["topic", "notes"], r => r.topic);
     return out;
   }, [q, db]);
@@ -3685,14 +3733,14 @@ function SettingsTab({ db, updateSlice }) {
 // list, so the two resets can't drift out of sync with each other.
 const CLEARABLE_DATA_KEYS = {
   syllabus: [], classes: [], reading: [], singlePager: [], ncert: [], standardBooks: [],
-  tamilReading: [], tamilWriting: [], currentAffairs: [], answerWriting: [], aiLearning: [],
+  tamilReading: [], tamilWriting: [], currentAffairs: [], answerWriting: [], topperCopies: [], aiLearning: [],
   dailyPlans: {}, dailyReviews: {}, weeklyReviews: {},
 };
 const RESETTABLE_SECTION_LABELS = {
   syllabus: "Syllabus", classes: "Classes", reading: "Topic Completion", singlePager: "Single Pager",
   ncert: "NCERT", standardBooks: "Standard Books", tamilReading: "Tamil Literature Reading",
   tamilWriting: "Tamil Literature Writing", currentAffairs: "Current Affairs", answerWriting: "GS Answer Writing",
-  aiLearning: "AI Learning", dailyPlans: "Daily Plans", dailyReviews: "End-of-day reviews", weeklyReviews: "Weekly reviews",
+  topperCopies: "Topper Copies", aiLearning: "AI Learning", dailyPlans: "Daily Plans", dailyReviews: "End-of-day reviews", weeklyReviews: "Weekly reviews",
 };
 // Only Syllabus needs its own extra warning in the section-wise reset:
 // every other tracker stores its own readable subject/topic/etc. text, so
@@ -3905,6 +3953,15 @@ const IMPORT_TARGETS = {
     },
     dupKey: r => normKey(r.date, r.gsPaper, r.topic),
   },
+  topperCopies: {
+    label: "Topper Copies",
+    fields: ["date", "gsPaper", "topic", "question", "observations"],
+    aliases: {
+      date: ["date"], gsPaper: ["gs paper", "gspaper"], topic: ["topic"], question: ["question"],
+      observations: ["observations", "notes"],
+    },
+    dupKey: r => normKey(r.date, r.gsPaper, r.topic),
+  },
   aiLearning: {
     label: "AI Learning",
     fields: ["date", "topic", "duration", "status", "notes"],
@@ -3924,7 +3981,7 @@ const IMPORT_FIELD_LABELS = {
   source: "Source", notes: "Notes", question: "Question", wordLimit: "Word Limit",
   selfEvaluation: "Remarks Summary", marksScored: "Marks Scored", marksMax: "Max Marks",
   title: "Topic / Title", relevantSyllabusTopic: "Topic", duration: "Duration (min)",
-  selfScore: "Self Score", improvementNotes: "Improvement Notes",
+  selfScore: "Self Score", improvementNotes: "Improvement Notes", observations: "Observations",
 };
 // A blank workbook with just the header row (friendly labels) for one
 // import target — lets someone fill it in offline in the exact shape the
