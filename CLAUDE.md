@@ -153,15 +153,42 @@ summary will do.
     Books, and Single Pager all use it now that all four tag Micro Topics
     the same way; `recsForSyllabusRow` matches by scalar `syllabusId` +
     full-path text and is only for Reading's own lazily-created revision
-    records now). `computePendingTasks`'s revision-due and
-    pending-reading sections, the Dashboard's Overall Topic Completion %,
-    `SyllabusTab`'s own progress stat, and Topic Master's "Topic
-    completion" panel were all migrated to this pattern — if you touch any
-    of those, keep them reading from Syllabus + the computed fields, not
-    `db.reading` directly. The old "Previous day's class notes" pending
-    item was removed entirely, not migrated — it existed to nudge you to
-    do a separate manual "class notes" step that no longer exists now that
-    Class Notes derives straight from the class's own Completed status.
+    records now). Today's Planner widgets (`computePendingTasks`), the
+    Dashboard's Overall Topic Completion %, `SyllabusTab`'s own progress
+    stat, and Topic Master's "Topic completion" panel were all migrated to
+    this pattern — if you touch any of those, keep them reading from
+    Syllabus + the computed fields, not `db.reading` directly. The old
+    "Previous day's class notes" pending item was removed entirely, not
+    migrated — it existed to nudge you to do a separate manual "class
+    notes" step that no longer exists now that Class Notes derives straight
+    from the class's own Completed status.
+  - **`computePendingTasks` has three categories, each powering its own
+    Today's Planner widget** (not one combined "Pending" list anymore):
+    "Pending" (a Class that's started but not finished with an ETA set, or
+    a topic whose Class Notes are done but Single Pager isn't — the
+    natural next step after a class), "Revision due" (a real
+    spaced-repetition schedule now, not "the moment Class Notes/Revision 1
+    finish" — Revision 1 at 7+ days and Revision 2 at 30+ days, both
+    measured from the same anchor: `statusCompletedAt` on whichever Single
+    Pager record actually got marked Completed, read from that record's
+    own change history, not just "is it Completed now"), and "Single
+    pager" (any topic with Class Notes *or* Standard Books *or* NCERT done
+    but no Single Pager yet — deliberately broader than "Pending"'s
+    Class-specific condition, since a topic's source material doesn't have
+    to come from a class). `statusCompletedAt(rec, fieldLabel)` is generic
+    — reusable anywhere else "when did this last become Completed" matters
+    — and returns the *most recent* match, so an undo-then-redo doesn't
+    anchor to a stale timestamp.
+  - **The Consistency streak widget deliberately sits beside "Today's
+    plan", not in the summary grid below it** (`computeConsistencyStreak`)
+    — a day counts if *any* of Classes/Standard Books/NCERT/Answer
+    Writing/Single Pager/Tamil Reading/Tamil Writing/Current Affairs has a
+    record dated that day; counts backward from today, or from yesterday
+    if today has nothing logged yet (the day isn't over, so an empty today
+    shouldn't zero out an otherwise-alive streak). NCERT and Standard Books
+    gained a `date` field for this specifically — neither had one before,
+    since neither needed one until a cross-tracker "was something logged
+    today" check existed.
   - **Syllabus's own `studyStatus`/`revisionStatus` fields are dead** —
     never shown or settable by any UI anymore (they used to sit behind
     this same duplication problem). Existing stored values on old rows are
