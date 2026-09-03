@@ -201,6 +201,7 @@ const INCLUSION_OPTIONS = ["Included", "Not Included"];
 const CA_STATUS = ["To Read", "Read", "Noted"];
 const CA_SOURCES = ["The Hindu", "Indian Express", "PIB", "Other"];
 const AI_STATUS = ["Not Started", "In Progress", "Completed"];
+const TOPPER_STATUS = ["Not Completed", "Completed"];
 const SKIP_REASONS = ["Time shortage", "Office workload", "Fatigue", "Unexpected work", "Other"];
 const GS_PAPER_OPTIONS = ["GS Paper I", "GS Paper II", "GS Paper III", "GS Paper IV", "Essay", "CSAT", "Optional Paper I", "Optional Paper II", "Personality Test"];
 // GS_PAPERS (Answer Writing/Topper Copies' own short-form GS Paper field,
@@ -217,7 +218,7 @@ const GS_PAPER_SHORT_TO_LONG = {
 // vocabulary a specific tracker uses, so picking a status in Today's plan
 // actually lands on the linked tracker page instead of being a dead click.
 const STATUS_COLOR = {
-  "Not Started": "neutral", "To Read": "neutral",
+  "Not Started": "neutral", "To Read": "neutral", "Not Completed": "neutral",
   "Yet to Start": "blue",
   "In Progress": "amber", "Reading": "amber", "Partially Completed": "amber",
   "Completed": "green", "Done": "green", "Revised": "green", "Strong": "green", "Read": "green", "Noted": "green",
@@ -1281,7 +1282,15 @@ function GenericTracker({ records, setRecords, columns, newRecord, emptyMessage,
                     );
                     return (
                       <td key={col.key}>
-                        {locked && !isStatusCol ? (
+                        {locked && !isStatusCol && col.readableWhenLocked ? (
+                          // Same Completed lock as below, but pointer-events
+                          // stay enabled so long text (e.g. Topper Copies'
+                          // Question/Observations) can still be scrolled and
+                          // read — updateField's own Completed-row guard
+                          // already refuses any edit, so this is read-only
+                          // in practice without needing a visual disable.
+                          <div style={{ opacity: 0.55 }} title="Completed rows are locked — change Status to edit again. You can still scroll to read this field.">{cell}</div>
+                        ) : locked && !isStatusCol ? (
                           <div style={{ pointerEvents: "none", opacity: 0.55 }} title="Completed rows are locked — change Status to edit again">{cell}</div>
                         ) : partiallyLocked && !isStatusCol && !isDateCol && !isDriveFileCol ? (
                           // Stays clickable (unlike the Completed lock above) —
@@ -3243,17 +3252,18 @@ function AnswerWritingTab({ db, updateSlice }) {
       ) : (
         <>
           <div className="ucc-tiny" style={{ margin: "8px 0", color: "var(--ink-muted)" }}>
-            Subject and Micro Topic work exactly like the Answer Writing sub-tab — Subject from Syllabus, Micro Topic tagging every Micro Topic under the picked Subject(s), with <strong>+ Add new</strong> opening the same popup. For a topper's own answer — no Word Limit, Status, or Self Score to fill in, since you didn't write it. Use Observations for what stands out about their approach.
+            Subject and Micro Topic work exactly like the Answer Writing sub-tab — Subject from Syllabus, Micro Topic tagging every Micro Topic under the picked Subject(s), with <strong>+ Add new</strong> opening the same popup. For a topper's own answer — no Word Limit or Self Score to fill in, since you didn't write it. Use Observations for what stands out about their approach. Status can only be marked Completed once the Topper Copy PDF is uploaded, and the row locks after — Question and Observations stay scrollable to re-read even while locked.
           </div>
           <GenericTracker
-            records={db.topperCopies} setRecords={u => updateSlice("topperCopies", u)}
+            records={db.topperCopies} setRecords={u => updateSlice("topperCopies", u)} completionRequiresUpload
             columns={[
               { key: "date", label: "Date", type: "date", width: 110 },
               gsPaperColumn(),
               subjectTagColumn(db),
               microtopicTagColumn(db, "topperCopies", setAddTopicFor),
-              { key: "question", label: "Question", type: "textarea", width: 240 },
-              { key: "observations", label: "Observations", type: "textarea", width: 220 },
+              { key: "question", label: "Question", type: "textarea", width: 240, readableWhenLocked: true },
+              { key: "observations", label: "Observations", type: "textarea", width: 220, readableWhenLocked: true },
+              { key: "status", label: "Status", type: "status", options: TOPPER_STATUS, width: 130 },
               {
                 key: "driveFile", label: "Topper Copy PDF", width: 170, type: "custom",
                 render: (rec, onChange) => {
@@ -3265,7 +3275,7 @@ function AnswerWritingTab({ db, updateSlice }) {
                 },
               },
             ]}
-            newRecord={() => ({ date: todayISO(), gsPaper: "GS1", subjects: [], microtopics: [], question: "", observations: "", driveFile: null })}
+            newRecord={() => ({ date: todayISO(), gsPaper: "GS1", subjects: [], microtopics: [], question: "", observations: "", status: "Not Completed", driveFile: null })}
             emptyMessage="No topper copies logged yet — click Add row below to add your first one."
           />
         </>
@@ -4223,10 +4233,10 @@ const IMPORT_TARGETS = {
   },
   topperCopies: {
     label: "Topper Copies",
-    fields: ["date", "gsPaper", "topic", "question", "observations"],
+    fields: ["date", "gsPaper", "topic", "question", "observations", "status"],
     aliases: {
       date: ["date"], gsPaper: ["gs paper", "gspaper"], topic: ["topic"], question: ["question"],
-      observations: ["observations", "notes"],
+      observations: ["observations", "notes"], status: ["status"],
     },
     dupKey: r => normKey(r.date, r.gsPaper, r.topic),
   },
@@ -4353,6 +4363,7 @@ function ImportExportTab({ db, updateSlice }) {
         clean.driveFile = null;
       }
       if (target === "answerWriting" && !clean.status) clean.status = "Not Started";
+      if (target === "topperCopies" && !clean.status) clean.status = "Not Completed";
       if (target === "aiLearning" && !clean.status) clean.status = "Not Started";
       toAdd.push(clean);
     });

@@ -115,9 +115,16 @@ summary will do.
   `microtopicTagColumn` (see the Topic-governance bullet above for how
   Micro Topic linking works here — it differs from every other tracker).
   Topper Copies is otherwise a smaller shape — Date/GS Paper/Subject/
-  Micro Topic/Question/Observations/PDF only, no Word Limit, Status, or
-  Self Score (you didn't write it, so there's nothing of yours to score or
-  lock), and correspondingly no `completionRequiresUpload`.
+  Micro Topic/Question/Observations/Status/PDF, no Word Limit or Self
+  Score (you didn't write it, so there's nothing of yours to score).
+  Topper Copies *does* opt into `completionRequiresUpload` (`TOPPER_STATUS`
+  = `["Not Completed", "Completed"]`, a two-state vocabulary rather than
+  `TASK_STATUS`'s five) — Completed still requires the Topper Copy PDF
+  uploaded first and still locks the row. The one difference from the
+  other four `completionRequiresUpload` trackers: Question and
+  Observations are marked `readableWhenLocked: true` (see the
+  `completionRequiresUpload` bullet below) so long text stays scrollable
+  after the row locks.
 - **"Log" column**: most trackers end with a `LogButton` cell
   (`{ key: "log", ... render: rec => <LogButton history={rec.history} /> }`)
   — a read-only popover over the record's existing `history` array (already
@@ -244,11 +251,11 @@ summary will do.
   add it to the relevant cascade list(s) here — a rename that silently
   misses one tracker is worse than no rename feature at all, since it
   looks correct everywhere you happened to check.
-- **Classes, Single Pager, Tamil Writing, and GS Answer Writing gate
-  completion behind having a file uploaded, and lock the row once
-  Completed — `GenericTracker`'s `completionRequiresUpload` prop, opted
-  into only by those four (the trackers with both a Status column and a
-  `driveFile` column).** Trying to set Status to "Completed" without
+- **Classes, Single Pager, Tamil Writing, GS Answer Writing, and Topper
+  Copies gate completion behind having a file uploaded, and lock the row
+  once Completed — `GenericTracker`'s `completionRequiresUpload` prop,
+  opted into only by those five (the trackers with both a Status column
+  and a `driveFile` column).** Trying to set Status to "Completed" without
   `rec.driveFile` set pops a `window.alert` naming the specific file
   column (looked up from `columns`, not hardcoded) and refuses the
   change outright — no flash of "Completed" before reverting. Once a row
@@ -262,7 +269,14 @@ summary will do.
   mistake after the fact, not an oversight. Reading (six different status
   columns, no `driveFile` at all) and every other tracker are unaffected
   by design — `completionRequiresUpload` is opt-in per tracker, not a
-  global behavior of `GenericTracker`.
+  global behavior of `GenericTracker`. **A column can also set
+  `readableWhenLocked: true`** (currently only Topper Copies' Question and
+  Observations) to skip the `pointer-events: none` wrapper on lock while
+  keeping the same dimmed styling — the cell stays scrollable/readable for
+  long text, but is still effectively read-only because `updateField`'s
+  Completed-row guard refuses the write regardless of what the UI allows
+  clicking on. Use this only for long-text fields someone would want to
+  re-read on a locked row, not as a general way to loosen the lock.
 - **Source Identified (Syllabus tab)** is read-only and fully computed —
   never add a way to set it by hand. `isSourceIdentifiedForMicrotopic(db,
   syllabusRow)` takes the whole row (not separate fields) so it can match
