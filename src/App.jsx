@@ -291,11 +291,17 @@ const REMOVAL_ORDER = ["ai", "s4", "s1", "s7", "s5", "s3"];
 const BREAK_PAIR = { s1: "b1", s3: "b3", s4: "b4", s5: "b5" };
 const DAY_TYPES = ["WFH", "WFO", "Weekend"];
 
-function isWeekendISO(dateISO) {
+// Default Day Type per weekday, mirroring the real weekly WFH/WFO/Weekend
+// schedule — index 0 = Sunday..6 = Saturday to match Date#getDay() directly.
+// Sun=Weekend, Mon/Tue/Wed=WFO, Thu/Fri=WFH, Sat=Weekend. Edit this array
+// directly if the weekly schedule ever changes; every call site reads it
+// live via defaultDayType(), nothing else needs to change.
+const DEFAULT_DAY_TYPE_BY_WEEKDAY = ["Weekend", "WFO", "WFO", "WFO", "WFH", "WFH", "Weekend"];
+
+function defaultDayType(dateISO) {
   const [y, m, d] = dateISO.split("-").map(Number);
-  return [0, 6].includes(new Date(y, m - 1, d).getDay());
+  return DEFAULT_DAY_TYPE_BY_WEEKDAY[new Date(y, m - 1, d).getDay()];
 }
-function defaultDayType(dateISO) { return isWeekendISO(dateISO) ? "Weekend" : "WFO"; }
 
 // Builds the full candidate block list for a given day type, before any trimming.
 function buildBaseBlocks(dayType, settings) {
