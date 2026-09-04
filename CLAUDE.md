@@ -251,6 +251,15 @@ summary will do.
   unmount — not wired to any tracker data. If another live-updating time
   display is ever needed, reuse this component rather than adding a
   second interval.
+- **`PrelimsCountdown`** (top bar, right side, every screen — it lives in
+  the app-shell `ucc-topbar` markup, not inside any per-tab `body`) shows
+  days remaining to `PRELIMS_2027_DATE` (`"2027-05-23"`, hardcoded near
+  the other date utilities — update this constant, not the component, if
+  the exam date is ever officially notified differently). Recomputes on a
+  60s `setInterval` (daily-precision display doesn't need `LiveClock`'s
+  1s tick). Pill color escalates navy → amber → red (with a CSS pulse) as
+  the date gets closer (`>100` / `31–100` / `≤30` days out), purely via
+  the `days` value — no separate settings/config for the thresholds.
 - **"Add existing task" brings back a slot `applyTrimRules` dropped** —
   computed fresh each render as `buildBaseBlocks(dayType, settings)` minus
   whatever's already in `plan.blocks` (by id), not stored anywhere or

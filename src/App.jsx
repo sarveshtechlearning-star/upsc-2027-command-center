@@ -6,7 +6,7 @@ import {
   Newspaper, PenTool, Brain, Search as SearchIcon, BarChart3,
   Settings as SettingsIcon, Upload, Download, ChevronUp, ChevronDown,
   Plus, Trash2, History, Check, AlertTriangle, Clock, ChevronLeft,
-  ChevronRight as ChevronRightIcon, X, LogOut, LayoutDashboard, Copy, Pencil, Lock, Flame
+  ChevronRight as ChevronRightIcon, X, LogOut, LayoutDashboard, Copy, Pencil, Lock, Flame, Target
 } from "lucide-react";
 
 /* ============================================================
@@ -52,9 +52,27 @@ const CSS = `
   .ucc-topbar{
     display:flex; align-items:center; justify-content:space-between; padding:14px 26px;
     border-bottom:1px solid var(--line); background:var(--surface); position:sticky; top:0; z-index:5;
+    flex-wrap:wrap; row-gap:8px;
   }
   .ucc-topbar h2{margin:0; font-size:17px; font-weight:700;}
   .ucc-topbar .sub{font-size:12px; color:var(--ink-muted); margin-top:2px;}
+  /* Prelims 2027 countdown — deliberately bold/pill-shaped so it reads as a
+     standing deadline reminder rather than blending into the muted topbar
+     text. Sits top-right on every screen (see ucc-topbar markup), not just
+     Today's Planner. Pulses only once the exam is inside 30 days out, so it
+     gets more urgent-looking as the date approaches instead of nagging for
+     the whole year. */
+  .ucc-countdown{
+    display:inline-flex; align-items:center; gap:6px; padding:6px 13px; border-radius:20px;
+    font-size:12.5px; font-weight:700; white-space:nowrap; letter-spacing:0.01em; flex-shrink:0;
+  }
+  .ucc-countdown.navy{background:var(--navy); color:#fff;}
+  .ucc-countdown.amber{background:var(--amber); color:#fff;}
+  .ucc-countdown.red{background:var(--red); color:#fff; animation:ucc-countdown-pulse 2.4s ease-in-out infinite;}
+  @keyframes ucc-countdown-pulse{
+    0%, 100%{box-shadow:0 0 0 0 rgba(180,64,42,0.35);}
+    50%{box-shadow:0 0 0 6px rgba(180,64,42,0);}
+  }
   .ucc-content{padding:22px 26px 60px 26px; max-width:1180px; width:100%;}
   .ucc-card{background:var(--surface); border:1px solid var(--line); border-radius:8px; padding:16px 18px; margin-bottom:16px;}
   .ucc-card h3{margin:0 0 10px 0; font-size:13px; text-transform:uppercase; letter-spacing:0.04em; color:var(--ink-muted); font-weight:700;}
@@ -440,6 +458,15 @@ function fmtDateLong(iso) {
   const [y, m, d] = iso.split("-").map(Number);
   const dt = new Date(y, m - 1, d);
   return dt.toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "short", year: "numeric" });
+}
+// UPSC Prelims 2027 target date, used by the topbar countdown widget.
+const PRELIMS_2027_DATE = "2027-05-23";
+function daysUntilISO(iso) {
+  const [y, m, d] = iso.split("-").map(Number);
+  const target = new Date(y, m - 1, d);
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  return Math.round((target - today) / 86400000);
 }
 function parseTimeToMinutes(t) {
   if (!t) return 0;
@@ -1083,6 +1110,30 @@ function LiveClock() {
       <Clock size={12} />
       <span className="ucc-mono">{hh}:{mm}:{ss}</span>
     </span>
+  );
+}
+
+// Fixed countdown to UPSC Prelims 2027 (23 May 2027), shown in the app-wide
+// topbar on every screen (not scoped to Today's Planner). Recomputes once a
+// minute — cheap, and precise enough since the display only needs whole
+// days — so it rolls over at midnight without a page refresh. Tone escalates
+// navy -> amber -> pulsing red as the date approaches, so it visually
+// signals urgency rather than just being a static number.
+function PrelimsCountdown() {
+  const [days, setDays] = useState(() => daysUntilISO(PRELIMS_2027_DATE));
+  useEffect(() => {
+    const id = setInterval(() => setDays(daysUntilISO(PRELIMS_2027_DATE)), 60000);
+    return () => clearInterval(id);
+  }, []);
+  const tone = days <= 30 ? "red" : days <= 100 ? "amber" : "navy";
+  const label = days > 0 ? `${days} day${days === 1 ? "" : "s"} to Prelims`
+    : days === 0 ? "Prelims is today"
+    : "Prelims 2027 has passed";
+  return (
+    <div className={`ucc-countdown ${tone}`} title={`UPSC Prelims 2027 — ${fmtDateLong(PRELIMS_2027_DATE)}`}>
+      <Target size={13} />
+      <span>{label}</span>
+    </div>
   );
 }
 
@@ -4886,7 +4937,10 @@ function Dashboard({ session }) {
                 <LiveClock />
               </div>
             </div>
-            {saveError && <div className="ucc-tiny" style={{ color: "var(--red)" }}><AlertTriangle size={12} /> {saveError}</div>}
+            <div className="ucc-flex" style={{ gap: 10, alignItems: "center" }}>
+              <PrelimsCountdown />
+              {saveError && <div className="ucc-tiny" style={{ color: "var(--red)" }}><AlertTriangle size={12} /> {saveError}</div>}
+            </div>
           </div>
           <div className="ucc-content">{body}</div>
         </div>
