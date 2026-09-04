@@ -2580,7 +2580,7 @@ function PlanBlock({ block, onUpdate, onMoveUp, onMoveDown, onRemove }) {
    TRACKER TABS
    ============================================================ */
 function ClassesTab({ db, updateSlice }) {
-  const [addTopicFor, setAddTopicFor] = useState(null); // { trackerKey, recId, typedName, subject } | null
+  const [addTopicFor, setAddTopicFor] = useState(null); // { typedName, subject, attach } | null
   const bySubject = useMemo(() => {
     const m = {};
     db.classes.forEach(c => { m[c.subject] = m[c.subject] || []; m[c.subject].push(c); });
@@ -2612,7 +2612,7 @@ function ClassesTab({ db, updateSlice }) {
             { key: "classNumber", label: "Class", type: "number", width: 70 },
             gsPaperColumn(),
             subjectSingleSelectColumn(db),
-            microtopicTagColumn(db, "classes", setAddTopicFor, "Topic"),
+            microtopicTagColumn(db, setAddTopicFor, "Topic"),
             { key: "eta", label: "ETA", type: "date", width: 120 },
             { key: "status", label: "Status", type: "status", options: TASK_STATUS, width: 150 },
             {
@@ -2639,10 +2639,7 @@ function ClassesTab({ db, updateSlice }) {
           db={db} updateSlice={updateSlice}
           initialMicrotopic={addTopicFor.typedName} initialSubject={addTopicFor.subject}
           onCreated={(newId, createdSubject) => {
-            updateSlice(addTopicFor.trackerKey, prev => prev.map(r => {
-              if (r.id !== addTopicFor.recId) return r;
-              return { ...r, microtopics: [...(r.microtopics || []), newId], subject: r.subject || createdSubject };
-            }));
+            addTopicFor.attach(newId, createdSubject);
             setAddTopicFor(null);
           }}
           onClose={() => setAddTopicFor(null)}
@@ -3074,7 +3071,7 @@ function SinglePagerTab({ db, updateSlice }) {
           { key: "date", label: "Date", type: "date", width: 110 },
           gsPaperColumn(),
           subjectSingleSelectColumn(db),
-          microtopicTagColumn(db, "singlePager", setAddTopicFor, "Topic"),
+          microtopicTagColumn(db, setAddTopicFor, "Topic"),
           { key: "classNotes", label: "Class Notes", type: "select", options: INCLUSION_OPTIONS, width: 120 },
           { key: "handout", label: "Handout", type: "select", options: INCLUSION_OPTIONS, width: 120 },
           { key: "ncert", label: "NCERT", type: "select", options: INCLUSION_OPTIONS, width: 120 },
@@ -3102,10 +3099,7 @@ function SinglePagerTab({ db, updateSlice }) {
           db={db} updateSlice={updateSlice}
           initialMicrotopic={addTopicFor.typedName} initialSubject={addTopicFor.subject}
           onCreated={(newId, createdSubject) => {
-            updateSlice(addTopicFor.trackerKey, prev => prev.map(r => {
-              if (r.id !== addTopicFor.recId) return r;
-              return { ...r, microtopics: [...(r.microtopics || []), newId], subject: r.subject || createdSubject };
-            }));
+            addTopicFor.attach(newId, createdSubject);
             setAddTopicFor(null);
           }}
           onClose={() => setAddTopicFor(null)}
@@ -3129,7 +3123,7 @@ function NcertTab({ db, updateSlice }) {
           { key: "date", label: "Date", type: "date", width: 110 },
           gsPaperColumn(),
           subjectSingleSelectColumn(db),
-          microtopicTagColumn(db, "ncert", setAddTopicFor, "Topic"),
+          microtopicTagColumn(db, setAddTopicFor, "Topic"),
           { key: "book", label: "Book", width: 150 },
           { key: "chapter", label: "Chapter", width: 140 },
         ]}
@@ -3140,10 +3134,7 @@ function NcertTab({ db, updateSlice }) {
           db={db} updateSlice={updateSlice}
           initialMicrotopic={addTopicFor.typedName} initialSubject={addTopicFor.subject}
           onCreated={(newId, createdSubject) => {
-            updateSlice(addTopicFor.trackerKey, prev => prev.map(r => {
-              if (r.id !== addTopicFor.recId) return r;
-              return { ...r, microtopics: [...(r.microtopics || []), newId], subject: r.subject || createdSubject };
-            }));
+            addTopicFor.attach(newId, createdSubject);
             setAddTopicFor(null);
           }}
           onClose={() => setAddTopicFor(null)}
@@ -3167,7 +3158,7 @@ function StandardBooksTab({ db, updateSlice }) {
           { key: "date", label: "Date", type: "date", width: 110 },
           gsPaperColumn(),
           subjectSingleSelectColumn(db),
-          microtopicTagColumn(db, "standardBooks", setAddTopicFor, "Topic"),
+          microtopicTagColumn(db, setAddTopicFor, "Topic"),
           { key: "bookName", label: "Book", width: 150 },
           { key: "chapter", label: "Chapter", width: 140 },
           { key: "pages", label: "Pages", width: 80 },
@@ -3179,10 +3170,7 @@ function StandardBooksTab({ db, updateSlice }) {
           db={db} updateSlice={updateSlice}
           initialMicrotopic={addTopicFor.typedName} initialSubject={addTopicFor.subject}
           onCreated={(newId, createdSubject) => {
-            updateSlice(addTopicFor.trackerKey, prev => prev.map(r => {
-              if (r.id !== addTopicFor.recId) return r;
-              return { ...r, microtopics: [...(r.microtopics || []), newId], subject: r.subject || createdSubject };
-            }));
+            addTopicFor.attach(newId, createdSubject);
             setAddTopicFor(null);
           }}
           onClose={() => setAddTopicFor(null)}
@@ -3429,10 +3417,18 @@ function subjectSingleSelectColumn(db) {
 // Topic under whichever Subject(s) apply to this row (across all their
 // Topics/Subtopics), since one row can draw on several. "+ Add new"
 // doesn't invent a row inline — it opens AddSyllabusRowPopup via
-// setAddTopicFor, tagged with which tracker (`trackerKey`) the new row
-// should attach to, since there's no single Topic/Subtopic here to safely
+// setAddTopicFor, since there's no single Topic/Subtopic here to safely
 // assume (even with one Subject, there could be many Topics under it).
-function microtopicTagColumn(db, trackerKey, setAddTopicFor, label = "Micro Topic") {
+//
+// `attach` (not a tracker/record-id lookup) is what wires the popup's
+// result back to the row that actually triggered it: it closes over
+// *this render call's own* `updateRecord`, `rec`, and `values`, so it
+// works identically whether `rec` is a real table row (`updateRecord` ==
+// updateFields against `records`) or a quick-add drawer's `draft`
+// (`updateRecord` == updateDraftFields — draft has no id in `records` to
+// look up afterwards, which is exactly what broke when this used to
+// re-find the record by id once the popup closed).
+function microtopicTagColumn(db, setAddTopicFor, label = "Micro Topic") {
   return {
     key: "microtopics", label, width: 220, type: "custom",
     render: (rec, _onChange, updateRecord) => {
@@ -3445,7 +3441,14 @@ function microtopicTagColumn(db, trackerKey, setAddTopicFor, label = "Micro Topi
           resolveLabel={v => resolveMicrotopicLabelById(db, v)}
           placeholder={subjects.length ? `+ Add ${label.toLowerCase()}` : "Add a Subject first, or + Add new"}
           onChange={v => updateRecord({ microtopics: v })}
-          onAddNew={name => setAddTopicFor({ trackerKey, recId: rec.id, typedName: name, subject: subjects.length === 1 ? subjects[0] : "" })}
+          onAddNew={name => setAddTopicFor({
+            typedName: name, subject: subjects.length === 1 ? subjects[0] : "",
+            attach: (newId, createdSubject) => updateRecord(
+              rec.subjects !== undefined
+                ? { microtopics: [...values, newId], subjects: subjects.includes(createdSubject) ? subjects : [...subjects, createdSubject] }
+                : { microtopics: [...values, newId], subject: rec.subject || createdSubject }
+            ),
+          })}
         />
       );
     },
@@ -3544,7 +3547,7 @@ function AddSyllabusRowPopup({ db, updateSlice, initialMicrotopic, initialSubjec
 
 function AnswerWritingTab({ db, updateSlice }) {
   const [sub, setSub] = useState("mine");
-  const [addTopicFor, setAddTopicFor] = useState(null); // { trackerKey, recId, typedName, subject } | null
+  const [addTopicFor, setAddTopicFor] = useState(null); // { typedName, subject, attach } | null
   return (
     <div className="ucc-card">
       <div className="ucc-tabbar">
@@ -3562,7 +3565,7 @@ function AnswerWritingTab({ db, updateSlice }) {
               { key: "date", label: "Date", type: "date", width: 110 },
               gsPaperColumn(),
               subjectTagColumn(db),
-              microtopicTagColumn(db, "answerWriting", setAddTopicFor),
+              microtopicTagColumn(db, setAddTopicFor),
               { key: "question", label: "Question", type: "textarea", width: 240 },
               { key: "wordLimit", label: "Word Limit", type: "number", width: 90 },
               { key: "status", label: "Status", type: "status", options: TASK_STATUS, width: 140 },
@@ -3593,7 +3596,7 @@ function AnswerWritingTab({ db, updateSlice }) {
               { key: "date", label: "Date", type: "date", width: 110 },
               gsPaperColumn(),
               subjectTagColumn(db),
-              microtopicTagColumn(db, "topperCopies", setAddTopicFor),
+              microtopicTagColumn(db, setAddTopicFor),
               { key: "question", label: "Question", type: "textarea", width: 240, readableWhenLocked: true },
               { key: "observations", label: "Observations", type: "textarea", width: 220, readableWhenLocked: true },
               { key: "status", label: "Status", type: "status", options: TOPPER_STATUS, width: 130 },
@@ -3618,11 +3621,7 @@ function AnswerWritingTab({ db, updateSlice }) {
           db={db} updateSlice={updateSlice}
           initialMicrotopic={addTopicFor.typedName} initialSubject={addTopicFor.subject}
           onCreated={(newId, createdSubject) => {
-            updateSlice(addTopicFor.trackerKey, prev => prev.map(r => {
-              if (r.id !== addTopicFor.recId) return r;
-              const nextSubjects = (r.subjects || []).includes(createdSubject) ? (r.subjects || []) : [...(r.subjects || []), createdSubject];
-              return { ...r, microtopics: [...(r.microtopics || []), newId], subjects: nextSubjects };
-            }));
+            addTopicFor.attach(newId, createdSubject);
             setAddTopicFor(null);
           }}
           onClose={() => setAddTopicFor(null)}
