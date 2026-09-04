@@ -3766,13 +3766,16 @@ function DashboardTab({ db }) {
       });
   }, [settings.subjects, settings.totalClassesBySubject, db.classes]);
 
-  // Overall class status pie: Completed / In Progress / Not Completed
-  // (Not Started + Partially Completed + Skipped, bucketed together).
+  // Overall class status pie: Completed / In Progress / Partially Completed
+  // / Not Completed (Not Started + Skipped, bucketed together — those two
+  // don't get their own slice, unlike Partially Completed which is common
+  // enough in practice to warrant breaking out on its own).
   const classStatusCounts = useMemo(() => {
-    const counts = { Completed: 0, "In Progress": 0, "Not Completed": 0 };
+    const counts = { Completed: 0, "In Progress": 0, "Partially Completed": 0, "Not Completed": 0 };
     db.classes.forEach(c => {
       if (c.status === "Completed") counts.Completed++;
       else if (c.status === "In Progress") counts["In Progress"]++;
+      else if (c.status === "Partially Completed") counts["Partially Completed"]++;
       else counts["Not Completed"]++;
     });
     return counts;
@@ -3824,6 +3827,7 @@ function DashboardTab({ db }) {
         <PieChart segments={[
           { label: "Completed", value: classStatusCounts.Completed, color: "var(--green)" },
           { label: "In Progress", value: classStatusCounts["In Progress"], color: "var(--amber)" },
+          { label: "Partially Completed", value: classStatusCounts["Partially Completed"], color: "var(--red)" },
           { label: "Not Completed", value: classStatusCounts["Not Completed"], color: "var(--grey)" },
         ]} />
       </div>
