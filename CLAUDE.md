@@ -314,7 +314,7 @@ summary will do.
     options to Subjects already on Syllabus under the row's GS Paper, and
     both are `allowAddNew={false}` — Subject stays purely Syllabus-governed
     everywhere now, a new Subject is added on Settings/Syllabus instead.
-  - `microtopicTagColumn(db, trackerKey, setAddTopicFor, label)` — a tag
+  - `microtopicTagColumn(db, setAddTopicFor, label)` — a tag
     array (`rec.microtopics`, Syllabus row ids, works identically for
     either the single `rec.subject` or the array `rec.subjects` shape
     above) linked via `microtopicRowOptionsForSubjects`: every Micro Topic
@@ -325,8 +325,16 @@ summary will do.
     new" never inherits context and creates a row inline — there's no
     single Topic/Subtopic to safely assume even with one Subject known —
     it opens `AddSyllabusRowPopup` via `setAddTopicFor` (one small piece
-    of state per tab, tagged with `trackerKey` so the popup knows which
-    `db.*` array to tag the new row onto).
+    of state per tab). `setAddTopicFor` stores an `attach(newId,
+    createdSubject)` closure captured from *that render call's own*
+    `updateRecord`, not a `{trackerKey, recId}` pair to re-find the record
+    by id afterwards — the latter used to be how this worked, and it
+    silently dropped the new tag whenever the triggering row wasn't in
+    `records` yet (a Classes quick-add drawer draft, for one — a real bug,
+    fixed). If you add another place `microtopicTagColumn` renders against
+    something that isn't a `records` entry, this is why it'll still work:
+    `attach` only ever depends on the closure, never on looking anything
+    back up by id.
   `AddSyllabusRowPopup` replicates Syllabus's own add-a-row flow (GS
   Paper/Subject/Topic/Subtopic pickers, Micro Topic pre-filled with
   whatever was just typed); confirming creates a real Syllabus row and
