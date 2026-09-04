@@ -481,12 +481,11 @@ summary will do.
     only appears here once its total is set; "no total set" and "0% done"
     are treated as different things.
   - **Classes — overall status** pie chart buckets every class's status
-    into four groups: Completed, In Progress, Partially Completed (its own
-    slice — common enough in practice to break out), and Not Completed
-    (Not Started + Skipped, combined). `PieChart` is a small
-    dependency-free component (CSS `conic-gradient`, no charting library)
-    — reuse it for future charts rather than adding a chart dependency for
-    a simple pie/donut.
+    into exactly three groups: Completed, In Progress, and Not Completed
+    (Not Started + Partially Completed + Skipped, combined). `PieChart` is
+    a small dependency-free component (CSS `conic-gradient`, no charting
+    library) — reuse it for future charts rather than adding a chart
+    dependency for a simple pie/donut.
   - **Answers written**: plain counts, GS Answer Writing by `GS_PAPERS`
     (the shared GS1–4/Essay list, also used by Answer Writing's own
     dropdown) and a single Tamil Writing total (Tamil has no "paper"
