@@ -63,15 +63,15 @@ const CSS = `
      gets more urgent-looking as the date approaches instead of nagging for
      the whole year. */
   .ucc-countdown{
-    display:inline-flex; align-items:center; gap:6px; padding:6px 13px; border-radius:20px;
-    font-size:12.5px; font-weight:700; white-space:nowrap; letter-spacing:0.01em; flex-shrink:0;
+    display:inline-flex; align-items:center; gap:9px; padding:11px 22px; border-radius:28px;
+    font-size:17px; font-weight:800; white-space:nowrap; letter-spacing:0.01em; flex-shrink:0;
   }
   .ucc-countdown.navy{background:var(--navy); color:#fff;}
   .ucc-countdown.amber{background:var(--amber); color:#fff;}
   .ucc-countdown.red{background:var(--red); color:#fff; animation:ucc-countdown-pulse 2.4s ease-in-out infinite;}
   @keyframes ucc-countdown-pulse{
     0%, 100%{box-shadow:0 0 0 0 rgba(180,64,42,0.35);}
-    50%{box-shadow:0 0 0 6px rgba(180,64,42,0);}
+    50%{box-shadow:0 0 0 9px rgba(180,64,42,0);}
   }
   .ucc-content{padding:22px 26px 60px 26px; max-width:1180px; width:100%;}
   .ucc-card{background:var(--surface); border:1px solid var(--line); border-radius:8px; padding:16px 18px; margin-bottom:16px;}
@@ -1131,7 +1131,7 @@ function PrelimsCountdown() {
     : "Prelims 2027 has passed";
   return (
     <div className={`ucc-countdown ${tone}`} title={`UPSC Prelims 2027 — ${fmtDateLong(PRELIMS_2027_DATE)}`}>
-      <Target size={13} />
+      <Target size={19} />
       <span>{label}</span>
     </div>
   );
