@@ -631,44 +631,45 @@ summary will do.
   If you add a column whose value is an array/object and it should be
   filterable, that needs deliberate handling here, not an assumption that
   it'll "just work" like the primitive-valued columns do.
-- **Quick-add sidebar (`GenericTracker`'s optional `quickAddLabel` prop,
+- **Quick-add drawer (`GenericTracker`'s optional `quickAddLabel` prop,
   e.g. `quickAddLabel="class"` on Classes) is a real draft/commit flow —
   the one place in this app where edits aren't saved immediately.** A
-  local `draft` state (initialized via `newRecord()`) backs every field in
-  the sidebar; typing into Date/GS Paper/etc. only updates `draft`, never
+  local `draft` state (initialized via `newRecord()`) backs every field;
+  typing into Date/GS Paper/etc. only updates `draft`, never
   `records`/Supabase. The row is created (via `submitQuickAdd`, `{id:
-  uid(), history: [], ...draft}`) only when "Add {label}" is clicked, at
-  which point `draft` resets to a fresh blank one so the sidebar is
-  immediately ready for the next entry ("static" — always showing the
-  full form, never toggling to a button-only state). `quickAddOrder`
-  (optional array of column keys) controls the sidebar's field order
+  uid(), history: [], ...draft}`) only when "Add {label}" is clicked,
+  which also resets `draft` to blank and closes the drawer
+  (`quickAddOpen` state) back to the plain table view. Closed by default —
+  a small fixed tab-button (`.ucc-quickadd-fab`) on the right edge of the
+  viewport opens it as an overlay (`.ucc-quickadd-drawer` +
+  `.ucc-quickadd-backdrop`, `position:fixed`, closes on backdrop click or
+  the × ). Deliberately an overlay rather than a permanent layout column
+  (an earlier version of this tried that — see git history on the Classes
+  quick-add PRs if you need the reasoning) so it never costs the table any
+  width while closed, which is most of the time. `quickAddOrder`
+  (optional array of column keys) controls the drawer's field order
   independently of the table's column order — Classes uses it to show
   Date, GS Paper, Subject, Class, Topic, ETA, Status, File in that order
   even though the table itself keeps Date, Class, GS Paper, Subject...
-  Both the sidebar and the table `<td>`s render every column through the
+  Both the drawer and the table `<td>`s render every column through the
   same `renderCellForColumn(rec, col, { onChange, onPatch, locked,
   partiallyLocked })` helper — the table passes callbacks that call
-  `updateField`/`updateFields` (writes to `records`), the sidebar passes
+  `updateField`/`updateFields` (writes to `records`), the drawer passes
   `updateDraftField`/`updateDraftFields` (writes to local `draft` state,
   mirroring the same completionRequiresUpload/"Partially Completed"
   guards). This is why custom columns (cascading GS Paper → Subject, the
-  Micro Topic tag picker, the Drive uploader) work in the sidebar with no
+  Micro Topic tag picker, the Drive uploader) work in the drawer with no
   special-casing — they only ever depend on `rec` and the two callbacks,
   never on being inside a `<tr>` or on `rec` already existing in
-  `records`. Layout is a real in-flow flex row (`.ucc-tracker-layout`:
-  `.ucc-tracker-main` `flex:1` + `.ucc-quickadd-panel` `flex:0 0 280px`,
-  `position:sticky`) rather than a `position:fixed` overlay — deliberately
-  so widening `ucc-content` (see the Classes-only `.ucc-content-wide`
-  class, `max-width:1800px` vs. the app default `1180px`, applied in the
-  shell via `tab === "classes"`) can never make it overlap the table; the
-  two just split whatever width `ucc-content` has. Below `1100px`
-  viewport width the layout stacks (sidebar drops below the table, full
-  width) rather than disappearing, so it stays usable on laptop/tablet
-  too. Currently wired up for Classes only — enable it on another
-  `GenericTracker`-based tab by adding `quickAddLabel`/`quickAddOrder` to
-  that tab's `<GenericTracker>` call (and its own `-wide` content class in
-  the shell, if it also needs more table width); no other plumbing
-  required.
+  `records`. Classes also gets a moderate width bump over the app default
+  (`.ucc-content-wide`, `max-width:1450px` vs. the normal `1180px`,
+  applied in the shell via `tab === "classes"`) — a fixed, deliberately
+  more modest number than the table would need if the drawer were a
+  permanent column, since it no longer is. Currently wired up for Classes
+  only — enable it on another `GenericTracker`-based tab by adding
+  `quickAddLabel`/`quickAddOrder` to that tab's `<GenericTracker>` call
+  (and its own `-wide` content class in the shell, if it also needs more
+  table width); no other plumbing required.
 - **`GenericTracker` paginates at 100 rows (`PAGE_SIZE`) — this is a
   second, separate performance fix from the `getSyllabusIndex`/
   `getSourceIdentifiedIndex` caching described above, not a duplicate of
