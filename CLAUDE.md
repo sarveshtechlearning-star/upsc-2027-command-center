@@ -631,6 +631,26 @@ summary will do.
   If you add a column whose value is an array/object and it should be
   filterable, that needs deliberate handling here, not an assumption that
   it'll "just work" like the primitive-valued columns do.
+- **Quick-add sidebar (`GenericTracker`'s optional `quickAddLabel` prop,
+  e.g. `quickAddLabel="class"` on Classes)** — a fixed panel in the gutter
+  right of `ucc-content`, shown only above `1500px` viewport width
+  (`.ucc-quickadd-panel`'s media query); below that it's simply absent and
+  trackers fall back to the existing bottom "Add row" button, so nothing
+  is lost on laptop/tablet/mobile. Clicking "+ Add {label}" calls
+  `startQuickAdd`, which does the *exact same thing* `addRecord` does (a
+  real, immediately-saved blank row — this app has no draft/commit step
+  anywhere else, so the sidebar doesn't invent one) but also opens that
+  row's fields in the sidebar via `quickAddId`. Both the sidebar and the
+  normal `<td>`s render every column through the same `renderCellForColumn`
+  helper, so custom columns (cascading GS Paper → Subject, the Micro Topic
+  tag picker, the Drive uploader) work in the sidebar with no special-
+  casing — they already only depend on `rec`/`updateRecord(patch)`, not on
+  being inside a `<tr>`. "Done" just clears `quickAddId` (the row is
+  already saved); the trash icon removes it via the normal `removeRecord`.
+  Currently wired up for Classes only — enable it on another
+  `GenericTracker`-based tab the same way (add `quickAddLabel="..."` to
+  that tab's `<GenericTracker>` call) if it grows large enough to need it
+  too; no other plumbing required.
 - **`GenericTracker` paginates at 100 rows (`PAGE_SIZE`) — this is a
   second, separate performance fix from the `getSyllabusIndex`/
   `getSourceIdentifiedIndex` caching described above, not a duplicate of

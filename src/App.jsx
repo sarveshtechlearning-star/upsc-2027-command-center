@@ -74,6 +74,18 @@ const CSS = `
     50%{box-shadow:0 0 0 9px rgba(180,64,42,0);}
   }
   .ucc-content{padding:22px 26px 60px 26px; max-width:1180px; width:100%;}
+  /* Quick-add sidebar (GenericTracker's optional quickAddLabel prop) — sits
+     in the gutter to the right of ucc-content on wide screens only. Hidden
+     by default; the min-width media query below turns it into a fixed
+     panel once there's actually room for it without overlapping the table
+     (which stays capped at ucc-content's max-width regardless). Below that
+     width, trackers fall back to the existing bottom "Add row" button —
+     nothing is lost, the sidebar is a wide-screen convenience layered on
+     top of it, not a replacement.
+  */
+  .ucc-quickadd-panel{ display:none; }
+  .ucc-quickadd-field{ margin-bottom:10px; }
+  .ucc-quickadd-field label{ display:block; margin-bottom:3px; }
   .ucc-card{background:var(--surface); border:1px solid var(--line); border-radius:8px; padding:16px 18px; margin-bottom:16px;}
   .ucc-card h3{margin:0 0 10px 0; font-size:13px; text-transform:uppercase; letter-spacing:0.04em; color:var(--ink-muted); font-weight:700;}
   .ucc-grid{display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:14px;}
@@ -182,6 +194,16 @@ const CSS = `
   .ucc-histrow{background:#FAFAF9; font-size:11.5px; color:var(--ink-muted);}
   .ucc-histrow td{padding:6px 8px 10px 8px;}
   .ucc-mobile-tabs{display:none;}
+  @media (min-width: 1500px){
+    .ucc-quickadd-panel{
+      display:block; position:fixed; top:96px; right:24px; width:260px; z-index:4;
+      max-height:calc(100vh - 120px); overflow-y:auto;
+    }
+    .ucc-quickadd-inner{
+      background:var(--surface); border:1px solid var(--line); border-radius:8px;
+      padding:16px 18px; box-shadow:0 4px 16px rgba(0,0,0,0.08);
+    }
+  }
   @media (max-width: 880px){
     .ucc-nav{display:none;}
     .ucc-mobile-tabs{
@@ -1178,11 +1200,15 @@ function IconBtn({ icon: Icon, onClick, title, danger, disabled }) {
 /* ============================================================
    GENERIC TRACKER TABLE
    ============================================================ */
-function GenericTracker({ records, setRecords, columns, newRecord, emptyMessage, dense, datalists, confirmRemove, completionRequiresUpload }) {
+function GenericTracker({ records, setRecords, columns, newRecord, emptyMessage, dense, datalists, confirmRemove, completionRequiresUpload, quickAddLabel }) {
   const [expanded, setExpanded] = useState(() => new Set());
   const [filters, setFilters] = useState({});
   const [page, setPage] = useState(0);
   const [reorderMode, setReorderMode] = useState(false);
+  // Which record (by id) the quick-add sidebar is currently showing fields
+  // for, if any — see startQuickAdd/the sidebar render below. null means
+  // the sidebar just shows its "+ Add" button.
+  const [quickAddId, setQuickAddId] = useState(null);
   const PAGE_SIZE = 100;
 
   // Swaps a record with its immediate neighbor in the underlying (unfiltered,
@@ -1275,6 +1301,56 @@ function GenericTracker({ records, setRecords, columns, newRecord, emptyMessage,
     setRecords(prev => [...prev, rec]);
     setFilters({}); // otherwise the new (mostly blank) row can vanish behind an active filter
     setPage(Math.floor(records.length / PAGE_SIZE)); // new row lands at the end — jump to the page that shows it
+  }
+
+  // Same underlying action as addRecord (a real, immediately-saved blank
+  // row — this app doesn't have a separate draft/commit step anywhere else,
+  // so the quick-add sidebar doesn't invent one either), but also opens
+  // that row's fields in the sidebar so they can be filled in without
+  // scrolling to the bottom of a long table to find it. Because it's the
+  // exact same record object the table renders, every column type
+  // (including cascading dropdowns, tag pickers, and the Drive uploader)
+  // "just works" in the sidebar via renderCellForColumn — no separate
+  // quick-add-specific field logic to keep in sync.
+  function startQuickAdd() {
+    const rec = { id: uid(), history: [], ...newRecord() };
+    setRecords(prev => [...prev, rec]);
+    setFilters({});
+    setQuickAddId(rec.id);
+  }
+
+  // Renders one column's editable cell for a given record — the exact same
+  // input/select/custom-render logic whether it's inside a <td> (the normal
+  // table row) or inside the quick-add sidebar (see below). Keeping this in
+  // one place means every column type (including "custom" ones like the
+  // GS Paper/Subject/Micro Topic cascades and the Drive file uploader) works
+  // identically in both places for free, with no special-casing per column.
+  function renderCellForColumn(rec, col) {
+    const isStatusCol = col.type === "status";
+    const locked = completionRequiresUpload && rec.status === "Completed";
+    const partiallyLocked = rec.status === "Partially Completed";
+    return isStatusCol ? (
+      <div className="ucc-flex" style={{ gap: 4 }}>
+        <StatusSelect value={rec[col.key]} options={col.options} onChange={v => updateField(rec, col, v, true)} />
+        {locked && <Lock size={13} style={{ color: "var(--green)", flexShrink: 0 }} aria-label="Row locked — change Status to edit" />}
+        {partiallyLocked && <Lock size={13} style={{ color: "var(--red)", flexShrink: 0 }} aria-label="Row locked while Partially Completed — change Status to edit anything but Date or the uploaded file" />}
+      </div>
+    ) : col.type === "custom" ? (
+      col.render(rec, (val, isStatus) => updateField(rec, col, val, isStatus), patch => updateFields(rec, patch))
+    ) : col.type === "date" ? (
+      <input type="date" className="ucc-input ucc-mono" value={rec[col.key] || ""} onChange={e => updateField(rec, col, e.target.value)} />
+    ) : col.type === "number" ? (
+      <input type="number" className="ucc-input ucc-mono" value={rec[col.key] ?? ""} onChange={e => updateField(rec, col, e.target.value)} style={{ width: 70 }} />
+    ) : col.type === "textarea" ? (
+      <textarea className="ucc-textarea" value={rec[col.key] || ""} onChange={e => updateField(rec, col, e.target.value)} rows={dense ? 1 : 2} />
+    ) : col.type === "select" ? (
+      <select className="ucc-select" value={rec[col.key] || ""} onChange={e => updateField(rec, col, e.target.value)}>
+        <option value="">—</option>
+        {col.options.map(o => <option key={o} value={o}>{o}</option>)}
+      </select>
+    ) : (
+      <input type="text" list={typeof col.datalist === "function" ? col.datalist(rec) : col.datalist} className="ucc-input" value={rec[col.key] || ""} onChange={e => updateField(rec, col, e.target.value)} placeholder={col.placeholder} />
+    );
   }
 
   function toggleExpand(id) {
@@ -1421,28 +1497,7 @@ function GenericTracker({ records, setRecords, columns, newRecord, emptyMessage,
                     const isStatusCol = col.type === "status";
                     const isDateCol = col.key === "date";
                     const isDriveFileCol = col.key === "driveFile";
-                    const cell = isStatusCol ? (
-                      <div className="ucc-flex" style={{ gap: 4 }}>
-                        <StatusSelect value={rec[col.key]} options={col.options} onChange={v => updateField(rec, col, v, true)} />
-                        {locked && <Lock size={13} style={{ color: "var(--green)", flexShrink: 0 }} aria-label="Row locked — change Status to edit" />}
-                        {partiallyLocked && <Lock size={13} style={{ color: "var(--red)", flexShrink: 0 }} aria-label="Row locked while Partially Completed — change Status to edit anything but Date or the uploaded file" />}
-                      </div>
-                    ) : col.type === "custom" ? (
-                      col.render(rec, (val, isStatus) => updateField(rec, col, val, isStatus), patch => updateFields(rec, patch))
-                    ) : col.type === "date" ? (
-                      <input type="date" className="ucc-input ucc-mono" value={rec[col.key] || ""} onChange={e => updateField(rec, col, e.target.value)} />
-                    ) : col.type === "number" ? (
-                      <input type="number" className="ucc-input ucc-mono" value={rec[col.key] ?? ""} onChange={e => updateField(rec, col, e.target.value)} style={{ width: 70 }} />
-                    ) : col.type === "textarea" ? (
-                      <textarea className="ucc-textarea" value={rec[col.key] || ""} onChange={e => updateField(rec, col, e.target.value)} rows={dense ? 1 : 2} />
-                    ) : col.type === "select" ? (
-                      <select className="ucc-select" value={rec[col.key] || ""} onChange={e => updateField(rec, col, e.target.value)}>
-                        <option value="">—</option>
-                        {col.options.map(o => <option key={o} value={o}>{o}</option>)}
-                      </select>
-                    ) : (
-                      <input type="text" list={typeof col.datalist === "function" ? col.datalist(rec) : col.datalist} className="ucc-input" value={rec[col.key] || ""} onChange={e => updateField(rec, col, e.target.value)} placeholder={col.placeholder} />
-                    );
+                    const cell = renderCellForColumn(rec, col);
                     return (
                       <td key={col.key}>
                         {locked && !isStatusCol && col.readableWhenLocked ? (
@@ -1509,6 +1564,41 @@ function GenericTracker({ records, setRecords, columns, newRecord, emptyMessage,
         </div>
       )}
       <button className="ucc-btn" style={{ marginTop: 10 }} onClick={addRecord}><Plus size={14} /> Add row</button>
+      {quickAddLabel && (
+        <div className="ucc-quickadd-panel">
+          <div className="ucc-quickadd-inner">
+            {quickAddId && records.find(r => r.id === quickAddId) ? (
+              (() => {
+                const rec = records.find(r => r.id === quickAddId);
+                return (
+                  <>
+                    <div className="ucc-flex between" style={{ marginBottom: 10 }}>
+                      <h3 style={{ margin: 0 }}>New {quickAddLabel}</h3>
+                      <IconBtn icon={X} onClick={() => setQuickAddId(null)} title="Done — keep this row and close" />
+                    </div>
+                    {columns.map(col => (
+                      <div key={col.key} className="ucc-quickadd-field">
+                        <label className="ucc-tiny">{col.label}</label>
+                        {renderCellForColumn(rec, col)}
+                      </div>
+                    ))}
+                    <div className="ucc-flex" style={{ marginTop: 12, gap: 8 }}>
+                      <button className="ucc-btn" style={{ flex: 1, justifyContent: "center" }} onClick={() => setQuickAddId(null)}>
+                        <Check size={13} /> Done
+                      </button>
+                      <IconBtn icon={Trash2} onClick={() => { removeRecord(rec.id); setQuickAddId(null); }} title="Delete this row" danger />
+                    </div>
+                  </>
+                );
+              })()
+            ) : (
+              <button className="ucc-btn" style={{ width: "100%", justifyContent: "center" }} onClick={startQuickAdd}>
+                <Plus size={14} /> Add {quickAddLabel}
+              </button>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -2504,6 +2594,7 @@ function ClassesTab({ db, updateSlice }) {
             },
           ]}
           newRecord={() => ({ date: todayISO(), gsPaper: "", subject: "", classNumber: "", microtopics: [], eta: "", status: "Not Started", driveFile: null })}
+          quickAddLabel="class"
         />
       </div>
       {addTopicFor && (
