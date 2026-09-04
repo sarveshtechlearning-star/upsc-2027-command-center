@@ -21,6 +21,7 @@ const CSS = `
     --red:#B4402A; --red-soft:#F6E1DC;
     --grey:#8B939B; --grey-soft:#ECEDEE;
     --blue:#2F5FA8; --blue-soft:#DEE7F5;
+    --gold:#9C7A17; --gold-soft:#F5EBC7;
     --study:#29344A; --office:#7A6A52; --travel:#A08A68; --ai:#B7791F; --break:#D8DBDC;
     --sec-s1:#3E7C74; --sec-s2:#29344A; --sec-s3:#7C5295; --sec-s4:#B0562F;
     --sec-s5:#9C4F6E; --sec-s6:#3B6B94; --sec-s7:#6E7A3A; --sec-custom:#5B6470;
@@ -2100,6 +2101,23 @@ function computeConsistencyStreak(db) {
   }
   return streak;
 }
+// Streak widget's color tone by count: 0 (broken) is red, 1-20 blue,
+// 21-99 green, 100+ gold — each step is a small "leveled up" moment
+// rather than the same red nag forever regardless of how long the streak
+// actually runs. Centralized here (rather than inlined in the widget)
+// since both the solid and soft/background shades key off the same tone.
+function streakTone(streak) {
+  if (streak <= 0) return "red";
+  if (streak <= 20) return "blue";
+  if (streak <= 99) return "green";
+  return "gold";
+}
+const STREAK_TONE_COLORS = {
+  red: { solid: "var(--red)", soft: "var(--red-soft)" },
+  blue: { solid: "var(--blue)", soft: "var(--blue-soft)" },
+  green: { solid: "var(--green)", soft: "var(--green-soft)" },
+  gold: { solid: "var(--gold)", soft: "var(--gold-soft)" },
+};
 function computePendingTasks(db) {
   const items = [];
   const topicCompletionIndexes = buildTopicCompletionIndexes(db);
@@ -2397,11 +2415,12 @@ function TodayTab({ db, updateSlice, onNavigate }) {
           flex: "1 1 220px", maxWidth: 260, minHeight: 300, margin: 0, padding: "24px 20px",
           display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
           textAlign: "center", gap: 8,
-          background: "var(--red-soft)", border: "3px solid var(--red)",
+          background: STREAK_TONE_COLORS[streakTone(consistencyStreak)].soft,
+          border: `3px solid ${STREAK_TONE_COLORS[streakTone(consistencyStreak)].solid}`,
         }}>
-          <Flame size={44} style={{ color: "var(--red)" }} />
-          <div style={{ fontSize: 52, fontWeight: 800, color: "var(--red)", lineHeight: 1 }}>{consistencyStreak}</div>
-          <div style={{ fontSize: 16, fontWeight: 700, color: "var(--red)" }}>day{consistencyStreak === 1 ? "" : "s"} streak</div>
+          <Flame size={44} style={{ color: STREAK_TONE_COLORS[streakTone(consistencyStreak)].solid }} />
+          <div style={{ fontSize: 52, fontWeight: 800, color: STREAK_TONE_COLORS[streakTone(consistencyStreak)].solid, lineHeight: 1 }}>{consistencyStreak}</div>
+          <div style={{ fontSize: 16, fontWeight: 700, color: STREAK_TONE_COLORS[streakTone(consistencyStreak)].solid }}>day{consistencyStreak === 1 ? "" : "s"} streak</div>
           <div className="ucc-tiny" style={{ color: "var(--ink-muted)", marginTop: 8 }}>
             Log anything today — a class, a chapter, an answer, a single pager — to keep it going.
           </div>

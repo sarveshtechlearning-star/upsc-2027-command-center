@@ -188,7 +188,14 @@ summary will do.
     shouldn't zero out an otherwise-alive streak). NCERT and Standard Books
     gained a `date` field for this specifically — neither had one before,
     since neither needed one until a cross-tracker "was something logged
-    today" check existed.
+    today" check existed. Its color is driven by `streakTone(streak)`
+    (0 → red, 1–20 → blue, 21–99 → green, 100+ → gold, via
+    `STREAK_TONE_COLORS`), not a fixed red — the widget's background,
+    border, icon, and text all key off the same tone lookup, so adding a
+    new tier means updating `streakTone`'s thresholds and
+    `STREAK_TONE_COLORS`' palette, not the widget's JSX itself. `--gold`/
+    `--gold-soft` were added to the `:root` token list for this since
+    nothing gold-ish existed in the palette before.
   - **Syllabus's own `studyStatus`/`revisionStatus` fields are dead** —
     never shown or settable by any UI anymore (they used to sit behind
     this same duplication problem). Existing stored values on old rows are
