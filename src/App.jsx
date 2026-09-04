@@ -74,32 +74,38 @@ const CSS = `
     50%{box-shadow:0 0 0 9px rgba(180,64,42,0);}
   }
   .ucc-content{padding:22px 26px 60px 26px; max-width:1180px; width:100%;}
-  /* Classes gets more width than the app default so its quick-add sidebar
-     (below) has room alongside the table without squeezing it — see the
-     tab === "classes" check in the app shell. Other tabs are unaffected. */
-  .ucc-content-wide{ max-width:1800px; }
-  /* Quick-add sidebar (GenericTracker's optional quickAddLabel prop) — an
-     in-flow flex column next to the table (not an overlay), so widening
-     ucc-content never causes it to overlap the table: the browser just
-     splits whatever width ucc-content has between ucc-tracker-main
-     (flex:1) and this fixed-width column. Always visible ("static") next
-     to the table on wide screens; stacks below it under the max-width
-     media query rather than disappearing, so it stays usable on
-     laptop/tablet widths too.
+  /* Classes gets a bit more width than the app default now that its rows
+     routinely carry several Topic tags per cell — a moderate bump (not
+     the full range that would be needed to fit a permanent sidebar too,
+     since the quick-add panel is a drawer/overlay now, not a persistent
+     column — see .ucc-quickadd-drawer below). Applied only when
+     tab === "classes" in the shell; other tabs are unaffected. */
+  .ucc-content-wide{ max-width:1450px; }
+  /* Quick-add drawer (GenericTracker's optional quickAddLabel prop) — a
+     small tab-like button fixed to the right edge of the viewport; clicking
+     it slides in an overlay panel with the same fields as before. Being an
+     overlay (not a permanent flex column, which is what the previous
+     version of this used) means it never costs the table any width while
+     closed, which is most of the time — the table gets the full
+     ucc-content-wide width, and the drawer just floats on top for the
+     brief moment it's open.
   */
-  .ucc-tracker-layout{ display:flex; gap:20px; align-items:flex-start; }
-  .ucc-tracker-main{ flex:1; min-width:0; }
-  .ucc-quickadd-panel{ flex:0 0 280px; width:280px; position:sticky; top:96px; }
-  .ucc-quickadd-inner{
-    background:var(--surface); border:1px solid var(--line); border-radius:8px;
-    padding:16px 18px; box-shadow:0 4px 16px rgba(0,0,0,0.06);
+  .ucc-quickadd-fab{
+    position:fixed; top:50%; right:0; transform:translateY(-50%); z-index:10;
+    background:var(--navy); color:#fff; border:none; border-radius:8px 0 0 8px;
+    padding:12px 14px; font-size:13px; font-weight:700; cursor:pointer;
+    display:flex; flex-direction:column; align-items:center; gap:4px;
+    box-shadow:-2px 2px 10px rgba(0,0,0,0.15);
   }
+  .ucc-quickadd-backdrop{ position:fixed; inset:0; background:rgba(0,0,0,0.25); z-index:20; }
+  .ucc-quickadd-drawer{
+    position:fixed; top:0; right:0; height:100vh; width:340px; max-width:90vw;
+    background:var(--surface); z-index:21; padding:20px; overflow-y:auto;
+    box-shadow:-6px 0 24px rgba(0,0,0,0.18); animation:ucc-drawer-slide-in 0.2s ease-out;
+  }
+  @keyframes ucc-drawer-slide-in{ from{ transform:translateX(100%); } to{ transform:translateX(0); } }
   .ucc-quickadd-field{ margin-bottom:10px; }
   .ucc-quickadd-field label{ display:block; margin-bottom:3px; }
-  @media (max-width: 1100px){
-    .ucc-tracker-layout{ flex-direction:column; }
-    .ucc-quickadd-panel{ position:static; flex:none; width:100%; }
-  }
   .ucc-card{background:var(--surface); border:1px solid var(--line); border-radius:8px; padding:16px 18px; margin-bottom:16px;}
   .ucc-card h3{margin:0 0 10px 0; font-size:13px; text-transform:uppercase; letter-spacing:0.04em; color:var(--ink-muted); font-weight:700;}
   .ucc-grid{display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:14px;}
@@ -1209,13 +1215,15 @@ function GenericTracker({ records, setRecords, columns, newRecord, emptyMessage,
   const [filters, setFilters] = useState({});
   const [page, setPage] = useState(0);
   const [reorderMode, setReorderMode] = useState(false);
-  // Quick-add sidebar's draft record — plain local state, never written to
-  // `records`/Supabase until submitQuickAdd() runs. Deliberately a real
-  // draft/commit step here (unlike addRecord, which saves immediately) —
-  // this is what "only add the row once I click Add/Done" (not on the
-  // first keystroke) requires. Lazily initialized so trackers that don't
-  // pass quickAddLabel never call newRecord() an extra time.
+  // Quick-add drawer's draft record — plain local state, never written to
+  // `records`/Supabase until submitQuickAdd() runs (this app's only real
+  // draft/commit step; everything else autosaves). Lazily initialized so
+  // trackers that don't pass quickAddLabel never call newRecord() extra.
   const [draft, setDraft] = useState(() => (quickAddLabel ? newRecord() : null));
+  // Whether the drawer overlay is currently open — the drawer is closed by
+  // default (a small fixed tab-button on the right edge opens it), unlike
+  // the previous always-visible sidebar version of this feature.
+  const [quickAddOpen, setQuickAddOpen] = useState(false);
   const PAGE_SIZE = 100;
 
   // Swaps a record with its immediate neighbor in the underlying (unfiltered,
@@ -1338,14 +1346,14 @@ function GenericTracker({ records, setRecords, columns, newRecord, emptyMessage,
   }
   // The only point the draft actually becomes a saved row — mirrors
   // addRecord's shape (fresh id + empty history) so a quick-added row is
-  // indistinguishable from one added the old way. Resets the draft back to
-  // blank afterwards rather than closing the panel, since the sidebar is
-  // meant to stay put (static) for adding the next one straight away.
+  // indistinguishable from one added the old way. Resets the draft to
+  // blank and closes the drawer, returning to the plain table view.
   function submitQuickAdd() {
     const rec = { id: uid(), history: [], ...draft };
     setRecords(prev => [...prev, rec]);
     setFilters({});
     setDraft(newRecord());
+    setQuickAddOpen(false);
   }
 
   // Renders one column's editable cell — the exact same input/select/
@@ -1454,8 +1462,7 @@ function GenericTracker({ records, setRecords, columns, newRecord, emptyMessage,
   }
 
   return (
-    <div className={quickAddLabel ? "ucc-tracker-layout" : undefined}>
-    <div className="ucc-tracker-main" style={{ overflowX: "auto" }}>
+    <div style={{ overflowX: "auto" }}>
       {(datalists || []).map(dl => <datalist id={dl.id} key={dl.id}>{dl.options.map(o => <option key={o} value={o} />)}</datalist>)}
       <div className="ucc-flex between" style={{ marginBottom: 6 }}>
         <span className="ucc-tiny">{hasActiveFilters ? `Showing ${filteredRecords.length} of ${records.length}` : `${records.length} row${records.length === 1 ? "" : "s"}`}</span>
@@ -1598,31 +1605,36 @@ function GenericTracker({ records, setRecords, columns, newRecord, emptyMessage,
         </div>
       )}
       <button className="ucc-btn" style={{ marginTop: 10 }} onClick={addRecord}><Plus size={14} /> Add row</button>
-    </div>
-    {quickAddLabel && (
-      <div className="ucc-quickadd-panel">
-        <div className="ucc-quickadd-inner">
-          <div className="ucc-flex between" style={{ marginBottom: 10 }}>
-            <h3 style={{ margin: 0 }}>Add {quickAddLabel}</h3>
-            <IconBtn icon={X} onClick={() => setDraft(newRecord())} title="Clear fields" />
-          </div>
-          {(quickAddOrder ? quickAddOrder.map(key => columns.find(c => c.key === key)).filter(Boolean) : columns).map(col => (
-            <div key={col.key} className="ucc-quickadd-field">
-              <label className="ucc-tiny">{col.label}</label>
-              {renderCellForColumn(draft, col, {
-                onChange: (val, isStatus) => updateDraftField(col, val, isStatus),
-                onPatch: patch => updateDraftFields(patch),
-                locked: completionRequiresUpload && draft.status === "Completed",
-                partiallyLocked: draft.status === "Partially Completed",
-              })}
+      {quickAddLabel && !quickAddOpen && (
+        <button className="ucc-quickadd-fab" onClick={() => setQuickAddOpen(true)}>
+          <Plus size={16} /> Add {quickAddLabel}
+        </button>
+      )}
+      {quickAddLabel && quickAddOpen && (
+        <>
+          <div className="ucc-quickadd-backdrop" onClick={() => setQuickAddOpen(false)} />
+          <div className="ucc-quickadd-drawer">
+            <div className="ucc-flex between" style={{ marginBottom: 10 }}>
+              <h3 style={{ margin: 0 }}>Add {quickAddLabel}</h3>
+              <IconBtn icon={X} onClick={() => setQuickAddOpen(false)} title="Close" />
             </div>
-          ))}
-          <button className="ucc-btn" style={{ width: "100%", justifyContent: "center", marginTop: 4 }} onClick={submitQuickAdd}>
-            <Plus size={14} /> Add {quickAddLabel}
-          </button>
-        </div>
-      </div>
-    )}
+            {(quickAddOrder ? quickAddOrder.map(key => columns.find(c => c.key === key)).filter(Boolean) : columns).map(col => (
+              <div key={col.key} className="ucc-quickadd-field">
+                <label className="ucc-tiny">{col.label}</label>
+                {renderCellForColumn(draft, col, {
+                  onChange: (val, isStatus) => updateDraftField(col, val, isStatus),
+                  onPatch: patch => updateDraftFields(patch),
+                  locked: completionRequiresUpload && draft.status === "Completed",
+                  partiallyLocked: draft.status === "Partially Completed",
+                })}
+              </div>
+            ))}
+            <button className="ucc-btn" style={{ width: "100%", justifyContent: "center", marginTop: 4 }} onClick={submitQuickAdd}>
+              <Plus size={14} /> Add {quickAddLabel}
+            </button>
+          </div>
+        </>
+      )}
     </div>
   );
 }
