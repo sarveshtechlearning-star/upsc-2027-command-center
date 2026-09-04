@@ -805,6 +805,15 @@ Do not commit directly to `main`. Use:
 main → feature/fix branch → implement → validate → commit → push → PR → review → merge
 ```
 
+`main` has GitHub branch protection enabled (added Sep 4, 2026) — a direct
+push to `main` will be rejected by GitHub itself now, not just discouraged
+by this doc. This shouldn't change anything in practice since the
+branch→PR flow above never pushed to `main` directly anyway, but if a
+push to `main` ever fails unexpectedly, this is almost certainly why —
+don't try to work around it (e.g. force-push, or push to a differently-
+named branch that's secretly `main`); branch off and open a PR instead,
+same as always.
+
 Branch naming examples: `feature/topic-resource-linking`,
 `fix/class-filtering`, `ui/mobile-dashboard`, `docs/update-claude-md`.
 
