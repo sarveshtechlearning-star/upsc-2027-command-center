@@ -2491,6 +2491,16 @@ function SummaryCard({ title, count, children, onTitleClick }) {
 // no reason, so it fires onUnskip directly.
 function SkipToggle({ skipped, skipReason, onSkip, onUnskip }) {
   const [open, setOpen] = useState(false);
+  const [customMode, setCustomMode] = useState(false);
+  const [customReason, setCustomReason] = useState("");
+
+  const closeAll = () => { setOpen(false); setCustomMode(false); setCustomReason(""); };
+  const submitCustom = () => {
+    if (!customReason.trim()) return;
+    onSkip(customReason.trim());
+    closeAll();
+  };
+
   if (skipped) {
     return (
       <span className="ucc-tiny">
@@ -2508,12 +2518,38 @@ function SkipToggle({ skipped, skipReason, onSkip, onUnskip }) {
           border: "1px solid var(--line-strong)", borderRadius: 6, padding: 8, minWidth: 190,
           boxShadow: "0 4px 14px rgba(0,0,0,0.14)",
         }}>
-          <div className="ucc-tiny" style={{ marginBottom: 6, fontWeight: 600 }}>Reason for skipping?</div>
-          {SKIP_REASONS.map(r => (
-            <button key={r} type="button" className="ucc-btn ghost" style={{ display: "block", width: "100%", textAlign: "left", marginBottom: 3, padding: "4px 8px" }}
-              onClick={() => { onSkip(r); setOpen(false); }}>{r}</button>
-          ))}
-          <button type="button" className="ucc-btn ghost" style={{ marginTop: 2, padding: "2px 6px", fontSize: 11 }} onClick={() => setOpen(false)}>Cancel</button>
+          {customMode ? (
+            <>
+              <div className="ucc-tiny" style={{ marginBottom: 6, fontWeight: 600 }}>Type your reason</div>
+              <input
+                type="text"
+                autoFocus
+                value={customReason}
+                onChange={e => setCustomReason(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key === "Enter") submitCustom();
+                  if (e.key === "Escape") setCustomMode(false);
+                }}
+                placeholder="e.g. Doctor visit"
+                style={{ width: "100%", padding: "4px 6px", marginBottom: 6, border: "1px solid var(--line-strong)", borderRadius: 4, fontSize: 12, boxSizing: "border-box" }}
+              />
+              <div className="ucc-flex" style={{ gap: 4 }}>
+                <button type="button" className="ucc-btn ghost" style={{ padding: "2px 8px", fontSize: 11 }}
+                  disabled={!customReason.trim()} onClick={submitCustom}>Save</button>
+                <button type="button" className="ucc-btn ghost" style={{ padding: "2px 8px", fontSize: 11 }}
+                  onClick={() => setCustomMode(false)}>Back</button>
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="ucc-tiny" style={{ marginBottom: 6, fontWeight: 600 }}>Reason for skipping?</div>
+              {SKIP_REASONS.map(r => (
+                <button key={r} type="button" className="ucc-btn ghost" style={{ display: "block", width: "100%", textAlign: "left", marginBottom: 3, padding: "4px 8px" }}
+                  onClick={() => { if (r === "Other") setCustomMode(true); else { onSkip(r); closeAll(); } }}>{r}</button>
+              ))}
+              <button type="button" className="ucc-btn ghost" style={{ marginTop: 2, padding: "2px 6px", fontSize: 11 }} onClick={closeAll}>Cancel</button>
+            </>
+          )}
         </div>
       )}
     </div>
