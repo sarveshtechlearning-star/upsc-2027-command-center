@@ -2076,21 +2076,29 @@ function statusCompletedAt(rec, fieldLabel = "Status") {
   const entries = (rec.history || []).filter(h => h.field === fieldLabel && h.to === "Completed");
   return entries.length > 0 ? entries[entries.length - 1].at : null;
 }
-// A day "counts" if ANY of these trackers has something dated that day —
-// the whole point being that any one kind of study activity keeps the
-// streak alive, not just one specific tracker. Counts backward from today,
-// except when today has nothing logged yet: the day isn't over, so an
-// empty today shouldn't zero out a streak that's still genuinely alive
-// (it starts counting from yesterday instead, in that case).
+// A day "counts" if ANY of these trackers has a genuine completion dated
+// that day — the whole point being that any one kind of study activity
+// keeps the streak alive, not just one specific tracker. For trackers that
+// use completionRequiresUpload (Classes, Answer Writing, Single Pager,
+// Tamil Writing), status only reaches "Completed" once a file's attached,
+// so gating on status==="Completed" here means the streak reflects an
+// actual class/answer/single-pager/Tamil-answer being finished, not just a
+// draft row created with today's date. NCERT, Standard Books, and Current
+// Affairs have no such draft/complete distinction — a row existing with
+// today's date already IS the meaningful action (a chapter read or a
+// current-affairs item logged), so those stay presence-based. Counts
+// backward from today, except when today has nothing logged yet: the day
+// isn't over, so an empty today shouldn't zero out a streak that's still
+// genuinely alive (it starts counting from yesterday instead, in that case).
 function computeConsistencyStreak(db) {
   const hasActivity = iso =>
-    db.classes.some(c => c.date === iso) ||
+    db.classes.some(c => c.date === iso && c.status === "Completed") ||
     db.standardBooks.some(s => s.date === iso) ||
     db.ncert.some(n => n.date === iso) ||
-    db.answerWriting.some(a => a.date === iso) ||
-    db.singlePager.some(s => s.date === iso) ||
+    db.answerWriting.some(a => a.date === iso && a.status === "Completed") ||
+    db.singlePager.some(s => s.date === iso && s.status === "Completed") ||
     db.tamilReading.some(t => t.date === iso) ||
-    db.tamilWriting.some(t => t.date === iso) ||
+    db.tamilWriting.some(t => t.date === iso && t.status === "Completed") ||
     db.currentAffairs.some(c => c.date === iso);
   let streak = 0;
   let cursor = todayISO();
