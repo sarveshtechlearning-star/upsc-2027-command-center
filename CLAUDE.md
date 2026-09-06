@@ -873,3 +873,20 @@ If `package.json`, build config, or other project configuration implies a
 more specific rule than this document states generically, follow the more
 specific rule, provided it doesn't contradict the security, data-integrity,
 or git-safety rules above.
+
+## 19. Deferred feature backlog
+
+Non-bug feature requests intentionally deferred during the Sep 3–30, 2026
+code freeze. Targeted to resume **Oct 1, 2026** — check this section first
+when picking work back up.
+
+- **Multiple files per row.** Every tracker row currently supports exactly
+  one `driveFile: {id, name}`. Needs a real design pass before building —
+  does `driveFile` become an array, do existing single-file rows need a
+  migration, how do completion-gating (`completionRequiresUpload`) and the
+  tag-linked archival index (`buildTaggedIndex`) treat "at least one file"
+  vs. "exactly one file" — not a quick bolt-on.
+- **View button next to Download.** Open a row's attached PDF in a new
+  tab (e.g. `https://drive.google.com/file/d/{fileId}/view`) instead of
+  only downloading it. Small, low-risk addition to `DriveFileCell`,
+  alongside the existing Upload/Replace/Download buttons.
