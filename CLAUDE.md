@@ -897,20 +897,22 @@ when picking work back up.
   a reason/summary; reverting from Completed to an earlier stage also
   requires a reason. All of it gets appended to a log on that row.
 
-  **Open design question found while scoping — do not build from the
-  literal wording alone:** status vocabularies are not uniform across
-  trackers today. `TASK_STATUS` (Classes, Single Pager) has 5 states
-  including Partially Completed and Skipped as peers, not a strict chain;
-  `AI_STATUS`/other 3-state trackers (e.g. Answer Writing) have no
-  Partially Completed stage at all; `TOPPER_STATUS` is binary
-  (Not Completed/Completed); `CA_STATUS` (Current Affairs) uses an
-  unrelated vocabulary (To Read/Read/Noted). Day Planner already has its
-  own separate `skipped`/`skipReason` fields outside `status` entirely —
-  worth looking at as prior art for the reason-capture UX. Needs a
-  decision with Sarvesh on whether every tracker gets unified onto one
-  4-stage vocabulary (data migration + meaning change for at least 3
-  trackers) or each tracker keeps its own stages with the flow/reason/log
-  behavior layered on top of whatever stages it already has. Also needs a
-  new per-row log field (doesn't exist anywhere yet) and has to compose
-  with the Completed/Partially-Completed row-lock behavior already shipped
+  **Design decision (resolved):** each tracker keeps its own existing
+  status vocabulary — no vocabulary unification, no data migration. The
+  flow/reason/log behavior wraps around whatever stages a tracker already
+  has (e.g. `TASK_STATUS`'s 5 states, the 3-state trackers, `TOPPER_STATUS`'s
+  binary pair, `CA_STATUS`'s To Read/Read/Noted) rather than forcing every
+  tracker onto one 4-stage chain.
+
+  **Still open at implementation time:** the linear order within each
+  tracker's own stage list isn't necessarily its array's storage order
+  (e.g. `TASK_STATUS` lists Completed before Partially Completed) — confirm
+  the intended chain per tracker rather than assuming array order is flow
+  order. Also confirm whether "Skipped" should be added as a new option to
+  trackers that don't have it today, or only enforced on the one tracker
+  (`TASK_STATUS`) that already lists it. Day Planner already has its own
+  separate `skipped`/`skipReason` fields outside `status` entirely — worth
+  looking at as prior art for the reason-capture UX. Needs a new per-row
+  log field (doesn't exist anywhere yet), and has to compose with the
+  Completed/Partially-Completed row-lock behavior already shipped
   (PRs #68–69) rather than conflict with it.
