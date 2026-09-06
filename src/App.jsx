@@ -3936,17 +3936,33 @@ function DashboardTab({ db }) {
       });
   }, [settings.subjects, settings.totalClassesBySubject, db.classes]);
 
-  // Overall class status pie: Completed / In Progress / Not Completed
-  // (Not Started + Partially Completed + Skipped, bucketed together).
+  // Overall class status pie: Completed / In Progress / Not Completed.
+  // "Not Completed" is derived from each subject's Total Classes (Settings
+  // tab), the same source of truth as "Classes completed by subject" above —
+  // not just a bucket of whatever statuses happen to already have rows.
+  // Counting only existing rows understated Not Completed whenever a
+  // subject's total was higher than the number of rows actually logged
+  // (classes not yet added as a row at all were invisible to the pie).
+  // Not Started / Partially Completed / Skipped rows still don't add to
+  // Completed or In Progress, so they fall into Not Completed as before.
+  // Subjects with no Total Classes set are excluded entirely, matching
+  // classProgressBySubject's behavior.
   const classStatusCounts = useMemo(() => {
+    const totals = settings.totalClassesBySubject || {};
     const counts = { Completed: 0, "In Progress": 0, "Not Completed": 0 };
-    db.classes.forEach(c => {
-      if (c.status === "Completed") counts.Completed++;
-      else if (c.status === "In Progress") counts["In Progress"]++;
-      else counts["Not Completed"]++;
-    });
+    settings.subjects
+      .filter(subj => totals[subj] != null && totals[subj] > 0)
+      .forEach(subj => {
+        const total = totals[subj];
+        const subjClasses = db.classes.filter(c => c.subject === subj);
+        const completed = subjClasses.filter(c => c.status === "Completed").length;
+        const inProgress = subjClasses.filter(c => c.status === "In Progress").length;
+        counts.Completed += completed;
+        counts["In Progress"] += inProgress;
+        counts["Not Completed"] += Math.max(0, total - completed - inProgress);
+      });
     return counts;
-  }, [db.classes]);
+  }, [settings.subjects, settings.totalClassesBySubject, db.classes]);
 
   // Only Completed Answer Writing rows — this card is meant to reflect
   // actually-finished practice answers, not every row you've started
@@ -3991,6 +4007,7 @@ function DashboardTab({ db }) {
 
       <div className="ucc-card">
         <h3>Classes — overall status</h3>
+        <p className="ucc-tiny">Not Completed is based on each subject's Total Classes (Settings tab), same as the card above — not just rows already logged. Subjects with no total set aren't included.</p>
         <PieChart segments={[
           { label: "Completed", value: classStatusCounts.Completed, color: "var(--green)" },
           { label: "In Progress", value: classStatusCounts["In Progress"], color: "var(--amber)" },
