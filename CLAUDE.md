@@ -890,3 +890,29 @@ when picking work back up.
   tab (e.g. `https://drive.google.com/file/d/{fileId}/view`) instead of
   only downloading it. Small, low-risk addition to `DriveFileCell`,
   alongside the existing Upload/Replace/Download buttons.
+- **Enforced status-transition flow with reasons + a per-row log.**
+  Requested flow: `Not Started → In Progress → Partially Completed →
+  Completed`, no skipping stages and no free reverting. Every status
+  change (including "Skipped", allowed from any stage) pops up asking for
+  a reason/summary; reverting from Completed to an earlier stage also
+  requires a reason. All of it gets appended to a log on that row.
+
+  **Design decision (resolved):** each tracker keeps its own existing
+  status vocabulary — no vocabulary unification, no data migration. The
+  flow/reason/log behavior wraps around whatever stages a tracker already
+  has (e.g. `TASK_STATUS`'s 5 states, the 3-state trackers, `TOPPER_STATUS`'s
+  binary pair, `CA_STATUS`'s To Read/Read/Noted) rather than forcing every
+  tracker onto one 4-stage chain.
+
+  **Still open at implementation time:** the linear order within each
+  tracker's own stage list isn't necessarily its array's storage order
+  (e.g. `TASK_STATUS` lists Completed before Partially Completed) — confirm
+  the intended chain per tracker rather than assuming array order is flow
+  order. Also confirm whether "Skipped" should be added as a new option to
+  trackers that don't have it today, or only enforced on the one tracker
+  (`TASK_STATUS`) that already lists it. Day Planner already has its own
+  separate `skipped`/`skipReason` fields outside `status` entirely — worth
+  looking at as prior art for the reason-capture UX. Needs a new per-row
+  log field (doesn't exist anywhere yet), and has to compose with the
+  Completed/Partially-Completed row-lock behavior already shipped
+  (PRs #68–69) rather than conflict with it.
