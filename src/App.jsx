@@ -1074,6 +1074,19 @@ async function downloadDriveFile(fileId, fileName) {
   downloadBlob(blob, fileName || "document.pdf", "application/pdf");
 }
 
+// Moves a file to Drive's trash (recoverable there for ~30 days, matching
+// Drive's own "Move to trash" — never a permanent files.delete) when the
+// record it belonged to is removed from a tracker, so deleting a row
+// doesn't leave an orphaned PDF behind in Drive forever.
+async function trashDriveFile(fileId) {
+  const accessToken = await getDriveAccessToken();
+  await driveFetch(`https://www.googleapis.com/drive/v3/files/${fileId}`, accessToken, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ trashed: true }),
+  });
+}
+
 function normalizeSettings(s) {
   const defaults = defaultDB().settings;
   if (!s) return defaults;
@@ -1330,9 +1343,21 @@ function GenericTracker({ records, setRecords, columns, newRecord, emptyMessage,
 
   function removeRecord(id) {
     const rec = records.find(r => r.id === id);
-    const message = (confirmRemove && rec) ? confirmRemove(rec) : "Delete this record? This cannot be undone.";
-    if (window.confirm(message)) {
-      setRecords(prev => prev.filter(r => r.id !== id));
+    const hasFile = !!(rec && rec.driveFile && rec.driveFile.id);
+    const message = (confirmRemove && rec)
+      ? confirmRemove(rec)
+      : hasFile
+        ? "Delete this record? Its uploaded file will be moved to Drive's trash too (recoverable there for about 30 days). This can't be undone here."
+        : "Delete this record? This cannot be undone.";
+    if (!window.confirm(message)) return;
+    setRecords(prev => prev.filter(r => r.id !== id));
+    if (hasFile) {
+      // Best-effort: the row is already gone locally either way. If the
+      // file's already missing or the Drive session hiccups, we don't want
+      // that to block or reverse the row deletion the user just confirmed.
+      trashDriveFile(rec.driveFile.id).catch(err => {
+        console.error("Could not move Drive file to trash:", err);
+      });
     }
   }
 
@@ -1882,14 +1907,39 @@ function nextFileNamePrefix(records, rec, groupKeyFn, labelParts) {
 // original filename) via `onChange` — the PDF bytes themselves go straight
 // to Google Drive over the network and are never written to Supabase.
 // Download re-fetches the bytes from Drive on demand rather than caching them.
-// `namePrefix` (no extension), when provided, standardizes the name of a
-// FRESH upload only — see nextFileNamePrefix. Replacing an existing file
-// always keeps whatever name Drive already has; only the very first upload
-// on a row gets renamed.
-function DriveFileCell({ driveFile, db, updateSlice, onChange, folderKey, namePrefix, locked }) {
+// Naming a FRESH upload only (see nextFileNamePrefix) — Replace always
+// keeps whatever name Drive already has. Two ways to supply the name:
+//  - `namePrefix` (string): the old, always-static way — used as-is,
+//    no prompt. Trackers with no per-row tag list (Tamil Reading/Writing,
+//    Current Affairs) still work exactly this way, unchanged.
+//  - `tagOptions` ([{id,label}]) + `getNamePrefixForTag` (label => string):
+//    when a row has more than one tag, asks which one's label should
+//    drive the filename instead of silently always picking the first —
+//    with 0 or 1 tag there's nothing to choose, so it resolves the name
+//    the same way as before with no extra click.
+function DriveFileCell({ driveFile, db, updateSlice, onChange, folderKey, namePrefix, tagOptions, getNamePrefixForTag, locked }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [pickingTag, setPickingTag] = useState(false);
   const fileInputRef = useRef(null);
+  const pendingPrefixRef = useRef(null); // resolved name prefix for the upload about to happen
+
+  function resolvePrefix(tagLabel) {
+    return getNamePrefixForTag ? getNamePrefixForTag(tagLabel ?? null) : namePrefix;
+  }
+
+  function beginUpload(tagLabel) {
+    pendingPrefixRef.current = resolvePrefix(tagLabel);
+    fileInputRef.current?.click();
+  }
+
+  function handleUploadClick() {
+    if (!driveFile && tagOptions && tagOptions.length > 1) {
+      setPickingTag(true);
+      return;
+    }
+    beginUpload(!driveFile && tagOptions && tagOptions[0] ? tagOptions[0].label : null);
+  }
 
   async function handleFileSelected(e) {
     const picked = e.target.files && e.target.files[0];
@@ -1900,9 +1950,9 @@ function DriveFileCell({ driveFile, db, updateSlice, onChange, folderKey, namePr
       let desiredName;
       if (driveFile) {
         desiredName = driveFile.name; // replace: keep the existing name as-is
-      } else if (namePrefix) {
+      } else if (pendingPrefixRef.current) {
         const ext = (picked.name.match(/\.[a-zA-Z0-9]+$/) || [".pdf"])[0];
-        desiredName = `${namePrefix}${ext}`;
+        desiredName = `${pendingPrefixRef.current}${ext}`;
       }
       const uploaded = await uploadDriveFile(db, updateSlice, folderKey, driveFile?.id, picked, desiredName);
       onChange(uploaded);
@@ -1929,7 +1979,7 @@ function DriveFileCell({ driveFile, db, updateSlice, onChange, folderKey, namePr
       <input ref={fileInputRef} type="file" accept="application/pdf" style={{ display: "none" }} onChange={handleFileSelected} />
       <div className="ucc-flex wrap">
         {!locked && (
-          <button type="button" className="ucc-btn ghost" style={{ padding: "3px 8px" }} disabled={busy} onClick={() => fileInputRef.current?.click()}>
+          <button type="button" className="ucc-btn ghost" style={{ padding: "3px 8px" }} disabled={busy} onClick={handleUploadClick}>
             <Upload size={12} /> {driveFile ? "Replace" : "Upload"}
           </button>
         )}
@@ -1946,6 +1996,25 @@ function DriveFileCell({ driveFile, db, updateSlice, onChange, folderKey, namePr
         </div>
       )}
       {error && <div className="ucc-tiny" style={{ color: "var(--red)" }}>{error}</div>}
+      {pickingTag && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.35)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 50 }}
+          onClick={() => setPickingTag(false)}>
+          <div className="ucc-card" style={{ width: 320, maxWidth: "90vw", margin: 0 }} onClick={e => e.stopPropagation()}>
+            <h3>Name the file using which tag?</h3>
+            <p className="ucc-tiny" style={{ marginBottom: 10 }}>
+              This row has more than one tag. Pick the one whose name should be used for the uploaded file — this only affects the file name, not the tags on the row.
+            </p>
+            <div style={{ display: "grid", gap: 6 }}>
+              {tagOptions.map(opt => (
+                <button key={opt.id} type="button" className="ucc-btn ghost" style={{ justifyContent: "flex-start" }}
+                  onClick={() => { setPickingTag(false); beginUpload(opt.label); }}>
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -2707,12 +2776,15 @@ function ClassesTab({ db, updateSlice }) {
             {
               key: "driveFile", label: "Class Notes PDF", width: 170, type: "custom",
               render: (rec, onChange, onPatch, locked) => {
-                const firstMicrotopic = (rec.microtopics && rec.microtopics[0] && resolveMicrotopicLabelById(db, rec.microtopics[0])) || null;
+                const tagOptions = (rec.microtopics || [])
+                  .map(id => ({ id, label: resolveMicrotopicLabelById(db, id) }))
+                  .filter(o => o.label);
                 return (
                   <DriveFileCell driveFile={rec.driveFile} db={db} updateSlice={updateSlice} onChange={onChange} folderKey="classes" locked={locked}
-                    namePrefix={nextFileNamePrefix(db.classes, rec, r => normKey(r.gsPaper, r.microtopics && r.microtopics[0]), [
-                      [rec.subject, firstMicrotopic],
-                      [firstMicrotopic],
+                    tagOptions={tagOptions}
+                    getNamePrefixForTag={label => nextFileNamePrefix(db.classes, rec, r => normKey(r.gsPaper, r.microtopics && r.microtopics[0]), [
+                      [rec.subject, label],
+                      [label],
                     ])} />
                 );
               },
@@ -3169,12 +3241,15 @@ function SinglePagerTab({ db, updateSlice }) {
           {
             key: "driveFile", label: "Single Page PDF", width: 170, type: "custom",
             render: (rec, onChange, onPatch, locked) => {
-              const firstMicrotopic = (rec.microtopics && rec.microtopics[0] && resolveMicrotopicLabelById(db, rec.microtopics[0])) || null;
+              const tagOptions = (rec.microtopics || [])
+                .map(id => ({ id, label: resolveMicrotopicLabelById(db, id) }))
+                .filter(o => o.label);
               return (
                 <DriveFileCell driveFile={rec.driveFile} db={db} updateSlice={updateSlice} onChange={onChange} folderKey="singlePager" locked={locked}
-                  namePrefix={nextFileNamePrefix(db.singlePager, rec, r => normKey(r.gsPaper, r.microtopics && r.microtopics[0]), [
-                    [rec.subject, firstMicrotopic],
-                    [firstMicrotopic],
+                  tagOptions={tagOptions}
+                  getNamePrefixForTag={label => nextFileNamePrefix(db.singlePager, rec, r => normKey(r.gsPaper, r.microtopics && r.microtopics[0]), [
+                    [rec.subject, label],
+                    [label],
                   ])} />
               );
             },
@@ -3663,10 +3738,13 @@ function AnswerWritingTab({ db, updateSlice }) {
               {
                 key: "driveFile", label: "Answer PDF", width: 170, type: "custom",
                 render: (rec, onChange, onPatch, locked) => {
-                  const firstMicrotopic = (rec.microtopics && rec.microtopics[0] && resolveMicrotopicLabelById(db, rec.microtopics[0])) || rec.topic;
+                  const tagOptions = (rec.microtopics && rec.microtopics.length > 0)
+                    ? rec.microtopics.map(id => ({ id, label: resolveMicrotopicLabelById(db, id) })).filter(o => o.label)
+                    : (rec.topic ? [{ id: "legacy-topic", label: rec.topic }] : []);
                   return (
                     <DriveFileCell driveFile={rec.driveFile} db={db} updateSlice={updateSlice} onChange={onChange} folderKey="answerWriting" locked={locked}
-                      namePrefix={nextFileNamePrefix(db.answerWriting, rec, r => normKey(r.gsPaper, r.microtopics && r.microtopics[0]), [rec.gsPaper, firstMicrotopic])} />
+                      tagOptions={tagOptions}
+                      getNamePrefixForTag={label => nextFileNamePrefix(db.answerWriting, rec, r => normKey(r.gsPaper, r.microtopics && r.microtopics[0]), [rec.gsPaper, label])} />
                   );
                 },
               },
@@ -3692,10 +3770,13 @@ function AnswerWritingTab({ db, updateSlice }) {
               {
                 key: "driveFile", label: "Topper Copy PDF", width: 170, type: "custom",
                 render: (rec, onChange, onPatch, locked) => {
-                  const firstMicrotopic = (rec.microtopics && rec.microtopics[0] && resolveMicrotopicLabelById(db, rec.microtopics[0])) || rec.topic;
+                  const tagOptions = (rec.microtopics && rec.microtopics.length > 0)
+                    ? rec.microtopics.map(id => ({ id, label: resolveMicrotopicLabelById(db, id) })).filter(o => o.label)
+                    : (rec.topic ? [{ id: "legacy-topic", label: rec.topic }] : []);
                   return (
                     <DriveFileCell driveFile={rec.driveFile} db={db} updateSlice={updateSlice} onChange={onChange} folderKey="topperCopies" locked={locked}
-                      namePrefix={nextFileNamePrefix(db.topperCopies, rec, r => normKey(r.gsPaper, r.microtopics && r.microtopics[0]), [rec.gsPaper, firstMicrotopic])} />
+                      tagOptions={tagOptions}
+                      getNamePrefixForTag={label => nextFileNamePrefix(db.topperCopies, rec, r => normKey(r.gsPaper, r.microtopics && r.microtopics[0]), [rec.gsPaper, label])} />
                   );
                 },
               },
