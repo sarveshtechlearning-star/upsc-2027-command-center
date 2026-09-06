@@ -912,11 +912,11 @@ async function driveFetch(url, accessToken, options = {}) {
 // of DRIVE_FOLDER_NAMES' keys. Falls back to the legacy singular
 // settings.driveFolderId for "singlePager" so existing users' folder isn't
 // duplicated by this change.
-async function ensureDriveFolder(accessToken, db, updateSlice, folderKey) {
-  const folderName = DRIVE_FOLDER_NAMES[folderKey];
-  const existingId = (db.settings.driveFolders && db.settings.driveFolders[folderKey])
-    || (folderKey === "singlePager" ? db.settings.driveFolderId : null);
-  if (existingId) return existingId;
+// Search-then-create, with no cache read/write of its own — used both by
+// ensureDriveFolder's normal (cache-first) path and by uploadDriveFile's
+// 404 retry, which already knows the cached id is bad and needs to bypass
+// it rather than being handed the same stale id back.
+async function findOrCreateDriveFolder(accessToken, folderName) {
   const q = encodeURIComponent(`name='${folderName}' and mimeType='application/vnd.google-apps.folder' and trashed=false`);
   const searchRes = await driveFetch(`https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id,name)`, accessToken);
   const searchData = await searchRes.json();
@@ -929,6 +929,14 @@ async function ensureDriveFolder(accessToken, db, updateSlice, folderKey) {
     });
     folderId = (await createRes.json()).id;
   }
+  return folderId;
+}
+
+async function ensureDriveFolder(accessToken, db, updateSlice, folderKey) {
+  const existingId = (db.settings.driveFolders && db.settings.driveFolders[folderKey])
+    || (folderKey === "singlePager" ? db.settings.driveFolderId : null);
+  if (existingId) return existingId;
+  const folderId = await findOrCreateDriveFolder(accessToken, DRIVE_FOLDER_NAMES[folderKey]);
   updateSlice("settings", prev => ({ ...prev, driveFolders: { ...(prev.driveFolders || {}), [folderKey]: folderId } }));
   return folderId;
 }
@@ -1029,17 +1037,33 @@ async function uploadDriveFile(db, updateSlice, folderKey, existingFileId, file,
   const folderId = await ensureDriveFolder(accessToken, db, updateSlice, folderKey);
   const boundary = "uccdrive" + uid();
   const finalName = desiredName || file.name;
-  const metadata = existingFileId ? { name: finalName } : { name: finalName, parents: [folderId] };
-  const body = buildDriveMultipartBody(metadata, file, boundary);
-  const url = existingFileId
-    ? `https://www.googleapis.com/upload/drive/v3/files/${existingFileId}?uploadType=multipart&fields=id,name`
-    : `https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name`;
-  const res = await driveFetch(url, accessToken, {
-    method: existingFileId ? "PATCH" : "POST",
-    headers: { "Content-Type": `multipart/related; boundary=${boundary}` },
-    body,
-  });
-  const data = await res.json();
+  async function attempt(targetFolderId) {
+    const metadata = existingFileId ? { name: finalName } : { name: finalName, parents: [targetFolderId] };
+    const body = buildDriveMultipartBody(metadata, file, boundary);
+    const url = existingFileId
+      ? `https://www.googleapis.com/upload/drive/v3/files/${existingFileId}?uploadType=multipart&fields=id,name`
+      : `https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name`;
+    const res = await driveFetch(url, accessToken, {
+      method: existingFileId ? "PATCH" : "POST",
+      headers: { "Content-Type": `multipart/related; boundary=${boundary}` },
+      body,
+    });
+    return res.json();
+  }
+  let data;
+  try {
+    data = await attempt(folderId);
+  } catch (err) {
+    // Self-heal a stale cached folder id (e.g. it was deleted directly in
+    // Drive, outside the app) by finding/creating it fresh and retrying
+    // once. Only for brand-new uploads: an existingFileId 404 means the
+    // specific previously-uploaded file is gone, which isn't something a
+    // folder lookup can fix, so that case still surfaces as a real error.
+    if (existingFileId || !err.message.includes("(404)")) throw err;
+    const freshFolderId = await findOrCreateDriveFolder(accessToken, DRIVE_FOLDER_NAMES[folderKey]);
+    updateSlice("settings", prev => ({ ...prev, driveFolders: { ...(prev.driveFolders || {}), [folderKey]: freshFolderId } }));
+    data = await attempt(freshFolderId);
+  }
   return { id: data.id, name: data.name };
 }
 
@@ -1374,7 +1398,7 @@ function GenericTracker({ records, setRecords, columns, newRecord, emptyMessage,
         {partiallyLocked && <Lock size={13} style={{ color: "var(--red)", flexShrink: 0 }} aria-label="Row locked while Partially Completed — change Status to edit anything but Date or the uploaded file" />}
       </div>
     ) : col.type === "custom" ? (
-      col.render(rec, (val, isStatus) => onChange(val, isStatus), patch => onPatch(patch))
+      col.render(rec, (val, isStatus) => onChange(val, isStatus), patch => onPatch(patch), locked)
     ) : col.type === "date" ? (
       <input type="date" className="ucc-input ucc-mono" value={rec[col.key] || ""} onChange={e => onChange(e.target.value)} />
     ) : col.type === "number" ? (
@@ -1555,7 +1579,7 @@ function GenericTracker({ records, setRecords, columns, newRecord, emptyMessage,
                           // full contrast/legibility instead of looking
                           // greyed-out/disabled.
                           <div title="Completed rows are locked — change Status to edit again. You can still scroll to read this field.">{cell}</div>
-                        ) : locked && !isStatusCol ? (
+                        ) : locked && !isStatusCol && !isDriveFileCol ? (
                           <div style={{ pointerEvents: "none" }} title="Completed rows are locked — change Status to edit again">{cell}</div>
                         ) : partiallyLocked && !isStatusCol && !isDateCol && !isDriveFileCol ? (
                           // Stays clickable (unlike the Completed lock above) —
@@ -1862,7 +1886,7 @@ function nextFileNamePrefix(records, rec, groupKeyFn, labelParts) {
 // FRESH upload only — see nextFileNamePrefix. Replacing an existing file
 // always keeps whatever name Drive already has; only the very first upload
 // on a row gets renamed.
-function DriveFileCell({ driveFile, db, updateSlice, onChange, folderKey, namePrefix }) {
+function DriveFileCell({ driveFile, db, updateSlice, onChange, folderKey, namePrefix, locked }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const fileInputRef = useRef(null);
@@ -1904,9 +1928,11 @@ function DriveFileCell({ driveFile, db, updateSlice, onChange, folderKey, namePr
     <div>
       <input ref={fileInputRef} type="file" accept="application/pdf" style={{ display: "none" }} onChange={handleFileSelected} />
       <div className="ucc-flex wrap">
-        <button type="button" className="ucc-btn ghost" style={{ padding: "3px 8px" }} disabled={busy} onClick={() => fileInputRef.current?.click()}>
-          <Upload size={12} /> {driveFile ? "Replace" : "Upload"}
-        </button>
+        {!locked && (
+          <button type="button" className="ucc-btn ghost" style={{ padding: "3px 8px" }} disabled={busy} onClick={() => fileInputRef.current?.click()}>
+            <Upload size={12} /> {driveFile ? "Replace" : "Upload"}
+          </button>
+        )}
         {driveFile && (
           <button type="button" className="ucc-btn ghost" style={{ padding: "3px 8px" }} disabled={busy} onClick={handleDownload}>
             <Download size={12} /> Download
@@ -2680,10 +2706,10 @@ function ClassesTab({ db, updateSlice }) {
             { key: "status", label: "Status", type: "status", options: TASK_STATUS, width: 150 },
             {
               key: "driveFile", label: "Class Notes PDF", width: 170, type: "custom",
-              render: (rec, onChange) => {
+              render: (rec, onChange, onPatch, locked) => {
                 const firstMicrotopic = (rec.microtopics && rec.microtopics[0] && resolveMicrotopicLabelById(db, rec.microtopics[0])) || null;
                 return (
-                  <DriveFileCell driveFile={rec.driveFile} db={db} updateSlice={updateSlice} onChange={onChange} folderKey="classes"
+                  <DriveFileCell driveFile={rec.driveFile} db={db} updateSlice={updateSlice} onChange={onChange} folderKey="classes" locked={locked}
                     namePrefix={nextFileNamePrefix(db.classes, rec, r => normKey(r.gsPaper, r.microtopics && r.microtopics[0]), [
                       [rec.subject, firstMicrotopic],
                       [firstMicrotopic],
@@ -3142,10 +3168,10 @@ function SinglePagerTab({ db, updateSlice }) {
           { key: "status", label: "Status", type: "status", options: SP_STATUS, width: 120 },
           {
             key: "driveFile", label: "Single Page PDF", width: 170, type: "custom",
-            render: (rec, onChange) => {
+            render: (rec, onChange, onPatch, locked) => {
               const firstMicrotopic = (rec.microtopics && rec.microtopics[0] && resolveMicrotopicLabelById(db, rec.microtopics[0])) || null;
               return (
-                <DriveFileCell driveFile={rec.driveFile} db={db} updateSlice={updateSlice} onChange={onChange} folderKey="singlePager"
+                <DriveFileCell driveFile={rec.driveFile} db={db} updateSlice={updateSlice} onChange={onChange} folderKey="singlePager" locked={locked}
                   namePrefix={nextFileNamePrefix(db.singlePager, rec, r => normKey(r.gsPaper, r.microtopics && r.microtopics[0]), [
                     [rec.subject, firstMicrotopic],
                     [firstMicrotopic],
@@ -3273,7 +3299,7 @@ function TamilTab({ db, updateSlice }) {
             { key: "notes", label: "What I've Learned", type: "textarea", width: 220 },
             {
               key: "driveFile", label: "PDF", width: 170, type: "custom",
-              render: (rec, onChange) => <DriveFileCell driveFile={rec.driveFile} db={db} updateSlice={updateSlice} onChange={onChange} folderKey="tamilReading"
+              render: (rec, onChange, onPatch, locked) => <DriveFileCell driveFile={rec.driveFile} db={db} updateSlice={updateSlice} onChange={onChange} folderKey="tamilReading" locked={locked}
               namePrefix={nextFileNamePrefix(db.tamilReading, rec, r => normKey(r.topic), ["TamilLiterature", rec.topic])} />,
             },
           ]}
@@ -3302,7 +3328,7 @@ function TamilTab({ db, updateSlice }) {
             { key: "status", label: "Status", type: "status", options: TASK_STATUS, width: 140 },
             {
               key: "driveFile", label: "Answer PDF", width: 170, type: "custom",
-              render: (rec, onChange) => <DriveFileCell driveFile={rec.driveFile} db={db} updateSlice={updateSlice} onChange={onChange} folderKey="tamilWriting"
+              render: (rec, onChange, onPatch, locked) => <DriveFileCell driveFile={rec.driveFile} db={db} updateSlice={updateSlice} onChange={onChange} folderKey="tamilWriting" locked={locked}
               namePrefix={nextFileNamePrefix(db.tamilWriting, rec, r => normKey(r.topic), ["TamilLiterature", rec.topic])} />,
             },
           ]}
@@ -3399,7 +3425,7 @@ function CurrentAffairsTab({ db, updateSlice }) {
           },
           {
             key: "driveFile", label: "Clipping / PDF", width: 170, type: "custom",
-            render: (rec, onChange) => <DriveFileCell driveFile={rec.driveFile} db={db} updateSlice={updateSlice} onChange={onChange} folderKey="currentAffairs"
+            render: (rec, onChange, onPatch, locked) => <DriveFileCell driveFile={rec.driveFile} db={db} updateSlice={updateSlice} onChange={onChange} folderKey="currentAffairs" locked={locked}
                 namePrefix={nextFileNamePrefix(db.currentAffairs, rec, r => normKey(r.subject, r.subtopic || r.relevantSyllabusTopic), [
                   [rec.subject, rec.subtopic, rec.microtopic],
                   [rec.subject, rec.microtopic],
@@ -3636,10 +3662,10 @@ function AnswerWritingTab({ db, updateSlice }) {
               { key: "improvementNotes", label: "Improvement Notes", type: "textarea", width: 200 },
               {
                 key: "driveFile", label: "Answer PDF", width: 170, type: "custom",
-                render: (rec, onChange) => {
+                render: (rec, onChange, onPatch, locked) => {
                   const firstMicrotopic = (rec.microtopics && rec.microtopics[0] && resolveMicrotopicLabelById(db, rec.microtopics[0])) || rec.topic;
                   return (
-                    <DriveFileCell driveFile={rec.driveFile} db={db} updateSlice={updateSlice} onChange={onChange} folderKey="answerWriting"
+                    <DriveFileCell driveFile={rec.driveFile} db={db} updateSlice={updateSlice} onChange={onChange} folderKey="answerWriting" locked={locked}
                       namePrefix={nextFileNamePrefix(db.answerWriting, rec, r => normKey(r.gsPaper, r.microtopics && r.microtopics[0]), [rec.gsPaper, firstMicrotopic])} />
                   );
                 },
@@ -3665,10 +3691,10 @@ function AnswerWritingTab({ db, updateSlice }) {
               { key: "status", label: "Status", type: "status", options: TOPPER_STATUS, width: 130 },
               {
                 key: "driveFile", label: "Topper Copy PDF", width: 170, type: "custom",
-                render: (rec, onChange) => {
+                render: (rec, onChange, onPatch, locked) => {
                   const firstMicrotopic = (rec.microtopics && rec.microtopics[0] && resolveMicrotopicLabelById(db, rec.microtopics[0])) || rec.topic;
                   return (
-                    <DriveFileCell driveFile={rec.driveFile} db={db} updateSlice={updateSlice} onChange={onChange} folderKey="topperCopies"
+                    <DriveFileCell driveFile={rec.driveFile} db={db} updateSlice={updateSlice} onChange={onChange} folderKey="topperCopies" locked={locked}
                       namePrefix={nextFileNamePrefix(db.topperCopies, rec, r => normKey(r.gsPaper, r.microtopics && r.microtopics[0]), [rec.gsPaper, firstMicrotopic])} />
                   );
                 },
