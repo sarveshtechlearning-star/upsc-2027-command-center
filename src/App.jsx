@@ -1163,6 +1163,10 @@ async function createCalendarEvent(accessToken, { summary, dateISO, startMin, en
     summary,
     start: { dateTime: calendarDateTime(dateISO, startMin), ...(timeZone ? { timeZone } : {}) },
     end: { dateTime: calendarDateTime(dateISO, end), ...(timeZone ? { timeZone } : {}) },
+    // Overrides the calendar's own default reminder (commonly 30 min
+    // before) with a single 5-min-before popup, per Sarvesh's request —
+    // useDefault: false is required for `overrides` to take effect at all.
+    reminders: { useDefault: false, overrides: [{ method: "popup", minutes: 5 }] },
   };
   await calendarFetch("https://www.googleapis.com/calendar/v3/calendars/primary/events", accessToken, {
     method: "POST",
