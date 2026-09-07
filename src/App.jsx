@@ -515,39 +515,74 @@ function minutesToTime(mins) {
   const hh = String(h).padStart(2, "0"), mmS = String(mm).padStart(2, "0");
   return (overflowDays > 0 ? "+1d " : "") + `${hh}:${mmS}`;
 }
-// Builds a Google Calendar "quick add" link for a single Today's Planner
-// block — no OAuth/API scope needed, since this just opens Google's own
-// prefilled "create event" page and lets the user tap Save themselves.
-// One-off event only (never recurring), on dateISO, using start/end minutes
-// from computePlanTimes (which count from wake time and can exceed 1440 for
-// a block that runs past midnight — mirrors minutesToTime's own overflow
-// handling so the calendar event lands on the correct calendar day).
-function googleCalendarAddLink({ title, details, dateISO, startMin, endMin }) {
-  const dateForOffset = (iso, mins) => {
+// Bundles every non-skipped Today's Planner block for one day into a single
+// downloadable .ics file, so one click adds the whole day's schedule to
+// Google Calendar (via Google Calendar's own Settings -> Import & export,
+// or by opening the file on a device where Google Calendar is the default
+// handler) — no OAuth/API scope needed, since this is a plain file the
+// user imports themselves. Events are one-off only (no RRULE), matching
+// what was asked for.
+//
+// Uses floating local time (no Z / TZID) rather than a full VTIMEZONE
+// block — every calendar app treats a bare DTSTART/DTEND as "this device's
+// current timezone," which is the right behavior for a same-day schedule
+// like this and avoids a lot of unnecessary ICS complexity.
+function icsEscape(text) {
+  return String(text || "").replace(/\\/g, "\\\\").replace(/;/g, "\\;").replace(/,/g, "\\,").replace(/\n/g, "\\n");
+}
+// RFC 5545 lines should be folded at 75 octets; long labels are unlikely
+// here, but folding is cheap insurance against a stray very-long title.
+function icsFoldLine(line) {
+  if (line.length <= 75) return line;
+  let out = line.slice(0, 75);
+  let rest = line.slice(75);
+  while (rest.length > 0) {
+    out += "\r\n " + rest.slice(0, 74);
+    rest = rest.slice(74);
+  }
+  return out;
+}
+function buildDayIcsContent(dateISO, blocks) {
+  const dtStamp = (() => {
+    const d = new Date();
+    const pad = n => String(n).padStart(2, "0");
+    return `${d.getUTCFullYear()}${pad(d.getUTCMonth() + 1)}${pad(d.getUTCDate())}T${pad(d.getUTCHours())}${pad(d.getUTCMinutes())}${pad(d.getUTCSeconds())}Z`;
+  })();
+  const fmt = (mins) => {
     const days = Math.floor(mins / 1440);
-    return days > 0 ? addDaysISO(iso, days) : iso;
-  };
-  const fmt = (iso, mins) => {
-    const [y, m, d] = dateForOffset(iso, mins).split("-").map(Number);
+    const [y, m, d] = (days > 0 ? addDaysISO(dateISO, days) : dateISO).split("-").map(Number);
     const wrapped = ((mins % 1440) + 1440) % 1440;
     const hh = Math.floor(wrapped / 60), mm = wrapped % 60;
     const pad = n => String(n).padStart(2, "0");
     return `${y}${pad(m)}${pad(d)}T${pad(hh)}${pad(mm)}00`;
   };
-  // Guard against a zero/negative-length slot (e.g. a skipped block, whose
-  // duration collapses to 0) producing a same-instant start/end link.
-  const safeEnd = endMin > startMin ? endMin : startMin + 30;
-  const params = new URLSearchParams({
-    action: "TEMPLATE",
-    text: title,
-    dates: `${fmt(dateISO, startMin)}/${fmt(dateISO, safeEnd)}`,
+  const lines = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//UPSC 2027 Command Center//Today's Planner//EN", "CALSCALE:GREGORIAN"];
+  blocks.forEach(b => {
+    const end = b.end > b.start ? b.end : b.start + 30;
+    lines.push(
+      "BEGIN:VEVENT",
+      icsFoldLine(`UID:${uid()}@upsc-2027-command-center`),
+      `DTSTAMP:${dtStamp}`,
+      `DTSTART:${fmt(b.start)}`,
+      `DTEND:${fmt(end)}`,
+      icsFoldLine(`SUMMARY:${icsEscape(b.label)}`),
+      "END:VEVENT"
+    );
   });
-  try {
-    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
-    if (tz) params.set("ctz", tz);
-  } catch { /* Intl unavailable — Google falls back to the browser's own tz */ }
-  if (details) params.set("details", details);
-  return `https://calendar.google.com/calendar/render?${params.toString()}`;
+  lines.push("END:VCALENDAR");
+  return lines.join("\r\n");
+}
+function downloadDayIcs(dateISO, blocks) {
+  const content = buildDayIcsContent(dateISO, blocks);
+  const blob = new Blob([content], { type: "text/calendar;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `upsc-planner-${dateISO}.ics`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
 }
 function normKey(...parts) { return parts.map(p => String(p || "").trim().toLowerCase()).join("|"); }
 // Escapes user-typed text (journal entries, reflections) before it goes into
@@ -2521,7 +2556,7 @@ function TodayTab({ db, updateSlice, onNavigate }) {
               );
             }
             return (
-              <PlanBlock key={b.id} block={b} dateISO={dateISO} onUpdate={patch => updateBlock(b.id, patch)}
+              <PlanBlock key={b.id} block={b} onUpdate={patch => updateBlock(b.id, patch)}
                 onMoveUp={i > 0 ? () => moveBlock(b.id, -1) : null}
                 onMoveDown={i < timedBlocks.length - 1 ? () => moveBlock(b.id, 1) : null}
                 onRemove={(b.custom || b.restored) ? () => removeBlock(b.id) : null} />
@@ -2529,6 +2564,10 @@ function TodayTab({ db, updateSlice, onNavigate }) {
           })}
           <div className="ucc-flex wrap" style={{ gap: 8 }}>
             <button className="ucc-btn" onClick={addCustomBlock}><Plus size={14} /> Add custom task</button>
+            <button className="ucc-btn" title="Downloads a .ics file with today's non-skipped slots — import it into Google Calendar (Settings > Import & export) to add them all at once"
+              onClick={() => downloadDayIcs(dateISO, timedBlocks.filter(b => !b.skipped))}>
+              <CalendarPlus size={14} /> Add all to Google Calendar
+            </button>
             {missingBlocks.length > 0 && (
               <select className="ucc-select" style={{ width: "auto", maxWidth: 240 }} value=""
                 title="Bring back a slot dropped from today's plan"
@@ -2737,7 +2776,7 @@ function OfficePlanBlock({ office, travelTo, travelFro, onSkipAll, onUnskipAll, 
   );
 }
 
-function PlanBlock({ block, dateISO, onUpdate, onMoveUp, onMoveDown, onRemove }) {
+function PlanBlock({ block, onUpdate, onMoveUp, onMoveDown, onRemove }) {
   return (
     <div className={`ucc-planblock ${block.skipped ? "skipped" : ""}`}>
       <div className="time ucc-mono ucc-tiny">
@@ -2751,13 +2790,6 @@ function PlanBlock({ block, dateISO, onUpdate, onMoveUp, onMoveDown, onRemove })
         <div className="ucc-flex between wrap">
           <strong>{block.label}</strong>
           <div className="ucc-flex">
-            {!block.skipped && (
-              <IconBtn icon={CalendarPlus} title="Add to Google Calendar"
-                onClick={() => window.open(
-                  googleCalendarAddLink({ title: block.label, dateISO, startMin: block.start, endMin: block.end }),
-                  "_blank", "noopener,noreferrer"
-                )} />
-            )}
             {onMoveUp && <IconBtn icon={ChevronUp} onClick={onMoveUp} title="Move up" />}
             {onMoveDown && <IconBtn icon={ChevronDown} onClick={onMoveDown} title="Move down" />}
             <SkipToggle skipped={block.skipped} skipReason={block.skipReason}
