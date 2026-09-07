@@ -6,7 +6,8 @@ import {
   Newspaper, PenTool, Brain, Search as SearchIcon, BarChart3,
   Settings as SettingsIcon, Upload, Download, ChevronUp, ChevronDown,
   Plus, Trash2, History, Check, AlertTriangle, Clock, ChevronLeft,
-  ChevronRight as ChevronRightIcon, X, LogOut, LayoutDashboard, Copy, Pencil, Lock, Flame, Target
+  ChevronRight as ChevronRightIcon, X, LogOut, LayoutDashboard, Copy, Pencil, Lock, Flame, Target,
+  CalendarPlus
 } from "lucide-react";
 
 /* ============================================================
@@ -513,6 +514,40 @@ function minutesToTime(mins) {
   const h = Math.floor(m / 60), mm = m % 60;
   const hh = String(h).padStart(2, "0"), mmS = String(mm).padStart(2, "0");
   return (overflowDays > 0 ? "+1d " : "") + `${hh}:${mmS}`;
+}
+// Builds a Google Calendar "quick add" link for a single Today's Planner
+// block — no OAuth/API scope needed, since this just opens Google's own
+// prefilled "create event" page and lets the user tap Save themselves.
+// One-off event only (never recurring), on dateISO, using start/end minutes
+// from computePlanTimes (which count from wake time and can exceed 1440 for
+// a block that runs past midnight — mirrors minutesToTime's own overflow
+// handling so the calendar event lands on the correct calendar day).
+function googleCalendarAddLink({ title, details, dateISO, startMin, endMin }) {
+  const dateForOffset = (iso, mins) => {
+    const days = Math.floor(mins / 1440);
+    return days > 0 ? addDaysISO(iso, days) : iso;
+  };
+  const fmt = (iso, mins) => {
+    const [y, m, d] = dateForOffset(iso, mins).split("-").map(Number);
+    const wrapped = ((mins % 1440) + 1440) % 1440;
+    const hh = Math.floor(wrapped / 60), mm = wrapped % 60;
+    const pad = n => String(n).padStart(2, "0");
+    return `${y}${pad(m)}${pad(d)}T${pad(hh)}${pad(mm)}00`;
+  };
+  // Guard against a zero/negative-length slot (e.g. a skipped block, whose
+  // duration collapses to 0) producing a same-instant start/end link.
+  const safeEnd = endMin > startMin ? endMin : startMin + 30;
+  const params = new URLSearchParams({
+    action: "TEMPLATE",
+    text: title,
+    dates: `${fmt(dateISO, startMin)}/${fmt(dateISO, safeEnd)}`,
+  });
+  try {
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    if (tz) params.set("ctz", tz);
+  } catch { /* Intl unavailable — Google falls back to the browser's own tz */ }
+  if (details) params.set("details", details);
+  return `https://calendar.google.com/calendar/render?${params.toString()}`;
 }
 function normKey(...parts) { return parts.map(p => String(p || "").trim().toLowerCase()).join("|"); }
 // Escapes user-typed text (journal entries, reflections) before it goes into
@@ -2486,7 +2521,7 @@ function TodayTab({ db, updateSlice, onNavigate }) {
               );
             }
             return (
-              <PlanBlock key={b.id} block={b} onUpdate={patch => updateBlock(b.id, patch)}
+              <PlanBlock key={b.id} block={b} dateISO={dateISO} onUpdate={patch => updateBlock(b.id, patch)}
                 onMoveUp={i > 0 ? () => moveBlock(b.id, -1) : null}
                 onMoveDown={i < timedBlocks.length - 1 ? () => moveBlock(b.id, 1) : null}
                 onRemove={(b.custom || b.restored) ? () => removeBlock(b.id) : null} />
@@ -2702,7 +2737,7 @@ function OfficePlanBlock({ office, travelTo, travelFro, onSkipAll, onUnskipAll, 
   );
 }
 
-function PlanBlock({ block, onUpdate, onMoveUp, onMoveDown, onRemove }) {
+function PlanBlock({ block, dateISO, onUpdate, onMoveUp, onMoveDown, onRemove }) {
   return (
     <div className={`ucc-planblock ${block.skipped ? "skipped" : ""}`}>
       <div className="time ucc-mono ucc-tiny">
@@ -2716,6 +2751,13 @@ function PlanBlock({ block, onUpdate, onMoveUp, onMoveDown, onRemove }) {
         <div className="ucc-flex between wrap">
           <strong>{block.label}</strong>
           <div className="ucc-flex">
+            {!block.skipped && (
+              <IconBtn icon={CalendarPlus} title="Add to Google Calendar"
+                onClick={() => window.open(
+                  googleCalendarAddLink({ title: block.label, dateISO, startMin: block.start, endMin: block.end }),
+                  "_blank", "noopener,noreferrer"
+                )} />
+            )}
             {onMoveUp && <IconBtn icon={ChevronUp} onClick={onMoveUp} title="Move up" />}
             {onMoveDown && <IconBtn icon={ChevronDown} onClick={onMoveDown} title="Move down" />}
             <SkipToggle skipped={block.skipped} skipReason={block.skipReason}
