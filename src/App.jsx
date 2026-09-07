@@ -2332,10 +2332,15 @@ function computePendingTasks(db) {
   const items = [];
   const topicCompletionIndexes = buildTopicCompletionIndexes(db);
 
-  // Pending: (a) a Class that's started but not finished, with an ETA set —
-  // i.e. something you've committed to a date for and haven't closed out —
-  // and (b) a topic whose Class is done but whose Single Pager isn't, since
-  // that's the natural very-next step after a class.
+  // Pending: a Class that's started but not finished, with an ETA set — i.e.
+  // something you've committed to a date for and haven't closed out. (A
+  // second case used to live here too — a topic whose Class is done but
+  // whose Single Pager isn't — but that's always a subset of the "Single
+  // pager" bucket below, since hasSource there already counts a completed
+  // Class as one of its sources. Keeping both meant every such topic was
+  // double-listed, once in each widget, inflating both counts for the same
+  // underlying task. Removed rather than deduped, since the broader bucket
+  // already covers it with no information lost.)
   db.classes.filter(c => (c.status === "Not Started" || c.status === "In Progress") && c.eta).forEach(c => {
     const microtopic = (c.microtopics && c.microtopics[0]) ? resolveMicrotopicLabelById(db, c.microtopics[0]) : null;
     items.push({
@@ -2343,12 +2348,6 @@ function computePendingTasks(db) {
       label: `${c.subject || "Class"}${c.classNumber ? ` #${c.classNumber}` : ""}${microtopic ? ` — ${microtopic}` : ""}`,
       detail: `ETA ${c.eta}`, date: c.eta, tab: "classes",
     });
-  });
-  db.syllabus.forEach(row => {
-    const f = computeTopicCompletionFields(row, topicCompletionIndexes);
-    if (f.classNotes === "Completed" && f.singlePager !== "Completed") {
-      items.push({ cat: "Pending", label: `${row.subject} — ${row.microtopic}`, detail: "Class done, Single Pager pending", date: "", tab: "singlePager" });
-    }
   });
 
   // Revision due: a spaced-repetition schedule anchored to when the Single
