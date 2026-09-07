@@ -1029,7 +1029,7 @@ function buildDriveMultipartBody(metadata, file, boundary) {
 // Drive file in place so re-uploading a corrected document doesn't leave
 // orphaned old copies behind. `desiredName`, when provided, is used as the
 // Drive file's name instead of the raw uploaded file's own name — see
-// nextFileNamePrefix / DriveFileCell for how callers build a standardized
+// nextFileNamePrefix / DriveFilesCell for how callers build a standardized
 // name on first upload only (a replace always omits this, keeping
 // whatever name Drive already has).
 async function uploadDriveFile(db, updateSlice, folderKey, existingFileId, file, desiredName) {
@@ -1086,6 +1086,20 @@ async function trashDriveFile(fileId) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ trashed: true }),
   });
+}
+
+// Every tracker row's `driveFile` field held exactly one {id,name} object
+// until multi-file support was added. From then on, a row that has ever
+// had a file added/replaced/removed through DriveFilesCell stores an
+// ARRAY of {id,name,tag} there instead — no separate field, no migration
+// script, no rewrite of existing rows. Every read site should go through
+// this helper rather than touching rec.driveFile directly, so both shapes
+// (old single object, new array) keep working forever without needing to
+// know which one a given row happens to have.
+function getRowFiles(rec) {
+  const df = rec && rec.driveFile;
+  if (!df) return [];
+  return Array.isArray(df) ? df : [df];
 }
 
 /* ============================================================
@@ -1468,7 +1482,7 @@ function GenericTracker({ records, setRecords, columns, newRecord, emptyMessage,
   // the status is changed away from Completed again — that's the
   // deliberate escape hatch for fixing a mistake, not an oversight.
   function updateField(rec, col, val, isStatus) {
-    if (completionRequiresUpload && col.type === "status" && val === "Completed" && !rec.driveFile) {
+    if (completionRequiresUpload && col.type === "status" && val === "Completed" && getRowFiles(rec).length === 0) {
       const driveFileCol = columns.find(c => c.key === "driveFile");
       window.alert(`Upload the ${driveFileCol ? driveFileCol.label : "file"} for this row before marking it Completed.`);
       return;
@@ -1482,7 +1496,7 @@ function GenericTracker({ records, setRecords, columns, newRecord, emptyMessage,
     // uploading/replacing the row's file — unlike the Completed lock above,
     // this one stays clickable and explains itself with a popup rather than
     // silently no-op'ing, since there's no separate visual dimming to rely
-    // on for the explanation. driveFile is excluded because DriveFileCell
+    // on for the explanation. driveFile is excluded because DriveFilesCell
     // already uploads to Drive before calling this — refusing here would
     // leave an orphaned upload with no local record of it.
     if (rec.status === "Partially Completed" && col.key !== "status" && col.key !== "date" && col.key !== "driveFile") {
@@ -1521,22 +1535,23 @@ function GenericTracker({ records, setRecords, columns, newRecord, emptyMessage,
 
   function removeRecord(id) {
     const rec = records.find(r => r.id === id);
-    const hasFile = !!(rec && rec.driveFile && rec.driveFile.id);
+    const files = getRowFiles(rec);
     const message = (confirmRemove && rec)
       ? confirmRemove(rec)
-      : hasFile
-        ? "Delete this record? Its uploaded file will be moved to Drive's trash too (recoverable there for about 30 days). This can't be undone here."
+      : files.length > 0
+        ? `Delete this record? ${files.length > 1 ? "Its uploaded files will be" : "Its uploaded file will be"} moved to Drive's trash too (recoverable there for about 30 days). This can't be undone here.`
         : "Delete this record? This cannot be undone.";
     if (!window.confirm(message)) return;
     setRecords(prev => prev.filter(r => r.id !== id));
-    if (hasFile) {
-      // Best-effort: the row is already gone locally either way. If the
-      // file's already missing or the Drive session hiccups, we don't want
-      // that to block or reverse the row deletion the user just confirmed.
-      trashDriveFile(rec.driveFile.id).catch(err => {
+    // Best-effort, one call per file: the row is already gone locally
+    // either way. If a file's already missing or the Drive session
+    // hiccups, we don't want that to block or reverse the row deletion
+    // the user just confirmed.
+    files.forEach(f => {
+      trashDriveFile(f.id).catch(err => {
         console.error("Could not move Drive file to trash:", err);
       });
-    }
+    });
   }
 
   function addRecord() {
@@ -1552,7 +1567,7 @@ function GenericTracker({ records, setRecords, columns, newRecord, emptyMessage,
   // edits once it is, any more than a real row could. Nothing is saved to
   // records/Supabase here; only submitQuickAdd does that.
   function updateDraftField(col, val) {
-    if (completionRequiresUpload && col.type === "status" && val === "Completed" && !draft.driveFile) {
+    if (completionRequiresUpload && col.type === "status" && val === "Completed" && getRowFiles(draft).length === 0) {
       const driveFileCol = columns.find(c => c.key === "driveFile");
       window.alert(`Upload the ${driveFileCol ? driveFileCol.label : "file"} for this row before marking it Completed.`);
       return;
@@ -2045,7 +2060,7 @@ function fileNameToken(s) {
 // Subject_Subtopic_MicroTopic_N name is judged "too large" and
 // nextFileNamePrefix drops down a tier — see its own comment.
 const MAX_FILENAME_PREFIX_LENGTH = 60;
-// Builds a Drive filename prefix (no extension — DriveFileCell appends the
+// Builds a Drive filename prefix (no extension — DriveFilesCell appends the
 // real one) for a FRESH upload only. N is 1 + how many OTHER rows in the
 // same tracker, matching the same group key, already have a file — so the
 // numbering is per subject+subtopic (or whatever grouping the caller
@@ -2055,7 +2070,7 @@ const MAX_FILENAME_PREFIX_LENGTH = 60;
 // (e.g. row A uploaded second gets "_2", then row B — uploaded first,
 // "_1" — is replaced and this function is asked for a fresh number: it
 // would see both rows already have files and recompute "_2" again).
-// Keeping "replace always keeps the existing name" (see DriveFileCell)
+// Keeping "replace always keeps the existing name" (see DriveFilesCell)
 // avoids that entirely rather than trying to solve it here.
 //
 // `labelParts` is either a flat array (unchanged from before — one naming
@@ -2067,7 +2082,7 @@ const MAX_FILENAME_PREFIX_LENGTH = 60;
 // a token mid-word.
 function nextFileNamePrefix(records, rec, groupKeyFn, labelParts) {
   const key = groupKeyFn(rec);
-  const count = records.filter(r => r.id !== rec.id && r.driveFile && groupKeyFn(r) === key).length + 1;
+  const count = records.filter(r => r.id !== rec.id && getRowFiles(r).length > 0 && groupKeyFn(r) === key).length + 1;
   const tiers = Array.isArray(labelParts[0]) ? labelParts : [labelParts];
   let last = `File_${count}`;
   for (let i = 0; i < tiers.length; i++) {
@@ -2080,43 +2095,59 @@ function nextFileNamePrefix(records, rec, groupKeyFn, labelParts) {
   return last;
 }
 
-// Upload/Download control for a Google-Drive-backed file attachment on one
-// record. The record only ever stores { id, name } (Drive's file id + the
-// original filename) via `onChange` — the PDF bytes themselves go straight
-// to Google Drive over the network and are never written to Supabase.
-// Download re-fetches the bytes from Drive on demand rather than caching them.
+// Upload/Download control for the Google-Drive-backed file attachment(s) on
+// one record. The record's driveFile field holds an ARRAY of {id,name,tag}
+// once this component has touched it (see getRowFiles) — the PDF bytes
+// themselves go straight to Google Drive over the network and are never
+// written to Supabase. Download re-fetches the bytes from Drive on demand
+// rather than caching them.
+//
+// Every fresh "Add" (not a replace) asks which tag the new file is for
+// whenever the row has more than one tag option — that answer is stored on
+// the file itself (not just used for naming, unlike the old single-file
+// version), so a row that covers several Micro Topics can carry one file
+// per topic and each is labelled accordingly. With 0 or 1 tag there's
+// nothing to choose, so it resolves silently exactly as before.
+//
 // Naming a FRESH upload only (see nextFileNamePrefix) — Replace always
-// keeps whatever name Drive already has. Two ways to supply the name:
+// keeps whatever name (and tag) the file already has. Two ways to supply
+// the name:
 //  - `namePrefix` (string): the old, always-static way — used as-is,
 //    no prompt. Trackers with no per-row tag list (Tamil Reading/Writing,
 //    Current Affairs) still work exactly this way, unchanged.
 //  - `tagOptions` ([{id,label}]) + `getNamePrefixForTag` (label => string):
-//    when a row has more than one tag, asks which one's label should
-//    drive the filename instead of silently always picking the first —
-//    with 0 or 1 tag there's nothing to choose, so it resolves the name
-//    the same way as before with no extra click.
-function DriveFileCell({ driveFile, db, updateSlice, onChange, folderKey, namePrefix, tagOptions, getNamePrefixForTag, locked }) {
+//    when a row has more than one tag, resolves the name (and now the tag
+//    popup) from whichever tag was picked for this file.
+function DriveFilesCell({ files, db, updateSlice, onChange, folderKey, namePrefix, tagOptions, getNamePrefixForTag, locked }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [pickingTag, setPickingTag] = useState(false);
   const fileInputRef = useRef(null);
   const pendingPrefixRef = useRef(null); // resolved name prefix for the upload about to happen
+  const pendingTagRef = useRef(null); // tag label to store on a fresh upload (null for a replace)
+  const pendingReplaceRef = useRef(null); // the file being replaced, or null for a fresh add
 
   function resolvePrefix(tagLabel) {
     return getNamePrefixForTag ? getNamePrefixForTag(tagLabel ?? null) : namePrefix;
   }
 
-  function beginUpload(tagLabel) {
+  function beginUpload(tagLabel, replaceFile) {
     pendingPrefixRef.current = resolvePrefix(tagLabel);
+    pendingTagRef.current = tagLabel ?? null;
+    pendingReplaceRef.current = replaceFile || null;
     fileInputRef.current?.click();
   }
 
-  function handleUploadClick() {
-    if (!driveFile && tagOptions && tagOptions.length > 1) {
+  function handleAddClick() {
+    if (tagOptions && tagOptions.length > 1) {
       setPickingTag(true);
       return;
     }
-    beginUpload(!driveFile && tagOptions && tagOptions[0] ? tagOptions[0].label : null);
+    beginUpload(tagOptions && tagOptions[0] ? tagOptions[0].label : null, null);
+  }
+
+  function handleReplaceClick(file) {
+    beginUpload(file.tag ?? null, file);
   }
 
   async function handleFileSelected(e) {
@@ -2125,15 +2156,20 @@ function DriveFileCell({ driveFile, db, updateSlice, onChange, folderKey, namePr
     if (!picked) return;
     setBusy(true); setError("");
     try {
+      const replaceFile = pendingReplaceRef.current;
       let desiredName;
-      if (driveFile) {
-        desiredName = driveFile.name; // replace: keep the existing name as-is
+      if (replaceFile) {
+        desiredName = replaceFile.name; // replace: keep the existing name as-is
       } else if (pendingPrefixRef.current) {
         const ext = (picked.name.match(/\.[a-zA-Z0-9]+$/) || [".pdf"])[0];
         desiredName = `${pendingPrefixRef.current}${ext}`;
       }
-      const uploaded = await uploadDriveFile(db, updateSlice, folderKey, driveFile?.id, picked, desiredName);
-      onChange(uploaded);
+      const uploaded = await uploadDriveFile(db, updateSlice, folderKey, replaceFile?.id, picked, desiredName);
+      const entry = { id: uploaded.id, name: uploaded.name, tag: replaceFile ? (replaceFile.tag ?? null) : pendingTagRef.current };
+      const nextFiles = replaceFile
+        ? files.map(f => (f.id === replaceFile.id ? entry : f))
+        : [...files, entry];
+      onChange(nextFiles);
     } catch (err) {
       setError(err.message || "Upload failed.");
     } finally {
@@ -2141,10 +2177,10 @@ function DriveFileCell({ driveFile, db, updateSlice, onChange, folderKey, namePr
     }
   }
 
-  async function handleDownload() {
+  async function handleDownload(file) {
     setBusy(true); setError("");
     try {
-      await downloadDriveFile(driveFile.id, driveFile.name);
+      await downloadDriveFile(file.id, file.name);
     } catch (err) {
       setError(err.message || "Download failed.");
     } finally {
@@ -2152,40 +2188,63 @@ function DriveFileCell({ driveFile, db, updateSlice, onChange, folderKey, namePr
     }
   }
 
+  async function handleRemove(file) {
+    if (!window.confirm(`Remove "${file.name}"? It will be moved to Drive's trash (recoverable there for about 30 days).`)) return;
+    setBusy(true); setError("");
+    try {
+      await trashDriveFile(file.id);
+    } catch (err) {
+      // Best-effort, matching removeRecord's own pattern elsewhere: don't
+      // let a Drive hiccup block removing the file from this row.
+      console.error("Could not move Drive file to trash:", err);
+    } finally {
+      setBusy(false);
+    }
+    onChange(files.filter(f => f.id !== file.id));
+  }
+
   return (
     <div>
       <input ref={fileInputRef} type="file" accept="application/pdf" style={{ display: "none" }} onChange={handleFileSelected} />
-      <div className="ucc-flex wrap">
-        {!locked && (
-          <button type="button" className="ucc-btn ghost" style={{ padding: "3px 8px" }} disabled={busy} onClick={handleUploadClick}>
-            <Upload size={12} /> {driveFile ? "Replace" : "Upload"}
+      {files.map(file => (
+        <div key={file.id} className="ucc-flex wrap" style={{ alignItems: "center", gap: 4, marginBottom: 3 }}>
+          <div className="ucc-tiny" style={{ maxWidth: 110, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={file.name}>
+            {file.tag && <strong>{file.tag}: </strong>}{file.name}
+          </div>
+          {!locked && (
+            <button type="button" className="ucc-btn ghost" style={{ padding: "2px 6px" }} disabled={busy} onClick={() => handleReplaceClick(file)} title="Replace this file">
+              <Upload size={11} />
+            </button>
+          )}
+          <button type="button" className="ucc-btn ghost" style={{ padding: "2px 6px" }} disabled={busy} onClick={() => handleDownload(file)} title="Download">
+            <Download size={11} />
           </button>
-        )}
-        {driveFile && (
-          <button type="button" className="ucc-btn ghost" style={{ padding: "3px 8px" }} disabled={busy} onClick={handleDownload}>
-            <Download size={12} /> Download
-          </button>
-        )}
-      </div>
-      {busy && <div className="ucc-tiny">Working…</div>}
-      {driveFile && !busy && (
-        <div className="ucc-tiny" style={{ maxWidth: 150, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={driveFile.name}>
-          {driveFile.name}
+          {!locked && (
+            <button type="button" className="ucc-btn ghost" style={{ padding: "2px 6px" }} disabled={busy} onClick={() => handleRemove(file)} title="Remove">
+              <Trash2 size={11} />
+            </button>
+          )}
         </div>
+      ))}
+      {!locked && (
+        <button type="button" className="ucc-btn ghost" style={{ padding: "3px 8px" }} disabled={busy} onClick={handleAddClick}>
+          <Upload size={12} /> {files.length > 0 ? "Add another" : "Upload"}
+        </button>
       )}
+      {busy && <div className="ucc-tiny">Working…</div>}
       {error && <div className="ucc-tiny" style={{ color: "var(--red)" }}>{error}</div>}
       {pickingTag && (
         <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.35)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 50 }}
           onClick={() => setPickingTag(false)}>
           <div className="ucc-card" style={{ width: 320, maxWidth: "90vw", margin: 0 }} onClick={e => e.stopPropagation()}>
-            <h3>Name the file using which tag?</h3>
+            <h3>Which tag is this file for?</h3>
             <p className="ucc-tiny" style={{ marginBottom: 10 }}>
-              This row has more than one tag. Pick the one whose name should be used for the uploaded file — this only affects the file name, not the tags on the row.
+              This row has more than one tag. Pick the one this file belongs to — it labels the file here and names it on Drive.
             </p>
             <div style={{ display: "grid", gap: 6 }}>
               {tagOptions.map(opt => (
                 <button key={opt.id} type="button" className="ucc-btn ghost" style={{ justifyContent: "flex-start" }}
-                  onClick={() => { setPickingTag(false); beginUpload(opt.label); }}>
+                  onClick={() => { setPickingTag(false); beginUpload(opt.label, null); }}>
                   {opt.label}
                 </button>
               ))}
@@ -2219,6 +2278,23 @@ function DriveDownloadLink({ driveFile }) {
       </button>
       {error && <span className="ucc-tiny" style={{ color: "var(--red)" }}> {error}</span>}
     </span>
+  );
+}
+// Read-only summary views (e.g. Topic Master's detail panel) show a raw
+// record's files rather than one already-computed "best" file — this
+// renders one DriveDownloadLink per file, prefixed with its tag when the
+// row has more than one file so they stay distinguishable.
+function DriveDownloadLinks({ files }) {
+  if (!files || files.length === 0) return null;
+  return (
+    <>
+      {files.map(f => (
+        <span key={f.id} style={{ marginRight: 4 }}>
+          {files.length > 1 && f.tag && <span className="ucc-tiny">{f.tag}: </span>}
+          <DriveDownloadLink driveFile={f} />
+        </span>
+      ))}
+    </>
   );
 }
 
@@ -2918,7 +2994,7 @@ function PlanBlock({ block, onUpdate, onMoveUp, onMoveDown, onRemove }) {
 // No per-task tabs, no manual "Save" in Google's UI. `blocks` is expected
 // pre-filtered by the caller (TodayTab) to non-skipped, non-break blocks;
 // this component only handles the click/busy/result UX, mirroring
-// DriveFileCell's busy/error state pattern elsewhere in this file.
+// DriveFilesCell's busy/error state pattern elsewhere in this file.
 function CalendarSyncButton({ dateISO, blocks }) {
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState(null); // { succeeded, failed } | null
@@ -3000,7 +3076,7 @@ function ClassesTab({ db, updateSlice }) {
                   .map(id => ({ id, label: resolveMicrotopicLabelById(db, id) }))
                   .filter(o => o.label);
                 return (
-                  <DriveFileCell driveFile={rec.driveFile} db={db} updateSlice={updateSlice} onChange={onChange} folderKey="classes" locked={locked}
+                  <DriveFilesCell files={getRowFiles(rec)} db={db} updateSlice={updateSlice} onChange={onChange} folderKey="classes" locked={locked}
                     tagOptions={tagOptions}
                     getNamePrefixForTag={label => nextFileNamePrefix(db.classes, rec, r => normKey(r.gsPaper, r.microtopics && r.microtopics[0]), [
                       [rec.subject, label],
@@ -3465,7 +3541,7 @@ function SinglePagerTab({ db, updateSlice }) {
                 .map(id => ({ id, label: resolveMicrotopicLabelById(db, id) }))
                 .filter(o => o.label);
               return (
-                <DriveFileCell driveFile={rec.driveFile} db={db} updateSlice={updateSlice} onChange={onChange} folderKey="singlePager" locked={locked}
+                <DriveFilesCell files={getRowFiles(rec)} db={db} updateSlice={updateSlice} onChange={onChange} folderKey="singlePager" locked={locked}
                   tagOptions={tagOptions}
                   getNamePrefixForTag={label => nextFileNamePrefix(db.singlePager, rec, r => normKey(r.gsPaper, r.microtopics && r.microtopics[0]), [
                     [rec.subject, label],
@@ -3594,7 +3670,7 @@ function TamilTab({ db, updateSlice }) {
             { key: "notes", label: "What I've Learned", type: "textarea", width: 220 },
             {
               key: "driveFile", label: "PDF", width: 170, type: "custom",
-              render: (rec, onChange, onPatch, locked) => <DriveFileCell driveFile={rec.driveFile} db={db} updateSlice={updateSlice} onChange={onChange} folderKey="tamilReading" locked={locked}
+              render: (rec, onChange, onPatch, locked) => <DriveFilesCell files={getRowFiles(rec)} db={db} updateSlice={updateSlice} onChange={onChange} folderKey="tamilReading" locked={locked}
               namePrefix={nextFileNamePrefix(db.tamilReading, rec, r => normKey(r.topic), ["TamilLiterature", rec.topic])} />,
             },
           ]}
@@ -3623,7 +3699,7 @@ function TamilTab({ db, updateSlice }) {
             { key: "status", label: "Status", type: "status", options: TASK_STATUS, width: 140 },
             {
               key: "driveFile", label: "Answer PDF", width: 170, type: "custom",
-              render: (rec, onChange, onPatch, locked) => <DriveFileCell driveFile={rec.driveFile} db={db} updateSlice={updateSlice} onChange={onChange} folderKey="tamilWriting" locked={locked}
+              render: (rec, onChange, onPatch, locked) => <DriveFilesCell files={getRowFiles(rec)} db={db} updateSlice={updateSlice} onChange={onChange} folderKey="tamilWriting" locked={locked}
               namePrefix={nextFileNamePrefix(db.tamilWriting, rec, r => normKey(r.topic), ["TamilLiterature", rec.topic])} />,
             },
           ]}
@@ -3720,7 +3796,7 @@ function CurrentAffairsTab({ db, updateSlice }) {
           },
           {
             key: "driveFile", label: "Clipping / PDF", width: 170, type: "custom",
-            render: (rec, onChange, onPatch, locked) => <DriveFileCell driveFile={rec.driveFile} db={db} updateSlice={updateSlice} onChange={onChange} folderKey="currentAffairs" locked={locked}
+            render: (rec, onChange, onPatch, locked) => <DriveFilesCell files={getRowFiles(rec)} db={db} updateSlice={updateSlice} onChange={onChange} folderKey="currentAffairs" locked={locked}
                 namePrefix={nextFileNamePrefix(db.currentAffairs, rec, r => normKey(r.subject, r.subtopic || r.relevantSyllabusTopic), [
                   [rec.subject, rec.subtopic, rec.microtopic],
                   [rec.subject, rec.microtopic],
@@ -3962,7 +4038,7 @@ function AnswerWritingTab({ db, updateSlice }) {
                     ? rec.microtopics.map(id => ({ id, label: resolveMicrotopicLabelById(db, id) })).filter(o => o.label)
                     : (rec.topic ? [{ id: "legacy-topic", label: rec.topic }] : []);
                   return (
-                    <DriveFileCell driveFile={rec.driveFile} db={db} updateSlice={updateSlice} onChange={onChange} folderKey="answerWriting" locked={locked}
+                    <DriveFilesCell files={getRowFiles(rec)} db={db} updateSlice={updateSlice} onChange={onChange} folderKey="answerWriting" locked={locked}
                       tagOptions={tagOptions}
                       getNamePrefixForTag={label => nextFileNamePrefix(db.answerWriting, rec, r => normKey(r.gsPaper, r.microtopics && r.microtopics[0]), [rec.gsPaper, label])} />
                   );
@@ -3994,7 +4070,7 @@ function AnswerWritingTab({ db, updateSlice }) {
                     ? rec.microtopics.map(id => ({ id, label: resolveMicrotopicLabelById(db, id) })).filter(o => o.label)
                     : (rec.topic ? [{ id: "legacy-topic", label: rec.topic }] : []);
                   return (
-                    <DriveFileCell driveFile={rec.driveFile} db={db} updateSlice={updateSlice} onChange={onChange} folderKey="topperCopies" locked={locked}
+                    <DriveFilesCell files={getRowFiles(rec)} db={db} updateSlice={updateSlice} onChange={onChange} folderKey="topperCopies" locked={locked}
                       tagOptions={tagOptions}
                       getNamePrefixForTag={label => nextFileNamePrefix(db.topperCopies, rec, r => normKey(r.gsPaper, r.microtopics && r.microtopics[0]), [rec.gsPaper, label])} />
                   );
@@ -4357,12 +4433,26 @@ function buildTopicCompletionIndexes(db) {
 // (if any) is linked to this Syllabus row, defaulting "Yet to Start" for a
 // row that's never had one edited. readingRecId is exposed so the caller
 // knows whether to patch an existing reading record or lazily create one.
+// Picks the single most relevant file across a set of matched records for
+// one Syllabus row — used where the UI only has room for one file (e.g.
+// Topic Master's summary table), even though a record itself may now carry
+// several (one per tag). Prefers, in order: a Completed record's file
+// tagged to this row's own Micro Topic; a Completed record's first file;
+// any matched record's file tagged to this row; any matched record's first
+// file. Falls back to null when nothing has a file at all.
+function bestFileForRow(matchedRecs, row) {
+  const tagMatches = f => f.tag && row.microtopic && normKey(f.tag) === normKey(row.microtopic);
+  const completedFiles = matchedRecs.filter(r => r.status === "Completed").flatMap(getRowFiles);
+  const allFiles = matchedRecs.flatMap(getRowFiles);
+  return completedFiles.find(tagMatches) || completedFiles[0]
+    || allFiles.find(tagMatches) || allFiles[0] || null;
+}
+
 function computeTopicCompletionFields(row, indexes) {
   const matchedClasses = taggedRecsForSyllabusRow(indexes.classesIdx, row);
   const classNotes = matchedClasses.some(c => c.status === "Completed") ? "Completed"
     : matchedClasses.length > 0 ? "In Progress" : "Not Started";
-  const classNotesFile = (matchedClasses.find(c => c.status === "Completed" && c.driveFile)
-    || matchedClasses.find(c => c.driveFile) || {}).driveFile || null;
+  const classNotesFile = bestFileForRow(matchedClasses, row);
 
   const standardMaterial = taggedRecsForSyllabusRow(indexes.stdBooksIdx, row).length > 0 ? "Completed" : "Not Started";
   const ncert = taggedRecsForSyllabusRow(indexes.ncertIdx, row).length > 0 ? "Completed" : "Not Started";
@@ -4468,7 +4558,7 @@ function TopicMasterTab({ db, onNavigate }) {
                 {active.classes.length === 0 ? <EmptyState>No classes logged.</EmptyState> :
                   active.classes.map(c => (
                     <div key={c.id} className="ucc-tiny" style={{ marginBottom: 4 }}>
-                      {c.date} — Class {c.classNumber} <Badge tone={colorFor(c.status)}>{c.status}</Badge> <DriveDownloadLink driveFile={c.driveFile} />
+                      {c.date} — Class {c.classNumber} <Badge tone={colorFor(c.status)}>{c.status}</Badge> <DriveDownloadLinks files={getRowFiles(c)} />
                     </div>
                   ))}
               </TopicSection>
@@ -4495,7 +4585,7 @@ function TopicMasterTab({ db, onNavigate }) {
                 {active.singlePager.length === 0 ? <EmptyState>Not started.</EmptyState> :
                   active.singlePager.map(s => (
                     <div key={s.id} className="ucc-tiny" style={{ marginBottom: 4 }}>
-                      Status: <Badge tone={colorFor(s.status)}>{s.status}</Badge> · Revision: <Badge tone={colorFor(s.revision)}>{s.revision || "Yet to Start"}</Badge> <DriveDownloadLink driveFile={s.driveFile} />
+                      Status: <Badge tone={colorFor(s.status)}>{s.status}</Badge> · Revision: <Badge tone={colorFor(s.revision)}>{s.revision || "Yet to Start"}</Badge> <DriveDownloadLinks files={getRowFiles(s)} />
                     </div>
                   ))}
               </TopicSection>
@@ -4503,7 +4593,7 @@ function TopicMasterTab({ db, onNavigate }) {
                 {active.currentAffairs.length === 0 ? <EmptyState>No related entries.</EmptyState> :
                   active.currentAffairs.map(c => (
                     <div key={c.id} className="ucc-tiny" style={{ marginBottom: 4 }}>
-                      {c.date} — {c.title} <DriveDownloadLink driveFile={c.driveFile} />
+                      {c.date} — {c.title} <DriveDownloadLinks files={getRowFiles(c)} />
                     </div>
                   ))}
               </TopicSection>
@@ -4511,8 +4601,8 @@ function TopicMasterTab({ db, onNavigate }) {
                 <TopicSection title="Tamil literature">
                   {active.tamilReading.length === 0 && active.tamilWriting.length === 0 ? <EmptyState>No related entries.</EmptyState> : (
                     <>
-                      {active.tamilReading.map(t => <div key={t.id} className="ucc-tiny" style={{ marginBottom: 4 }}>Reading — {t.source} <DriveDownloadLink driveFile={t.driveFile} /></div>)}
-                      {active.tamilWriting.map(t => <div key={t.id} className="ucc-tiny" style={{ marginBottom: 4 }}>Writing — {t.date} <Badge tone={colorFor(t.status)}>{t.status}</Badge> <DriveDownloadLink driveFile={t.driveFile} /></div>)}
+                      {active.tamilReading.map(t => <div key={t.id} className="ucc-tiny" style={{ marginBottom: 4 }}>Reading — {t.source} <DriveDownloadLinks files={getRowFiles(t)} /></div>)}
+                      {active.tamilWriting.map(t => <div key={t.id} className="ucc-tiny" style={{ marginBottom: 4 }}>Writing — {t.date} <Badge tone={colorFor(t.status)}>{t.status}</Badge> <DriveDownloadLinks files={getRowFiles(t)} /></div>)}
                     </>
                   )}
                 </TopicSection>
@@ -4521,7 +4611,7 @@ function TopicMasterTab({ db, onNavigate }) {
                 {active.answerWriting.length === 0 ? <EmptyState>No related answers.</EmptyState> :
                   active.answerWriting.map(a => (
                     <div key={a.id} className="ucc-tiny" style={{ marginBottom: 4 }}>
-                      {a.date} — {a.gsPaper} <Badge tone={colorFor(a.status)}>{a.status}</Badge> <DriveDownloadLink driveFile={a.driveFile} />
+                      {a.date} — {a.gsPaper} <Badge tone={colorFor(a.status)}>{a.status}</Badge> <DriveDownloadLinks files={getRowFiles(a)} />
                     </div>
                   ))}
               </TopicSection>
@@ -4529,7 +4619,7 @@ function TopicMasterTab({ db, onNavigate }) {
                 {active.topperCopies.length === 0 ? <EmptyState>No related topper copies.</EmptyState> :
                   active.topperCopies.map(a => (
                     <div key={a.id} className="ucc-tiny" style={{ marginBottom: 4 }}>
-                      {a.date} — {a.gsPaper} <DriveDownloadLink driveFile={a.driveFile} />
+                      {a.date} — {a.gsPaper} <DriveDownloadLinks files={getRowFiles(a)} />
                     </div>
                   ))}
               </TopicSection>

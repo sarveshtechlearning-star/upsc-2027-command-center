@@ -551,7 +551,7 @@ summary will do.
   future section gains an ID-based reference to another *non-Settings*
   section, give it the same warning treatment rather than assuming only
   Syllabus can ever need one.
-- **Google Drive PDFs**: `DriveFileCell` + `uploadDriveFile`/
+- **Google Drive PDFs**: `DriveFilesCell` + `uploadDriveFile`/
   `downloadDriveFile` are generic across trackers — pass a `folderKey`
   (see `DRIVE_FOLDER_NAMES`) to keep each tracker's PDFs in their own
   Drive folder. Currently wired up for Single Pager, Classes, GS Answer
@@ -560,6 +560,27 @@ summary will do.
   `settings.driveFolderId` only for the `singlePager` key, to avoid
   creating a duplicate folder for existing users; new folder ids live in
   `settings.driveFolders[folderKey]`.
+  **Multiple files per row**: a row's `driveFile` field holds an ARRAY of
+  `{id, name, tag}` once touched by `DriveFilesCell` — never renamed to
+  `driveFiles`, never migrated in bulk. Every read site goes through
+  `getRowFiles(rec)` (returns `[]` for null, wraps a legacy single
+  `{id,name}` object in a 1-element array, passes an array through
+  as-is), so rows saved before this existed keep working untouched
+  forever. **Do not read or write `rec.driveFile` directly anywhere** —
+  always `getRowFiles(rec)` for reads; writes go through
+  `DriveFilesCell`'s own `onChange(nextFilesArray)`, which the column's
+  generic `updateField` then assigns straight to `rec.driveFile` (no
+  separate field, so all the existing `completionRequiresUpload`/
+  "Partially Completed" lock-exception logic keyed on
+  `col.key === "driveFile"` keeps working unmodified). Each fresh "Add"
+  (not a Replace) triggers the tag popup whenever the row's `tagOptions`
+  has more than one entry — the chosen tag is stored on that file
+  (`file.tag`), not just used for naming, so a Classes row tagged to
+  several Micro Topics can carry one file per topic. `DriveDownloadLinks`
+  (plural) is the read-only variant used in Topic Master for a raw
+  record's full file list; `DriveDownloadLink` (singular) still exists
+  for spots that already resolved down to one specific file (e.g.
+  `bestFileForRow`'s pick for Topic Master's summary table).
 - **Google Calendar + Tasks sync (Today's Planner)**: `CalendarSyncButton` +
   `addBlocksToGoogleCalendar`/`createCalendarEvent`/`createTask` mirror
   the Drive integration's shape — same `VITE_GOOGLE_CLIENT_ID`/Google
@@ -616,18 +637,18 @@ summary will do.
   folder (which is exactly what Reset already did before this existed).
   Don't make archiving block or fail the reset.
 - **First-time uploads get a standardized name; replacing an existing file
-  never renames it.** `DriveFileCell`'s `namePrefix` prop (built per call
+  never renames it.** `DriveFilesCell`'s `namePrefix` prop (built per call
   site by `nextFileNamePrefix`) supplies something like
-  `Polity_FundamentalRights_2` (no extension — `DriveFileCell` appends the
+  `Polity_FundamentalRights_2` (no extension — `DriveFilesCell` appends the
   uploaded file's own extension), where the trailing number is per
   subject+subtopic (or whatever grouping that tracker's call site passes —
   Tamil uses a fixed "TamilLiterature" label + Topic since it has no
   Subject/Subtopic; GS Answer Writing uses GS Paper + Topic since it has
-  no Subject at all). **This is deliberately only computed for a row with
-  no existing `driveFile` yet — a replace always keeps the current name
-  as-is, full stop, never recomputing.** This isn't an oversight: reusing
-  the numbering logic on replace risks two files colliding on the same
-  number whenever upload order and row order diverge (row A uploaded
+  no Subject at all). **This is deliberately only computed for a FRESH
+  add (no `replaceFile` passed to `beginUpload`) — a replace always keeps
+  the current name as-is, full stop, never recomputing.** This isn't an
+  oversight: reusing the numbering logic on replace risks two files
+  colliding on the same number whenever upload order and row order diverge (row A uploaded
   second gets "_2"; later replacing row B, uploaded first as "_1", would
   ask for "how many others already have a file" and get the same "_2"
   answer, since the count doesn't know which specific number a given row
@@ -912,16 +933,14 @@ Non-bug feature requests intentionally deferred during the Sep 3–30, 2026
 code freeze. Targeted to resume **Oct 1, 2026** — check this section first
 when picking work back up.
 
-- **Multiple files per row.** Every tracker row currently supports exactly
-  one `driveFile: {id, name}`. Needs a real design pass before building —
-  does `driveFile` become an array, do existing single-file rows need a
-  migration, how do completion-gating (`completionRequiresUpload`) and the
-  tag-linked archival index (`buildTaggedIndex`) treat "at least one file"
-  vs. "exactly one file" — not a quick bolt-on.
+_Sep 7, 2026: "Multiple files per row" was pulled forward and built as an
+explicit, Sarvesh-authorized freeze exception rather than waiting for Oct
+1 — see the Google Drive PDFs bullet in Section 4 for what shipped._
+
 - **View button next to Download.** Open a row's attached PDF in a new
   tab (e.g. `https://drive.google.com/file/d/{fileId}/view`) instead of
-  only downloading it. Small, low-risk addition to `DriveFileCell`,
-  alongside the existing Upload/Replace/Download buttons.
+  only downloading it. Small, low-risk addition to `DriveFilesCell`,
+  alongside the existing Upload/Replace/Download/Remove buttons.
 - **Enforced status-transition flow with reasons + a per-row log.**
   Requested flow: `Not Started → In Progress → Partially Completed →
   Completed`, no skipping stages and no free reverting. Every status
