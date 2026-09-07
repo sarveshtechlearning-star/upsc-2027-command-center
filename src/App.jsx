@@ -515,39 +515,19 @@ function minutesToTime(mins) {
   const hh = String(h).padStart(2, "0"), mmS = String(mm).padStart(2, "0");
   return (overflowDays > 0 ? "+1d " : "") + `${hh}:${mmS}`;
 }
-// Bundles every non-skipped Today's Planner block for one day into a single
-// downloadable .ics file, so one click adds the whole day's schedule to
-// Google Calendar (via Google Calendar's own Settings -> Import & export,
-// or by opening the file on a device where Google Calendar is the default
-// handler) — no OAuth/API scope needed, since this is a plain file the
-// user imports themselves. Events are one-off only (no RRULE), matching
-// what was asked for.
+// Opens a Google Calendar "quick add" tab (action=TEMPLATE) for every
+// non-skipped Today's Planner block, all from one button click — Sarvesh
+// wants the direct-link flow (tap Save inside Google Calendar, no import
+// step) rather than a downloadable .ics file, just triggered once for the
+// whole day instead of once per block.
 //
-// Uses floating local time (no Z / TZID) rather than a full VTIMEZONE
-// block — every calendar app treats a bare DTSTART/DTEND as "this device's
-// current timezone," which is the right behavior for a same-day schedule
-// like this and avoids a lot of unnecessary ICS complexity.
-function icsEscape(text) {
-  return String(text || "").replace(/\\/g, "\\\\").replace(/;/g, "\\;").replace(/,/g, "\\,").replace(/\n/g, "\\n");
-}
-// RFC 5545 lines should be folded at 75 octets; long labels are unlikely
-// here, but folding is cheap insurance against a stray very-long title.
-function icsFoldLine(line) {
-  if (line.length <= 75) return line;
-  let out = line.slice(0, 75);
-  let rest = line.slice(75);
-  while (rest.length > 0) {
-    out += "\r\n " + rest.slice(0, 74);
-    rest = rest.slice(74);
-  }
-  return out;
-}
-function buildDayIcsContent(dateISO, blocks) {
-  const dtStamp = (() => {
-    const d = new Date();
-    const pad = n => String(n).padStart(2, "0");
-    return `${d.getUTCFullYear()}${pad(d.getUTCMonth() + 1)}${pad(d.getUTCDate())}T${pad(d.getUTCHours())}${pad(d.getUTCMinutes())}${pad(d.getUTCSeconds())}Z`;
-  })();
+// No OAuth/API scope needed — each tab is just Google's own prefilled
+// "create event" page. All window.open() calls happen synchronously inside
+// the click handler (not after an await/setTimeout), which is what keeps
+// browsers from treating them as unsolicited popups; even so, a browser
+// that still blocks extra tabs will show its usual "popup blocked" bar,
+// which the user can allow once for this site.
+function googleCalendarQuickAddLink(dateISO, block) {
   const fmt = (mins) => {
     const days = Math.floor(mins / 1440);
     const [y, m, d] = (days > 0 ? addDaysISO(dateISO, days) : dateISO).split("-").map(Number);
@@ -556,34 +536,22 @@ function buildDayIcsContent(dateISO, blocks) {
     const pad = n => String(n).padStart(2, "0");
     return `${y}${pad(m)}${pad(d)}T${pad(hh)}${pad(mm)}00`;
   };
-  const lines = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//UPSC 2027 Command Center//Today's Planner//EN", "CALSCALE:GREGORIAN"];
-  blocks.forEach(b => {
-    const end = b.end > b.start ? b.end : b.start + 30;
-    lines.push(
-      "BEGIN:VEVENT",
-      icsFoldLine(`UID:${uid()}@upsc-2027-command-center`),
-      `DTSTAMP:${dtStamp}`,
-      `DTSTART:${fmt(b.start)}`,
-      `DTEND:${fmt(end)}`,
-      icsFoldLine(`SUMMARY:${icsEscape(b.label)}`),
-      "END:VEVENT"
-    );
+  const end = block.end > block.start ? block.end : block.start + 30; // guard zero-length slots
+  const params = new URLSearchParams({
+    action: "TEMPLATE",
+    text: block.label,
+    dates: `${fmt(block.start)}/${fmt(end)}`,
   });
-  lines.push("END:VCALENDAR");
-  return lines.join("\r\n");
+  try {
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    if (tz) params.set("ctz", tz);
+  } catch { /* Intl unavailable — Google falls back to the browser's own tz */ }
+  return `https://calendar.google.com/calendar/render?${params.toString()}`;
 }
-function downloadDayIcs(dateISO, blocks) {
-  const content = buildDayIcsContent(dateISO, blocks);
-  const blob = new Blob([content], { type: "text/calendar;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = `upsc-planner-${dateISO}.ics`;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
+function openGoogleCalendarLinksForDay(dateISO, blocks) {
+  blocks.forEach(b => window.open(googleCalendarQuickAddLink(dateISO, b), "_blank", "noopener,noreferrer"));
 }
+
 function normKey(...parts) { return parts.map(p => String(p || "").trim().toLowerCase()).join("|"); }
 // Escapes user-typed text (journal entries, reflections) before it goes into
 // an HTML string that gets written to the clipboard — otherwise something
@@ -2564,9 +2532,9 @@ function TodayTab({ db, updateSlice, onNavigate }) {
           })}
           <div className="ucc-flex wrap" style={{ gap: 8 }}>
             <button className="ucc-btn" onClick={addCustomBlock}><Plus size={14} /> Add custom task</button>
-            <button className="ucc-btn" title="Downloads a .ics file with today's non-skipped slots — import it into Google Calendar (Settings > Import & export) to add them all at once"
-              onClick={() => downloadDayIcs(dateISO, timedBlocks.filter(b => !b.skipped))}>
-              <CalendarPlus size={14} /> Add all to Google Calendar
+            <button className="ucc-btn" title="Opens a Google Calendar tab for each of today's tasks, prefilled — tap Save in each. If your browser blocks the extra tabs, allow pop-ups for this site."
+              onClick={() => openGoogleCalendarLinksForDay(dateISO, timedBlocks.filter(b => !b.skipped))}>
+              <CalendarPlus size={14} /> Add to Google Calendar
             </button>
             {missingBlocks.length > 0 && (
               <select className="ucc-select" style={{ width: "auto", maxWidth: 240 }} value=""
