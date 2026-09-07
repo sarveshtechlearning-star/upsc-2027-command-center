@@ -933,9 +933,20 @@ Non-bug feature requests intentionally deferred during the Sep 3–30, 2026
 code freeze. Targeted to resume **Oct 1, 2026** — check this section first
 when picking work back up.
 
+**Freeze policy, tightened Sep 7, 2026:** the one exception granted so far
+("Multiple files per row", pulled forward and built the same day — see
+below) is the last one for this freeze window. From Sep 7 through Sep 30,
+only a genuine bug — something broken, not something merely wanted —
+qualifies as a freeze exception. If a request in this window is a feature
+(however small, however badly wanted, "I need it" included), the answer
+is: add it to this list and build it Oct 1. Don't re-litigate whether
+*this particular* feature is different — flag it as a feature and queue
+it, same as any other.
+
 _Sep 7, 2026: "Multiple files per row" was pulled forward and built as an
 explicit, Sarvesh-authorized freeze exception rather than waiting for Oct
-1 — see the Google Drive PDFs bullet in Section 4 for what shipped._
+1 — see the Google Drive PDFs bullet in Section 4 for what shipped. This
+is the exception that prompted the stricter policy above._
 
 - **View button next to Download.** Open a row's attached PDF in a new
   tab (e.g. `https://drive.google.com/file/d/{fileId}/view`) instead of
