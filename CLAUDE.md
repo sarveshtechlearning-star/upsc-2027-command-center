@@ -576,10 +576,22 @@ summary will do.
   feature. `TodayTab` pre-filters `timedBlocks` to non-skipped, non-break
   before handing them to the button; dropped slots are already absent
   from `timedBlocks` entirely (they never made it into `plan.blocks`), so
-  no separate filtering for those is needed. Sequential requests, not
+  no separate filtering for those is needed.
+
+  **Cross-referencing, not merging**: Events and Tasks are separate
+  Google object types with no shared UI representation — there's no API
+  field that embeds one inside the other, confirmed against Google's own
+  REST docs before building this. Instead each points at the other:
+  the event's `description` gets a link to the task (via the task's own
+  `webViewLink`, Google-populated, not something we construct), and the
+  task's `notes` gets a link back to the event (via the event's own
+  `htmlLink`, same idea). Three sequential calls per block, in a fixed
+  order since each needs an id/link the previous one produced: create
+  event -> create task (with a note pointing at the event) -> patch the
+  event's description (with a link pointing at the task). Not
   `Promise.all` — partial failure should be attributable to one task, not
-  an ambiguous batch error; a block only counts as succeeded if both its
-  event and its task were created.
+  an ambiguous batch error; a block only counts as succeeded if all three
+  calls land.
 - **Reset (both "Reset all data" and a per-section reset in `DangerZone`)
   archives each affected tracker's Drive folder before clearing its data —
   by request, since Reset never deletes from Drive and previously left old

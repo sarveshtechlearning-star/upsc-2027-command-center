@@ -118,9 +118,15 @@ time-of-day. It reuses the same Google Cloud project as Drive above:
    or task lists.
 
 Tasks land in your **default** Google Tasks list (the one Google
-Calendar's own sidebar shows tasks from). If this isn't configured, the
-button will show an error when clicked; the rest of the app is
-unaffected.
+Calendar's own sidebar shows tasks from). The event and its task **can't
+be merged into one item** — Google Calendar Events and Google Tasks are
+separate object types with no shared UI representation, so they'll
+always show up as two separate things (a timed block plus a row in the
+Tasks area). What this does instead: the event's description gets a
+link to the task, and the task's notes get a link back to the event, so
+you can jump between the two even though they display separately. If
+this isn't configured, the button will show an error when clicked; the
+rest of the app is unaffected.
 
 ## Notes
 

@@ -1162,6 +1162,12 @@ function calendarDateTime(dateISO, mins) {
   return `${y}-${pad(m)}-${pad(d)}T${pad(hh)}:${pad(mm)}:00`;
 }
 
+// Returns the created event's { id, htmlLink } (not just fire-and-forget)
+// so the caller can link a Task's notes back to it, and so the event
+// itself can be patched afterward with a description pointing at that
+// Task once it exists (see addBlocksToGoogleCalendar below) — Calendar's
+// own `htmlLink` is an absolute, Google-hosted URL to view this exact
+// event, no guessing at a URL format ourselves.
 async function createCalendarEvent(accessToken, { summary, dateISO, startMin, endMin }) {
   const end = endMin > startMin ? endMin : startMin + 30; // guard a zero/negative-length slot
   let timeZone;
@@ -1175,9 +1181,20 @@ async function createCalendarEvent(accessToken, { summary, dateISO, startMin, en
     // useDefault: false is required for `overrides` to take effect at all.
     reminders: { useDefault: false, overrides: [{ method: "popup", minutes: 5 }] },
   };
-  await googleApiFetch("https://www.googleapis.com/calendar/v3/calendars/primary/events", accessToken, {
+  const res = await googleApiFetch("https://www.googleapis.com/calendar/v3/calendars/primary/events", accessToken, {
     method: "POST",
     body: JSON.stringify(event),
+  });
+  return res.json(); // { id, htmlLink, ... }
+}
+
+// Partial update (PATCH semantics — only touches the fields given) used
+// here purely to add the cross-reference to the linked Task once it
+// exists, i.e. after createCalendarEvent has already run.
+async function setCalendarEventDescription(accessToken, eventId, description) {
+  await googleApiFetch(`https://www.googleapis.com/calendar/v3/calendars/primary/events/${eventId}`, accessToken, {
+    method: "PATCH",
+    body: JSON.stringify({ description }),
   });
 }
 
@@ -1187,38 +1204,60 @@ async function createCalendarEvent(accessToken, { summary, dateISO, startMin, en
 // block's actual start time (Tasks has no concept of a time-of-day at
 // all). "@default" is the built-in alias for the signed-in user's default
 // task list — same idea as Calendar's "primary", no separate lookup call
-// needed to find/create a list first.
-async function createTask(accessToken, { title, dateISO }) {
-  const task = { title, due: `${dateISO}T00:00:00.000Z` };
-  await googleApiFetch("https://tasks.googleapis.com/tasks/v1/lists/@default/tasks", accessToken, {
+// needed to find/create a list first. Returns the created task's
+// { id, webViewLink } — Tasks' own absolute, Google-hosted URL to view
+// this exact task — for the same cross-referencing reason as the event's
+// htmlLink above.
+async function createTask(accessToken, { title, dateISO, notes }) {
+  const task = { title, due: `${dateISO}T00:00:00.000Z`, ...(notes ? { notes } : {}) };
+  const res = await googleApiFetch("https://tasks.googleapis.com/tasks/v1/lists/@default/tasks", accessToken, {
     method: "POST",
     body: JSON.stringify(task),
   });
+  return res.json(); // { id, webViewLink, ... }
 }
 
 // Creates one Calendar event (the timed slot) AND one linked Task (the
 // completion checkbox) per block, sequentially — so one failure is
 // attributable to one task rather than an ambiguous batch error, and to
-// stay well clear of any per-second rate limit. A block only counts as
-// succeeded if BOTH calls land; if either fails, it's reported in `failed`
-// with which half broke, rather than silently dropping just the event or
-// just the task. Returns a summary rather than throwing on a partial
-// failure, so the rest of the day's tasks still sync even if one fails.
+// stay well clear of any per-second rate limit. True merging of the two
+// into a single item isn't possible on Google's side (Events and Tasks
+// are separate object types with no shared UI representation), so
+// instead each cross-references the other: the event's description gets
+// a link to the task, and the task's notes get a link back to the event
+// — three calls per block (event -> task-with-note-to-event -> patch
+// event's description with link-to-task), in that order, since each
+// later call needs an id/link the earlier one produced. A block only
+// counts as succeeded if all three calls land; if any fail, it's
+// reported in `failed` with which part broke, rather than silently
+// dropping just one piece. Returns a summary rather than throwing on a
+// partial failure, so the rest of the day's tasks still sync even if one
+// fails.
 async function addBlocksToGoogleCalendar(dateISO, blocks) {
   const accessToken = await getCalendarAccessToken();
   let succeeded = 0;
   const failed = [];
   for (const b of blocks) {
     const problems = [];
+    let event = null;
+    let task = null;
     try {
-      await createCalendarEvent(accessToken, { summary: b.label, dateISO, startMin: b.start, endMin: b.end });
+      event = await createCalendarEvent(accessToken, { summary: b.label, dateISO, startMin: b.start, endMin: b.end });
     } catch (err) {
       problems.push(`event: ${err.message}`);
     }
     try {
-      await createTask(accessToken, { title: b.label, dateISO });
+      const notes = event?.htmlLink ? `Calendar event: ${event.htmlLink}` : undefined;
+      task = await createTask(accessToken, { title: b.label, dateISO, notes });
     } catch (err) {
       problems.push(`task: ${err.message}`);
+    }
+    if (event && task?.webViewLink) {
+      try {
+        await setCalendarEventDescription(accessToken, event.id, `Linked task: ${task.webViewLink}`);
+      } catch (err) {
+        problems.push(`linking event to task: ${err.message}`);
+      }
     }
     if (problems.length === 0) succeeded++;
     else failed.push({ label: b.label, message: problems.join("; ") });
@@ -2900,12 +2939,12 @@ function CalendarSyncButton({ dateISO, blocks }) {
   return (
     <div>
       <button className="ucc-btn" disabled={busy || blocks.length === 0} onClick={handleClick}
-        title={blocks.length === 0 ? "No active tasks to add today" : `Add ${blocks.length} active task${blocks.length === 1 ? "" : "s"} as a Google Calendar event + a checkable Google Task`}>
+        title={blocks.length === 0 ? "No active tasks to add today" : `Add ${blocks.length} active task${blocks.length === 1 ? "" : "s"} as a Google Calendar event + a linked, checkable Google Task`}>
         <CalendarPlus size={14} /> {busy ? "Adding…" : "Add to Google Calendar"}
       </button>
       {result && !error && (
         <div className="ucc-tiny" style={{ marginTop: 4, color: result.failed.length > 0 ? "var(--amber)" : "var(--ink-muted)" }}>
-          Added {result.succeeded} of {result.succeeded + result.failed.length} tasks (event + checkbox) to Google.
+          Added {result.succeeded} of {result.succeeded + result.failed.length} tasks (event + linked checkbox) to Google.
           {result.failed.length > 0 && ` Issues: ${result.failed.map(f => `${f.label} (${f.message})`).join("; ")}.`}
         </div>
       )}
