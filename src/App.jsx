@@ -1089,17 +1089,22 @@ async function trashDriveFile(fileId) {
 }
 
 /* ============================================================
-   GOOGLE CALENDAR INTEGRATION (Today's Planner -> Google Calendar)
+   GOOGLE CALENDAR + TASKS INTEGRATION (Today's Planner -> Google)
    Mirrors the Drive integration above: same Google Cloud project/
-   VITE_GOOGLE_CLIENT_ID, its own narrow scope (calendar.events — create/
-   edit events only, no read access to the rest of the calendar), its own
-   token client so a Drive-only grant from before this feature existed
-   doesn't silently also cover Calendar. First use opens Google's consent
-   popup for this scope; later calls in the same session are silent until
-   the token expires. See README section 6 for the one-time Google Cloud
-   Console setup (enabling the Calendar API) this requires.
+   VITE_GOOGLE_CLIENT_ID. Each active task gets BOTH a Calendar Event (for
+   the timed slot — Events have no completion checkbox, that's not a thing
+   Google Calendar supports) AND a linked Google Task (for the checkbox —
+   Tasks only carry a due *date*, no time-of-day, so neither product alone
+   covers both needs). One combined scope (calendar.events + tasks) rather
+   than two separate token clients, since these two calls always happen
+   together for this one feature — a Drive-only grant from before this
+   feature existed still doesn't silently cover either of these. First use
+   opens Google's consent popup for both scopes at once; later calls in the
+   same session are silent until the token expires. See README section 6
+   for the one-time Google Cloud Console setup (enabling the Calendar API
+   and the Tasks API) this requires.
    ============================================================ */
-const CALENDAR_SCOPE = "https://www.googleapis.com/auth/calendar.events";
+const CALENDAR_SCOPE = "https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/tasks";
 let gisCalendarTokenClient = null;
 let cachedCalendarToken = null; // { token, expiresAt }
 
@@ -1128,14 +1133,16 @@ async function getCalendarAccessToken() {
   }
 }
 
-async function calendarFetch(url, accessToken, options = {}) {
+// Shared by both the Calendar API and the Tasks API calls below — same
+// Bearer-token REST pattern, just different hosts/paths.
+async function googleApiFetch(url, accessToken, options = {}) {
   const res = await fetch(url, {
     ...options,
     headers: { ...(options.headers || {}), Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
   });
   if (!res.ok) {
     const body = await res.text().catch(() => "");
-    throw new Error(`Google Calendar request failed (${res.status}). ${body.slice(0, 200)}`);
+    throw new Error(`Google request failed (${res.status}). ${body.slice(0, 200)}`);
   }
   return res;
 }
@@ -1168,28 +1175,53 @@ async function createCalendarEvent(accessToken, { summary, dateISO, startMin, en
     // useDefault: false is required for `overrides` to take effect at all.
     reminders: { useDefault: false, overrides: [{ method: "popup", minutes: 5 }] },
   };
-  await calendarFetch("https://www.googleapis.com/calendar/v3/calendars/primary/events", accessToken, {
+  await googleApiFetch("https://www.googleapis.com/calendar/v3/calendars/primary/events", accessToken, {
     method: "POST",
     body: JSON.stringify(event),
   });
 }
 
-// Creates one Calendar event per block, sequentially (so one failure is
+// Google Tasks' `due` field is date-only — the API accepts a full RFC3339
+// timestamp but only the date portion is honored/shown, so this always
+// uses midnight UTC on the task's date rather than trying to carry the
+// block's actual start time (Tasks has no concept of a time-of-day at
+// all). "@default" is the built-in alias for the signed-in user's default
+// task list — same idea as Calendar's "primary", no separate lookup call
+// needed to find/create a list first.
+async function createTask(accessToken, { title, dateISO }) {
+  const task = { title, due: `${dateISO}T00:00:00.000Z` };
+  await googleApiFetch("https://tasks.googleapis.com/tasks/v1/lists/@default/tasks", accessToken, {
+    method: "POST",
+    body: JSON.stringify(task),
+  });
+}
+
+// Creates one Calendar event (the timed slot) AND one linked Task (the
+// completion checkbox) per block, sequentially — so one failure is
 // attributable to one task rather than an ambiguous batch error, and to
-// stay well clear of any per-second rate limit). Returns a summary rather
-// than throwing on a partial failure, so e.g. 5 of 6 tasks still land in
-// the calendar even if one request fails.
+// stay well clear of any per-second rate limit. A block only counts as
+// succeeded if BOTH calls land; if either fails, it's reported in `failed`
+// with which half broke, rather than silently dropping just the event or
+// just the task. Returns a summary rather than throwing on a partial
+// failure, so the rest of the day's tasks still sync even if one fails.
 async function addBlocksToGoogleCalendar(dateISO, blocks) {
   const accessToken = await getCalendarAccessToken();
   let succeeded = 0;
   const failed = [];
   for (const b of blocks) {
+    const problems = [];
     try {
       await createCalendarEvent(accessToken, { summary: b.label, dateISO, startMin: b.start, endMin: b.end });
-      succeeded++;
     } catch (err) {
-      failed.push({ label: b.label, message: err.message });
+      problems.push(`event: ${err.message}`);
     }
+    try {
+      await createTask(accessToken, { title: b.label, dateISO });
+    } catch (err) {
+      problems.push(`task: ${err.message}`);
+    }
+    if (problems.length === 0) succeeded++;
+    else failed.push({ label: b.label, message: problems.join("; ") });
   }
   return { succeeded, failed };
 }
@@ -2841,11 +2873,12 @@ function PlanBlock({ block, onUpdate, onMoveUp, onMoveDown, onRemove }) {
   );
 }
 
-// One-click sync of today's active tasks straight into Google Calendar via
-// the Calendar API (see getCalendarAccessToken/addBlocksToGoogleCalendar
-// above) — no per-task tabs, no manual "Save" in Google's UI. `blocks` is
-// expected pre-filtered by the caller (TodayTab) to non-skipped, non-break
-// blocks; this component only handles the click/busy/result UX, mirroring
+// One-click sync of today's active tasks straight into Google — both a
+// Calendar event (the timed slot) and a linked Google Task (the
+// completion checkbox), since neither Google product alone offers both.
+// No per-task tabs, no manual "Save" in Google's UI. `blocks` is expected
+// pre-filtered by the caller (TodayTab) to non-skipped, non-break blocks;
+// this component only handles the click/busy/result UX, mirroring
 // DriveFileCell's busy/error state pattern elsewhere in this file.
 function CalendarSyncButton({ dateISO, blocks }) {
   const [busy, setBusy] = useState(false);
@@ -2867,13 +2900,13 @@ function CalendarSyncButton({ dateISO, blocks }) {
   return (
     <div>
       <button className="ucc-btn" disabled={busy || blocks.length === 0} onClick={handleClick}
-        title={blocks.length === 0 ? "No active tasks to add today" : `Add ${blocks.length} active task${blocks.length === 1 ? "" : "s"} to Google Calendar`}>
+        title={blocks.length === 0 ? "No active tasks to add today" : `Add ${blocks.length} active task${blocks.length === 1 ? "" : "s"} as a Google Calendar event + a checkable Google Task`}>
         <CalendarPlus size={14} /> {busy ? "Adding…" : "Add to Google Calendar"}
       </button>
       {result && !error && (
         <div className="ucc-tiny" style={{ marginTop: 4, color: result.failed.length > 0 ? "var(--amber)" : "var(--ink-muted)" }}>
-          Added {result.succeeded} of {result.succeeded + result.failed.length} tasks to Google Calendar.
-          {result.failed.length > 0 && ` Failed: ${result.failed.map(f => f.label).join(", ")}.`}
+          Added {result.succeeded} of {result.succeeded + result.failed.length} tasks (event + checkbox) to Google.
+          {result.failed.length > 0 && ` Issues: ${result.failed.map(f => `${f.label} (${f.message})`).join("; ")}.`}
         </div>
       )}
       {error && <div className="ucc-tiny" style={{ marginTop: 4, color: "var(--red)" }}>{error}</div>}

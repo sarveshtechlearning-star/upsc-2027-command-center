@@ -86,30 +86,41 @@ If this isn't configured, the rest of the app works exactly as before —
 you'll just see a note on the Single Pager tab and Upload will show an
 error if clicked.
 
-## 6. (Optional) Google Calendar sync for Today's Planner
+## 6. (Optional) Google Calendar + Tasks sync for Today's Planner
 
-Today's Planner has an **Add to Google Calendar** button that creates a
-real event for each of that day's active tasks (skips breaks and any
-skipped/dropped slots) directly in your Google Calendar — no extra tabs,
-no manual "Save" on Google's side. It reuses the same Google Cloud
-project as Drive above, with its own narrower scope:
+Today's Planner has an **Add to Google Calendar** button that, for each
+of that day's active tasks (skips breaks and any skipped/dropped slots),
+creates **both**:
+- a real **Calendar event** at that task's actual time slot, and
+- a linked **Google Task** with a completion checkbox —
+
+directly in your Google account, no extra tabs, no manual "Save" on
+Google's side. Both are needed because neither Google product covers
+both things on its own: Calendar events have a precise time slot but no
+completion checkbox; Tasks have a checkbox but only a due *date*, no
+time-of-day. It reuses the same Google Cloud project as Drive above:
 
 1. In the same [Google Cloud Console](https://console.cloud.google.com)
    project you used for Drive, go to **APIs & Services -> Library** and
-   enable the **Google Calendar API**.
+   enable **both** the **Google Calendar API** and the **Google Tasks
+   API**.
 2. If your OAuth consent screen's **Scopes** step asks you to add scopes
-   explicitly, add `.../auth/calendar.events` there. (Testing-mode apps
-   with your account listed under **Test users** don't need Google's
-   app-review process for this, same as Drive.)
+   explicitly, add both `.../auth/calendar.events` and `.../auth/tasks`
+   there. (Testing-mode apps with your account listed under **Test
+   users** don't need Google's app-review process for this, same as
+   Drive.)
 3. Nothing else to configure — it uses the same `VITE_GOOGLE_CLIENT_ID`
    as Drive. The first time you click **Add to Google Calendar**, Google
-   will ask you to approve this additional scope (a one-time popup, even
-   if you'd already approved Drive access before) — scoped to
-   `calendar.events`, meaning this app can create/edit events it makes,
-   not read the rest of your calendar.
+   will ask you to approve both scopes together in one popup (even if
+   you'd already approved Drive access, or an earlier Calendar-only
+   version of this feature, before) — this app can only create/edit
+   events and tasks it makes itself, not read the rest of your calendar
+   or task lists.
 
-If this isn't configured, the button will show an error when clicked;
-the rest of the app is unaffected.
+Tasks land in your **default** Google Tasks list (the one Google
+Calendar's own sidebar shows tasks from). If this isn't configured, the
+button will show an error when clicked; the rest of the app is
+unaffected.
 
 ## Notes
 

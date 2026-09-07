@@ -560,20 +560,26 @@ summary will do.
   `settings.driveFolderId` only for the `singlePager` key, to avoid
   creating a duplicate folder for existing users; new folder ids live in
   `settings.driveFolders[folderKey]`.
-- **Google Calendar sync (Today's Planner)**: `CalendarSyncButton` +
-  `addBlocksToGoogleCalendar`/`createCalendarEvent` mirror the Drive
-  integration's shape — same `VITE_GOOGLE_CLIENT_ID`/Google Cloud
-  project, but a separate token client (`gisCalendarTokenClient`/
-  `cachedCalendarToken`, distinct from Drive's) scoped only to
-  `calendar.events`, so a Drive-only grant never silently covers
-  Calendar too. One button in `TodayTab` creates a real event per active
-  block directly via `POST .../calendars/primary/events` (no per-task
-  tabs, no manual Save) — `TodayTab` pre-filters `timedBlocks` to
-  non-skipped, non-break before handing them to the button; dropped
-  slots are already absent from `timedBlocks` entirely (they never made
-  it into `plan.blocks`), so no separate filtering for those is needed.
-  Sequential requests, not `Promise.all` — partial failure should be
-  attributable to one task, not an ambiguous batch error.
+- **Google Calendar + Tasks sync (Today's Planner)**: `CalendarSyncButton` +
+  `addBlocksToGoogleCalendar`/`createCalendarEvent`/`createTask` mirror
+  the Drive integration's shape — same `VITE_GOOGLE_CLIENT_ID`/Google
+  Cloud project, own token client (`gisCalendarTokenClient`/
+  `cachedCalendarToken`, distinct from Drive's) so a Drive-only grant
+  never silently covers this. One button in `TodayTab` creates, per
+  active block, BOTH a Calendar event (`POST .../calendars/primary/events`
+  — the timed slot) AND a linked Google Task (`POST
+  .../tasks/v1/lists/@default/tasks` — the completion checkbox), since
+  Calendar events have no checkbox and Tasks have no time-of-day; neither
+  product alone covers both. One combined scope
+  (`calendar.events tasks`, space-separated) rather than two separate
+  token clients, since these two calls always happen together for this
+  feature. `TodayTab` pre-filters `timedBlocks` to non-skipped, non-break
+  before handing them to the button; dropped slots are already absent
+  from `timedBlocks` entirely (they never made it into `plan.blocks`), so
+  no separate filtering for those is needed. Sequential requests, not
+  `Promise.all` — partial failure should be attributable to one task, not
+  an ambiguous batch error; a block only counts as succeeded if both its
+  event and its task were created.
 - **Reset (both "Reset all data" and a per-section reset in `DangerZone`)
   archives each affected tracker's Drive folder before clearing its data —
   by request, since Reset never deletes from Drive and previously left old
