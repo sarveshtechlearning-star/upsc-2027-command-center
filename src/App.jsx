@@ -6,7 +6,8 @@ import {
   Newspaper, PenTool, Brain, Search as SearchIcon, BarChart3,
   Settings as SettingsIcon, Upload, Download, ChevronUp, ChevronDown,
   Plus, Trash2, History, Check, AlertTriangle, Clock, ChevronLeft,
-  ChevronRight as ChevronRightIcon, X, LogOut, LayoutDashboard, Copy, Pencil, Lock, Flame, Target
+  ChevronRight as ChevronRightIcon, X, LogOut, LayoutDashboard, Copy, Pencil, Lock, Flame, Target,
+  CalendarPlus
 } from "lucide-react";
 
 /* ============================================================
@@ -1085,6 +1086,108 @@ async function trashDriveFile(fileId) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ trashed: true }),
   });
+}
+
+/* ============================================================
+   GOOGLE CALENDAR INTEGRATION (Today's Planner -> Google Calendar)
+   Mirrors the Drive integration above: same Google Cloud project/
+   VITE_GOOGLE_CLIENT_ID, its own narrow scope (calendar.events — create/
+   edit events only, no read access to the rest of the calendar), its own
+   token client so a Drive-only grant from before this feature existed
+   doesn't silently also cover Calendar. First use opens Google's consent
+   popup for this scope; later calls in the same session are silent until
+   the token expires. See README section 6 for the one-time Google Cloud
+   Console setup (enabling the Calendar API) this requires.
+   ============================================================ */
+const CALENDAR_SCOPE = "https://www.googleapis.com/auth/calendar.events";
+let gisCalendarTokenClient = null;
+let cachedCalendarToken = null; // { token, expiresAt }
+
+async function getCalendarAccessToken() {
+  const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID;
+  if (!clientId) throw new Error("Google Calendar isn't configured yet — add VITE_GOOGLE_CLIENT_ID to your .env (see README).");
+  if (cachedCalendarToken && cachedCalendarToken.expiresAt > Date.now() + 30000) return cachedCalendarToken.token;
+  await loadGoogleIdentityScript();
+  if (!gisCalendarTokenClient) {
+    gisCalendarTokenClient = window.google.accounts.oauth2.initTokenClient({ client_id: clientId, scope: CALENDAR_SCOPE, callback: () => {} });
+  }
+  function requestToken(prompt) {
+    return new Promise((resolve, reject) => {
+      gisCalendarTokenClient.callback = (resp) => {
+        if (resp.error) { reject(new Error(resp.error_description || resp.error)); return; }
+        cachedCalendarToken = { token: resp.access_token, expiresAt: Date.now() + (resp.expires_in || 3600) * 1000 };
+        resolve(resp.access_token);
+      };
+      gisCalendarTokenClient.requestAccessToken({ prompt });
+    });
+  }
+  try {
+    return await requestToken("");
+  } catch {
+    return requestToken("consent");
+  }
+}
+
+async function calendarFetch(url, accessToken, options = {}) {
+  const res = await fetch(url, {
+    ...options,
+    headers: { ...(options.headers || {}), Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new Error(`Google Calendar request failed (${res.status}). ${body.slice(0, 200)}`);
+  }
+  return res;
+}
+
+// Wall-clock date+time (no Z suffix) plus an explicit IANA timeZone field —
+// the Calendar API places the event at that local time in that zone, which
+// is simpler and less error-prone here than converting to UTC ourselves.
+// `mins` can exceed 1440 for a block that runs past midnight; rolls the
+// event onto the correct calendar date, same overflow handling as
+// minutesToTime()/the earlier link-based version of this feature.
+function calendarDateTime(dateISO, mins) {
+  const days = Math.floor(mins / 1440);
+  const [y, m, d] = (days > 0 ? addDaysISO(dateISO, days) : dateISO).split("-").map(Number);
+  const wrapped = ((mins % 1440) + 1440) % 1440;
+  const hh = Math.floor(wrapped / 60), mm = wrapped % 60;
+  const pad = n => String(n).padStart(2, "0");
+  return `${y}-${pad(m)}-${pad(d)}T${pad(hh)}:${pad(mm)}:00`;
+}
+
+async function createCalendarEvent(accessToken, { summary, dateISO, startMin, endMin }) {
+  const end = endMin > startMin ? endMin : startMin + 30; // guard a zero/negative-length slot
+  let timeZone;
+  try { timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone; } catch { timeZone = undefined; }
+  const event = {
+    summary,
+    start: { dateTime: calendarDateTime(dateISO, startMin), ...(timeZone ? { timeZone } : {}) },
+    end: { dateTime: calendarDateTime(dateISO, end), ...(timeZone ? { timeZone } : {}) },
+  };
+  await calendarFetch("https://www.googleapis.com/calendar/v3/calendars/primary/events", accessToken, {
+    method: "POST",
+    body: JSON.stringify(event),
+  });
+}
+
+// Creates one Calendar event per block, sequentially (so one failure is
+// attributable to one task rather than an ambiguous batch error, and to
+// stay well clear of any per-second rate limit). Returns a summary rather
+// than throwing on a partial failure, so e.g. 5 of 6 tasks still land in
+// the calendar even if one request fails.
+async function addBlocksToGoogleCalendar(dateISO, blocks) {
+  const accessToken = await getCalendarAccessToken();
+  let succeeded = 0;
+  const failed = [];
+  for (const b of blocks) {
+    try {
+      await createCalendarEvent(accessToken, { summary: b.label, dateISO, startMin: b.start, endMin: b.end });
+      succeeded++;
+    } catch (err) {
+      failed.push({ label: b.label, message: err.message });
+    }
+  }
+  return { succeeded, failed };
 }
 
 function normalizeSettings(s) {
@@ -2492,8 +2595,9 @@ function TodayTab({ db, updateSlice, onNavigate }) {
                 onRemove={(b.custom || b.restored) ? () => removeBlock(b.id) : null} />
             );
           })}
-          <div className="ucc-flex wrap" style={{ gap: 8 }}>
+          <div className="ucc-flex wrap" style={{ gap: 8, alignItems: "center" }}>
             <button className="ucc-btn" onClick={addCustomBlock}><Plus size={14} /> Add custom task</button>
+            <CalendarSyncButton dateISO={dateISO} blocks={timedBlocks.filter(b => !b.skipped && b.type !== "break")} />
             {missingBlocks.length > 0 && (
               <select className="ucc-select" style={{ width: "auto", maxWidth: 240 }} value=""
                 title="Bring back a slot dropped from today's plan"
@@ -2733,6 +2837,47 @@ function PlanBlock({ block, onUpdate, onMoveUp, onMoveDown, onRemove }) {
     </div>
   );
 }
+
+// One-click sync of today's active tasks straight into Google Calendar via
+// the Calendar API (see getCalendarAccessToken/addBlocksToGoogleCalendar
+// above) — no per-task tabs, no manual "Save" in Google's UI. `blocks` is
+// expected pre-filtered by the caller (TodayTab) to non-skipped, non-break
+// blocks; this component only handles the click/busy/result UX, mirroring
+// DriveFileCell's busy/error state pattern elsewhere in this file.
+function CalendarSyncButton({ dateISO, blocks }) {
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState(null); // { succeeded, failed } | null
+  const [error, setError] = useState("");
+
+  async function handleClick() {
+    setBusy(true); setError(""); setResult(null);
+    try {
+      const outcome = await addBlocksToGoogleCalendar(dateISO, blocks);
+      setResult(outcome);
+    } catch (err) {
+      setError(err.message || "Couldn't connect to Google Calendar.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div>
+      <button className="ucc-btn" disabled={busy || blocks.length === 0} onClick={handleClick}
+        title={blocks.length === 0 ? "No active tasks to add today" : `Add ${blocks.length} active task${blocks.length === 1 ? "" : "s"} to Google Calendar`}>
+        <CalendarPlus size={14} /> {busy ? "Adding…" : "Add to Google Calendar"}
+      </button>
+      {result && !error && (
+        <div className="ucc-tiny" style={{ marginTop: 4, color: result.failed.length > 0 ? "var(--amber)" : "var(--ink-muted)" }}>
+          Added {result.succeeded} of {result.succeeded + result.failed.length} tasks to Google Calendar.
+          {result.failed.length > 0 && ` Failed: ${result.failed.map(f => f.label).join(", ")}.`}
+        </div>
+      )}
+      {error && <div className="ucc-tiny" style={{ marginTop: 4, color: "var(--red)" }}>{error}</div>}
+    </div>
+  );
+}
+
 
 /* ============================================================
    TRACKER TABS

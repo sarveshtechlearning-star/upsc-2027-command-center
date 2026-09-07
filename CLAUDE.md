@@ -560,6 +560,20 @@ summary will do.
   `settings.driveFolderId` only for the `singlePager` key, to avoid
   creating a duplicate folder for existing users; new folder ids live in
   `settings.driveFolders[folderKey]`.
+- **Google Calendar sync (Today's Planner)**: `CalendarSyncButton` +
+  `addBlocksToGoogleCalendar`/`createCalendarEvent` mirror the Drive
+  integration's shape — same `VITE_GOOGLE_CLIENT_ID`/Google Cloud
+  project, but a separate token client (`gisCalendarTokenClient`/
+  `cachedCalendarToken`, distinct from Drive's) scoped only to
+  `calendar.events`, so a Drive-only grant never silently covers
+  Calendar too. One button in `TodayTab` creates a real event per active
+  block directly via `POST .../calendars/primary/events` (no per-task
+  tabs, no manual Save) — `TodayTab` pre-filters `timedBlocks` to
+  non-skipped, non-break before handing them to the button; dropped
+  slots are already absent from `timedBlocks` entirely (they never made
+  it into `plan.blocks`), so no separate filtering for those is needed.
+  Sequential requests, not `Promise.all` — partial failure should be
+  attributable to one task, not an ambiguous batch error.
 - **Reset (both "Reset all data" and a per-section reset in `DangerZone`)
   archives each affected tracker's Drive folder before clearing its data —
   by request, since Reset never deletes from Drive and previously left old

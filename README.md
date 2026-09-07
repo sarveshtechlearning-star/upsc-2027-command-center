@@ -86,6 +86,31 @@ If this isn't configured, the rest of the app works exactly as before —
 you'll just see a note on the Single Pager tab and Upload will show an
 error if clicked.
 
+## 6. (Optional) Google Calendar sync for Today's Planner
+
+Today's Planner has an **Add to Google Calendar** button that creates a
+real event for each of that day's active tasks (skips breaks and any
+skipped/dropped slots) directly in your Google Calendar — no extra tabs,
+no manual "Save" on Google's side. It reuses the same Google Cloud
+project as Drive above, with its own narrower scope:
+
+1. In the same [Google Cloud Console](https://console.cloud.google.com)
+   project you used for Drive, go to **APIs & Services -> Library** and
+   enable the **Google Calendar API**.
+2. If your OAuth consent screen's **Scopes** step asks you to add scopes
+   explicitly, add `.../auth/calendar.events` there. (Testing-mode apps
+   with your account listed under **Test users** don't need Google's
+   app-review process for this, same as Drive.)
+3. Nothing else to configure — it uses the same `VITE_GOOGLE_CLIENT_ID`
+   as Drive. The first time you click **Add to Google Calendar**, Google
+   will ask you to approve this additional scope (a one-time popup, even
+   if you'd already approved Drive access before) — scoped to
+   `calendar.events`, meaning this app can create/edit events it makes,
+   not read the rest of your calendar.
+
+If this isn't configured, the button will show an error when clicked;
+the rest of the app is unaffected.
+
 ## Notes
 
 - Fonts are loaded from Google Fonts in `index.html`; if you're offline
