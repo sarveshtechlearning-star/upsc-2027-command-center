@@ -6,7 +6,8 @@ import {
   Newspaper, PenTool, Brain, Search as SearchIcon, BarChart3,
   Settings as SettingsIcon, Upload, Download, ChevronUp, ChevronDown,
   Plus, Trash2, History, Check, AlertTriangle, Clock, ChevronLeft,
-  ChevronRight as ChevronRightIcon, X, LogOut, LayoutDashboard, Copy, Pencil, Lock, Flame, Target
+  ChevronRight as ChevronRightIcon, X, LogOut, LayoutDashboard, Copy, Pencil, Lock, Flame, Target,
+  CalendarPlus
 } from "lucide-react";
 
 /* ============================================================
@@ -514,6 +515,43 @@ function minutesToTime(mins) {
   const hh = String(h).padStart(2, "0"), mmS = String(mm).padStart(2, "0");
   return (overflowDays > 0 ? "+1d " : "") + `${hh}:${mmS}`;
 }
+// Opens a Google Calendar "quick add" tab (action=TEMPLATE) for every
+// non-skipped Today's Planner block, all from one button click — Sarvesh
+// wants the direct-link flow (tap Save inside Google Calendar, no import
+// step) rather than a downloadable .ics file, just triggered once for the
+// whole day instead of once per block.
+//
+// No OAuth/API scope needed — each tab is just Google's own prefilled
+// "create event" page. All window.open() calls happen synchronously inside
+// the click handler (not after an await/setTimeout), which is what keeps
+// browsers from treating them as unsolicited popups; even so, a browser
+// that still blocks extra tabs will show its usual "popup blocked" bar,
+// which the user can allow once for this site.
+function googleCalendarQuickAddLink(dateISO, block) {
+  const fmt = (mins) => {
+    const days = Math.floor(mins / 1440);
+    const [y, m, d] = (days > 0 ? addDaysISO(dateISO, days) : dateISO).split("-").map(Number);
+    const wrapped = ((mins % 1440) + 1440) % 1440;
+    const hh = Math.floor(wrapped / 60), mm = wrapped % 60;
+    const pad = n => String(n).padStart(2, "0");
+    return `${y}${pad(m)}${pad(d)}T${pad(hh)}${pad(mm)}00`;
+  };
+  const end = block.end > block.start ? block.end : block.start + 30; // guard zero-length slots
+  const params = new URLSearchParams({
+    action: "TEMPLATE",
+    text: block.label,
+    dates: `${fmt(block.start)}/${fmt(end)}`,
+  });
+  try {
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    if (tz) params.set("ctz", tz);
+  } catch { /* Intl unavailable — Google falls back to the browser's own tz */ }
+  return `https://calendar.google.com/calendar/render?${params.toString()}`;
+}
+function openGoogleCalendarLinksForDay(dateISO, blocks) {
+  blocks.forEach(b => window.open(googleCalendarQuickAddLink(dateISO, b), "_blank", "noopener,noreferrer"));
+}
+
 function normKey(...parts) { return parts.map(p => String(p || "").trim().toLowerCase()).join("|"); }
 // Escapes user-typed text (journal entries, reflections) before it goes into
 // an HTML string that gets written to the clipboard — otherwise something
@@ -2494,6 +2532,10 @@ function TodayTab({ db, updateSlice, onNavigate }) {
           })}
           <div className="ucc-flex wrap" style={{ gap: 8 }}>
             <button className="ucc-btn" onClick={addCustomBlock}><Plus size={14} /> Add custom task</button>
+            <button className="ucc-btn" title="Opens a Google Calendar tab for each of today's tasks, prefilled — tap Save in each. If your browser blocks the extra tabs, allow pop-ups for this site."
+              onClick={() => openGoogleCalendarLinksForDay(dateISO, timedBlocks.filter(b => !b.skipped))}>
+              <CalendarPlus size={14} /> Add to Google Calendar
+            </button>
             {missingBlocks.length > 0 && (
               <select className="ucc-select" style={{ width: "auto", maxWidth: 240 }} value=""
                 title="Bring back a slot dropped from today's plan"
