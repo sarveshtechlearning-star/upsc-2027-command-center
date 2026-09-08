@@ -1302,6 +1302,17 @@ async function deleteTask(accessToken, taskId) {
 // that actually failed rather than duplicating the part that already
 // worked.
 //
+// IMPORTANT — Calendar doesn't actually delete events, it soft-deletes
+// them (status flips to "cancelled", the resource sticks around). So a
+// stale eventId from a manually- or previously-deleted event does NOT
+// 404 on PATCH — it returns 200 with the event still cancelled/invisible,
+// which looks like a clean success. The 404 self-heal above only catches
+// a truly-gone id; there's a second check right after the PATCH for
+// `event.status === "cancelled"` that catches this soft-deleted case and
+// discards it in favor of a fresh event. Same defensive check on the
+// Tasks side (`task.deleted`), though that's unconfirmed to actually
+// occur there — cheap insurance either way.
+//
 // A block the user has since skipped is handled separately: it's no
 // longer synced going forward, so if it already has a googleSync id from
 // an earlier sync, that event/task is deleted rather than left stale on
@@ -1357,6 +1368,14 @@ async function addBlocksToGoogleCalendar(dateISO, blocks) {
       if (existingEventId) {
         try {
           event = await updateCalendarEvent(accessToken, existingEventId, { summary: b.label, dateISO, startMin: b.start, endMin: b.end });
+          // Google soft-deletes events (status flips to "cancelled") rather
+          // than actually removing them — a stale id from a manually- or
+          // previously-deleted event PATCHes successfully (200, no error)
+          // but stays cancelled/invisible. Treat that the same as a
+          // genuinely missing event: discard it and create a fresh one.
+          if (event?.status === "cancelled") {
+            event = await createCalendarEvent(accessToken, { summary: b.label, dateISO, startMin: b.start, endMin: b.end });
+          }
         } catch (err) {
           if (/\(404\)/.test(err.message)) {
             event = await createCalendarEvent(accessToken, { summary: b.label, dateISO, startMin: b.start, endMin: b.end });
@@ -1376,6 +1395,13 @@ async function addBlocksToGoogleCalendar(dateISO, blocks) {
       if (existingTaskId) {
         try {
           task = await updateTask(accessToken, existingTaskId, { title: b.label, notes });
+          // Same defensive check on the Tasks side, in case a deleted task
+          // is similarly kept around with a deleted flag rather than a
+          // real 404 — cheap to check, costs nothing if Tasks never
+          // actually does this.
+          if (task?.deleted) {
+            task = await createTask(accessToken, { title: b.label, dateISO, notes });
+          }
         } catch (err) {
           if (/\(404\)/.test(err.message)) {
             task = await createTask(accessToken, { title: b.label, dateISO, notes });
