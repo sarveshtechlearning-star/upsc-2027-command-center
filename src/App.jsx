@@ -1212,6 +1212,27 @@ async function setCalendarEventDescription(accessToken, eventId, description) {
   });
 }
 
+// Re-syncs an already-created event's title/time in place, used on repeat
+// "Add to Google Calendar" clicks so an edited duration/label updates the
+// existing event instead of leaving a stale one behind alongside a new
+// duplicate. Same shape as createCalendarEvent's body, PATCHed instead of
+// POSTed. Throws (with a "(404)" in the message) if the event no longer
+// exists on Google's side — callers use that to fall back to recreating it.
+async function updateCalendarEvent(accessToken, eventId, { summary, dateISO, startMin, endMin }) {
+  const end = endMin > startMin ? endMin : startMin + 30;
+  let timeZone;
+  try { timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone; } catch { timeZone = undefined; }
+  const res = await googleApiFetch(`https://www.googleapis.com/calendar/v3/calendars/primary/events/${eventId}`, accessToken, {
+    method: "PATCH",
+    body: JSON.stringify({
+      summary,
+      start: { dateTime: calendarDateTime(dateISO, startMin), ...(timeZone ? { timeZone } : {}) },
+      end: { dateTime: calendarDateTime(dateISO, end), ...(timeZone ? { timeZone } : {}) },
+    }),
+  });
+  return res.json();
+}
+
 // Google Tasks' `due` field is date-only — the API accepts a full RFC3339
 // timestamp but only the date portion is honored/shown, so this always
 // uses midnight UTC on the task's date rather than trying to carry the
@@ -1231,41 +1252,88 @@ async function createTask(accessToken, { title, dateISO, notes }) {
   return res.json(); // { id, webViewLink, ... }
 }
 
-// Creates one Calendar event (the timed slot) AND one linked Task (the
-// completion checkbox) per block, sequentially — so one failure is
-// attributable to one task rather than an ambiguous batch error, and to
+// Re-syncs an already-created task's title/notes in place — counterpart to
+// updateCalendarEvent above, same reasoning and same 404-means-recreate
+// contract for callers.
+async function updateTask(accessToken, taskId, { title, notes }) {
+  const res = await googleApiFetch(`https://tasks.googleapis.com/tasks/v1/lists/@default/tasks/${taskId}`, accessToken, {
+    method: "PATCH",
+    body: JSON.stringify({ title, ...(notes ? { notes } : {}) }),
+  });
+  return res.json();
+}
+
+// Creates or updates one Calendar event (the timed slot) AND one linked
+// Task (the completion checkbox) per block, sequentially — so one failure
+// is attributable to one task rather than an ambiguous batch error, and to
 // stay well clear of any per-second rate limit. True merging of the two
 // into a single item isn't possible on Google's side (Events and Tasks
 // are separate object types with no shared UI representation), so
 // instead each cross-references the other: the event's description gets
-// a link to the task, and the task's notes get a link back to the event
-// — three calls per block (event -> task-with-note-to-event -> patch
-// event's description with link-to-task), in that order, since each
-// later call needs an id/link the earlier one produced. A block only
-// counts as succeeded if all three calls land; if any fail, it's
-// reported in `failed` with which part broke, rather than silently
-// dropping just one piece. Returns a summary rather than throwing on a
-// partial failure, so the rest of the day's tasks still sync even if one
-// fails.
+// a link to the task, and the task's notes get a link back to the event.
+//
+// Idempotent on repeat clicks: each block carries its own
+// `googleSync: { eventId, taskId }` once synced (persisted by the caller
+// via updateBlock), so a later click PATCHes the existing event/task in
+// place — picking up an edited duration/label — instead of creating a
+// second copy. If Google 404s on a PATCH (the item was deleted on
+// Google's side), that half self-heals by recreating it, same pattern as
+// the Drive-folder self-heal elsewhere in this file. Whichever id ends up
+// current (new, updated, or unchanged-on-failure) is returned per block in
+// `results` so the caller can persist it; a block that fails outright
+// keeps whatever id it already had, so a retry only re-attempts the part
+// that actually failed rather than duplicating the part that already
+// worked. Returns a summary rather than throwing on a partial failure, so
+// the rest of the day's tasks still sync even if one fails.
 async function addBlocksToGoogleCalendar(dateISO, blocks) {
   const accessToken = await getCalendarAccessToken();
   let succeeded = 0;
   const failed = [];
+  const results = [];
   for (const b of blocks) {
     const problems = [];
     let event = null;
     let task = null;
+    const existingEventId = b.googleSync?.eventId;
+    const existingTaskId = b.googleSync?.taskId;
+
     try {
-      event = await createCalendarEvent(accessToken, { summary: b.label, dateISO, startMin: b.start, endMin: b.end });
+      if (existingEventId) {
+        try {
+          event = await updateCalendarEvent(accessToken, existingEventId, { summary: b.label, dateISO, startMin: b.start, endMin: b.end });
+        } catch (err) {
+          if (/\(404\)/.test(err.message)) {
+            event = await createCalendarEvent(accessToken, { summary: b.label, dateISO, startMin: b.start, endMin: b.end });
+          } else {
+            throw err;
+          }
+        }
+      } else {
+        event = await createCalendarEvent(accessToken, { summary: b.label, dateISO, startMin: b.start, endMin: b.end });
+      }
     } catch (err) {
       problems.push(`event: ${err.message}`);
     }
+
     try {
       const notes = event?.htmlLink ? `Calendar event: ${event.htmlLink}` : undefined;
-      task = await createTask(accessToken, { title: b.label, dateISO, notes });
+      if (existingTaskId) {
+        try {
+          task = await updateTask(accessToken, existingTaskId, { title: b.label, notes });
+        } catch (err) {
+          if (/\(404\)/.test(err.message)) {
+            task = await createTask(accessToken, { title: b.label, dateISO, notes });
+          } else {
+            throw err;
+          }
+        }
+      } else {
+        task = await createTask(accessToken, { title: b.label, dateISO, notes });
+      }
     } catch (err) {
       problems.push(`task: ${err.message}`);
     }
+
     if (event && task?.webViewLink) {
       try {
         await setCalendarEventDescription(accessToken, event.id, `Linked task: ${task.webViewLink}`);
@@ -1273,10 +1341,19 @@ async function addBlocksToGoogleCalendar(dateISO, blocks) {
         problems.push(`linking event to task: ${err.message}`);
       }
     }
+
     if (problems.length === 0) succeeded++;
     else failed.push({ label: b.label, message: problems.join("; ") });
+
+    results.push({
+      id: b.id,
+      googleSync: {
+        eventId: event?.id ?? existingEventId,
+        taskId: task?.id ?? existingTaskId,
+      },
+    });
   }
-  return { succeeded, failed };
+  return { succeeded, failed, results };
 }
 
 function normalizeSettings(s) {
@@ -2382,7 +2459,7 @@ function regeneratePlan(prevPlan, wakeTime, dayType, settings) {
   const merged = blocks.map(b => {
     const prev = prevById.get(b.id);
     return prev
-      ? { ...b, status: prev.status, completedAt: prev.completedAt, skipped: false, skipReason: "", journal: prev.journal || "" }
+      ? { ...b, status: prev.status, completedAt: prev.completedAt, skipped: false, skipReason: "", journal: prev.journal || "", googleSync: prev.googleSync }
       : { ...b, status: "Not Started", completedAt: null, skipped: false, skipReason: "", journal: "" };
   });
   const customBlocks = (prevPlan.blocks || []).filter(b => b.custom);
@@ -2747,7 +2824,8 @@ function TodayTab({ db, updateSlice, onNavigate }) {
           })}
           <div className="ucc-flex wrap" style={{ gap: 8, alignItems: "center" }}>
             <button className="ucc-btn" onClick={addCustomBlock}><Plus size={14} /> Add custom task</button>
-            <CalendarSyncButton dateISO={dateISO} blocks={timedBlocks.filter(b => !b.skipped && b.type !== "break")} />
+            <CalendarSyncButton dateISO={dateISO} blocks={timedBlocks.filter(b => !b.skipped && b.type !== "break")}
+              onSynced={results => results.forEach(r => updateBlock(r.id, { googleSync: r.googleSync }))} />
             {missingBlocks.length > 0 && (
               <select className="ucc-select" style={{ width: "auto", maxWidth: 240 }} value=""
                 title="Bring back a slot dropped from today's plan"
@@ -3006,7 +3084,7 @@ function PlanBlock({ block, onUpdate, onMoveUp, onMoveDown, onRemove }) {
 // pre-filtered by the caller (TodayTab) to non-skipped, non-break blocks;
 // this component only handles the click/busy/result UX, mirroring
 // DriveFilesCell's busy/error state pattern elsewhere in this file.
-function CalendarSyncButton({ dateISO, blocks }) {
+function CalendarSyncButton({ dateISO, blocks, onSynced }) {
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState(null); // { succeeded, failed } | null
   const [error, setError] = useState("");
@@ -3016,6 +3094,7 @@ function CalendarSyncButton({ dateISO, blocks }) {
     try {
       const outcome = await addBlocksToGoogleCalendar(dateISO, blocks);
       setResult(outcome);
+      if (onSynced && outcome.results) onSynced(outcome.results);
     } catch (err) {
       setError(err.message || "Couldn't connect to Google Calendar.");
     } finally {
@@ -3026,12 +3105,12 @@ function CalendarSyncButton({ dateISO, blocks }) {
   return (
     <div>
       <button className="ucc-btn" disabled={busy || blocks.length === 0} onClick={handleClick}
-        title={blocks.length === 0 ? "No active tasks to add today" : `Add ${blocks.length} active task${blocks.length === 1 ? "" : "s"} as a Google Calendar event + a linked, checkable Google Task`}>
-        <CalendarPlus size={14} /> {busy ? "Adding…" : "Add to Google Calendar"}
+        title={blocks.length === 0 ? "No active tasks to add today" : `Sync ${blocks.length} active task${blocks.length === 1 ? "" : "s"} to a Google Calendar event + a linked, checkable Google Task each`}>
+        <CalendarPlus size={14} /> {busy ? "Syncing…" : "Add to Google Calendar"}
       </button>
       {result && !error && (
         <div className="ucc-tiny" style={{ marginTop: 4, color: result.failed.length > 0 ? "var(--amber)" : "var(--ink-muted)" }}>
-          Added {result.succeeded} of {result.succeeded + result.failed.length} tasks (event + linked checkbox) to Google.
+          Synced {result.succeeded} of {result.succeeded + result.failed.length} tasks (event + linked checkbox) with Google.
           {result.failed.length > 0 && ` Issues: ${result.failed.map(f => `${f.label} (${f.message})`).join("; ")}.`}
         </div>
       )}
