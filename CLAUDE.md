@@ -978,3 +978,26 @@ is the exception that prompted the stricter policy above._
   log field (doesn't exist anywhere yet), and has to compose with the
   Completed/Partially-Completed row-lock behavior already shipped
   (PRs #68–69) rather than conflict with it.
+- **Negative-streak / "days missed" widget, beside the existing streak
+  widget.** A companion card in the same Day Planner area as the current
+  streak widget (`~App.jsx:2931`), showing the flip side: consecutive days
+  with zero tracker activity, using a sad/neutral smiley instead of the
+  `Flame` icon. Resets to 0 the moment a day passes `computeConsistencyStreak`'s
+  `hasActivity` check.
+
+  **Design requirements (Sarvesh, Sep 8):**
+  - Must be *unignorably* visually distinct from the real streak
+    widget — not a palette swap on the same card shape. Needs a
+    structurally different treatment (icon/shape, layout weight, or
+    motion cue).
+  - Wants dynamic color-by-severity in the same spirit as
+    `streakTone`/`STREAK_TONE_COLORS` (which step blue→green→gold as the
+    real streak grows), but with its **own distinct thresholds/palette** —
+    not a literal reuse of the same tone function or CSS vars.
+
+  **Still open at implementation time:** `computeConsistencyStreak` only
+  returns 0 once broken, it doesn't track *how long* it's been 0 — likely
+  needs a new `computeMissedDays`-style function, symmetric to the
+  existing one, counting consecutive `!hasActivity` days backward from
+  today. Exact icon (emoji vs. lucide) and severity thresholds not yet
+  specified.
