@@ -2968,7 +2968,18 @@ function PlanBlock({ block, onUpdate, onMoveUp, onMoveDown, onRemove }) {
       </div>
       <div className="body">
         <div className="ucc-flex between wrap">
-          <strong>{block.label}</strong>
+          {block.custom ? (
+            <input
+              type="text"
+              className="ucc-input"
+              style={{ fontWeight: 700, flex: "1 1 160px", minWidth: 120, marginRight: 8 }}
+              value={block.label}
+              onChange={e => onUpdate({ label: e.target.value })}
+              placeholder="Custom task name"
+            />
+          ) : (
+            <strong>{block.label}</strong>
+          )}
           <div className="ucc-flex">
             {onMoveUp && <IconBtn icon={ChevronUp} onClick={onMoveUp} title="Move up" />}
             {onMoveDown && <IconBtn icon={ChevronDown} onClick={onMoveDown} title="Move down" />}
