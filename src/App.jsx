@@ -1233,6 +1233,16 @@ async function updateCalendarEvent(accessToken, eventId, { summary, dateISO, sta
   return res.json();
 }
 
+// Used when a synced block gets skipped — the session isn't happening, so
+// its Calendar event shouldn't keep sitting on the calendar. Calendar
+// returns 410 Gone (not 404) for an event already deleted/cancelled;
+// callers treat either as "already clean" rather than a real failure.
+async function deleteCalendarEvent(accessToken, eventId) {
+  await googleApiFetch(`https://www.googleapis.com/calendar/v3/calendars/primary/events/${eventId}`, accessToken, {
+    method: "DELETE",
+  });
+}
+
 // Google Tasks' `due` field is date-only — the API accepts a full RFC3339
 // timestamp but only the date portion is honored/shown, so this always
 // uses midnight UTC on the task's date rather than trying to carry the
@@ -1263,6 +1273,13 @@ async function updateTask(accessToken, taskId, { title, notes }) {
   return res.json();
 }
 
+// Counterpart to deleteCalendarEvent above, for the linked Task.
+async function deleteTask(accessToken, taskId) {
+  await googleApiFetch(`https://tasks.googleapis.com/tasks/v1/lists/@default/tasks/${taskId}`, accessToken, {
+    method: "DELETE",
+  });
+}
+
 // Creates or updates one Calendar event (the timed slot) AND one linked
 // Task (the completion checkbox) per block, sequentially — so one failure
 // is attributable to one task rather than an ambiguous batch error, and to
@@ -1283,19 +1300,58 @@ async function updateTask(accessToken, taskId, { title, notes }) {
 // `results` so the caller can persist it; a block that fails outright
 // keeps whatever id it already had, so a retry only re-attempts the part
 // that actually failed rather than duplicating the part that already
-// worked. Returns a summary rather than throwing on a partial failure, so
-// the rest of the day's tasks still sync even if one fails.
+// worked.
+//
+// A block the user has since skipped is handled separately: it's no
+// longer synced going forward, so if it already has a googleSync id from
+// an earlier sync, that event/task is deleted rather than left stale on
+// the calendar. A skipped block with no prior sync is a pure no-op — it's
+// simply excluded from results. Deleting an already-gone event/task
+// (404/410) counts as clean, not a failure, so a second cleanup click
+// doesn't report an error.
+//
+// Returns a summary rather than throwing on a partial failure, so the
+// rest of the day's tasks still sync/clean up even if one fails.
 async function addBlocksToGoogleCalendar(dateISO, blocks) {
   const accessToken = await getCalendarAccessToken();
   let succeeded = 0;
+  let removed = 0;
   const failed = [];
   const results = [];
   for (const b of blocks) {
+    const existingEventId = b.googleSync?.eventId;
+    const existingTaskId = b.googleSync?.taskId;
+
+    if (b.skipped) {
+      if (!existingEventId && !existingTaskId) continue; // never synced — nothing to clean up
+      const problems = [];
+      if (existingEventId) {
+        try {
+          await deleteCalendarEvent(accessToken, existingEventId);
+        } catch (err) {
+          if (!/\(404\)|\(410\)/.test(err.message)) problems.push(`event: ${err.message}`);
+        }
+      }
+      if (existingTaskId) {
+        try {
+          await deleteTask(accessToken, existingTaskId);
+        } catch (err) {
+          if (!/\(404\)/.test(err.message)) problems.push(`task: ${err.message}`);
+        }
+      }
+      if (problems.length === 0) {
+        removed++;
+        results.push({ id: b.id, googleSync: { eventId: undefined, taskId: undefined } });
+      } else {
+        failed.push({ label: b.label, message: problems.join("; ") });
+        results.push({ id: b.id, googleSync: { eventId: existingEventId, taskId: existingTaskId } });
+      }
+      continue;
+    }
+
     const problems = [];
     let event = null;
     let task = null;
-    const existingEventId = b.googleSync?.eventId;
-    const existingTaskId = b.googleSync?.taskId;
 
     try {
       if (existingEventId) {
@@ -1353,7 +1409,7 @@ async function addBlocksToGoogleCalendar(dateISO, blocks) {
       },
     });
   }
-  return { succeeded, failed, results };
+  return { succeeded, removed, failed, results };
 }
 
 function normalizeSettings(s) {
@@ -2824,7 +2880,7 @@ function TodayTab({ db, updateSlice, onNavigate }) {
           })}
           <div className="ucc-flex wrap" style={{ gap: 8, alignItems: "center" }}>
             <button className="ucc-btn" onClick={addCustomBlock}><Plus size={14} /> Add custom task</button>
-            <CalendarSyncButton dateISO={dateISO} blocks={timedBlocks.filter(b => !b.skipped && b.type !== "break")}
+            <CalendarSyncButton dateISO={dateISO} blocks={timedBlocks.filter(b => b.type !== "break")}
               onSynced={results => results.forEach(r => updateBlock(r.id, { googleSync: r.googleSync }))} />
             {missingBlocks.length > 0 && (
               <select className="ucc-select" style={{ width: "auto", maxWidth: 240 }} value=""
@@ -3081,13 +3137,20 @@ function PlanBlock({ block, onUpdate, onMoveUp, onMoveDown, onRemove }) {
 // Calendar event (the timed slot) and a linked Google Task (the
 // completion checkbox), since neither Google product alone offers both.
 // No per-task tabs, no manual "Save" in Google's UI. `blocks` is expected
-// pre-filtered by the caller (TodayTab) to non-skipped, non-break blocks;
-// this component only handles the click/busy/result UX, mirroring
-// DriveFilesCell's busy/error state pattern elsewhere in this file.
+// pre-filtered by the caller (TodayTab) to non-break blocks only — skipped
+// blocks ARE included here (unlike active ones they aren't synced, but if
+// an earlier sync already created an event/task for one, addBlocksTo-
+// GoogleCalendar needs to see it to clean that up). This component only
+// handles the click/busy/result UX, mirroring DriveFilesCell's busy/error
+// state pattern elsewhere in this file.
 function CalendarSyncButton({ dateISO, blocks, onSynced }) {
   const [busy, setBusy] = useState(false);
-  const [result, setResult] = useState(null); // { succeeded, failed } | null
+  const [result, setResult] = useState(null); // { succeeded, removed, failed } | null
   const [error, setError] = useState("");
+
+  const activeCount = blocks.filter(b => !b.skipped).length;
+  const cleanupCount = blocks.filter(b => b.skipped && (b.googleSync?.eventId || b.googleSync?.taskId)).length;
+  const hasWork = activeCount > 0 || cleanupCount > 0;
 
   async function handleClick() {
     setBusy(true); setError(""); setResult(null);
@@ -3104,13 +3167,16 @@ function CalendarSyncButton({ dateISO, blocks, onSynced }) {
 
   return (
     <div>
-      <button className="ucc-btn" disabled={busy || blocks.length === 0} onClick={handleClick}
-        title={blocks.length === 0 ? "No active tasks to add today" : `Sync ${blocks.length} active task${blocks.length === 1 ? "" : "s"} to a Google Calendar event + a linked, checkable Google Task each`}>
+      <button className="ucc-btn" disabled={busy || !hasWork} onClick={handleClick}
+        title={!hasWork ? "No active tasks to sync today" :
+          `Sync ${activeCount} active task${activeCount === 1 ? "" : "s"} to Google` +
+          (cleanupCount > 0 ? `, and remove ${cleanupCount} skipped one${cleanupCount === 1 ? "" : "s"} from Google` : "")}>
         <CalendarPlus size={14} /> {busy ? "Syncing…" : "Add to Google Calendar"}
       </button>
       {result && !error && (
         <div className="ucc-tiny" style={{ marginTop: 4, color: result.failed.length > 0 ? "var(--amber)" : "var(--ink-muted)" }}>
-          Synced {result.succeeded} of {result.succeeded + result.failed.length} tasks (event + linked checkbox) with Google.
+          Synced {result.succeeded} task{result.succeeded === 1 ? "" : "s"} with Google
+          {result.removed > 0 ? `, removed ${result.removed} skipped task${result.removed === 1 ? "" : "s"}` : ""}.
           {result.failed.length > 0 && ` Issues: ${result.failed.map(f => `${f.label} (${f.message})`).join("; ")}.`}
         </div>
       )}
