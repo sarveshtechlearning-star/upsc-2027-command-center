@@ -1001,3 +1001,36 @@ is the exception that prompted the stricter policy above._
   existing one, counting consecutive `!hasActivity` days backward from
   today. Exact icon (emoji vs. lucide) and severity thresholds not yet
   specified.
+- **Weekly Planner, with a "today's tasks" panel beside the streak
+  widget.** Requested Sep 11, 2026; a feature (build Oct 1), *not* a
+  freeze exception — flagged and declined as an in-the-moment exception
+  request despite Sarvesh's insistence, per the Sep 7 tightened policy
+  above. Finalized spec after several rounds of clarification:
+
+  - **Saturday 9 PM**: a task-setting window opens (Weekly Review tab,
+    possibly renamed) where Sarvesh enters the coming week's tasks.
+  - **Sun–Sat**: only that week's tasks surface in a "today's planner"
+    panel positioned to the right of the existing streak widget (same
+    Day Planner area, `~App.jsx:2931`).
+  - **Per-task actions, three of them**: checkbox → mark Completed;
+    unchecking → revert to not-completed; a separate **Skip** button
+    (distinct state from incomplete, not just an unchecked box). Day
+    Planner's existing separate `skipped`/`skipReason` fields (see the
+    status-transition-flow entry above) are useful prior art for this.
+  - **Saturday night, end of week**: any task not Completed or Skipped
+    is auto-logged as **Incomplete** — no manual step needed.
+  - **No archiving or reset of the planner list itself.** Instead, the
+    Weekly Review report gains a new section — Completed / Not
+    Completed / Skipped — for that week, tagged to the week's date
+    range.
+  - **Explicitly independent of streak logic.** Must not read from or
+    write to `computeConsistencyStreak`, `streakTone`, or
+    `STREAK_TONE_COLORS` — no shared state, no effect on the streak or
+    negative-streak widgets.
+
+  **Still open at implementation time:** task data model and storage key
+  (new `kv_store` key vs. extending Weekly Review's existing shape);
+  exactly what "today's planner panel" renders when no task-setting has
+  happened yet for the week; whether/how a task can be edited or removed
+  mid-week after Saturday's setting window closes; final tab name if
+  Weekly Review is renamed.
