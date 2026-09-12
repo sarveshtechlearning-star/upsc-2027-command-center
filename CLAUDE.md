@@ -1034,3 +1034,25 @@ is the exception that prompted the stricter policy above._
   happened yet for the week; whether/how a task can be edited or removed
   mid-week after Saturday's setting window closes; final tab name if
   Weekly Review is renamed.
+- **Single Pager: exclude already-tagged Micro Topics from the tag
+  dropdown.** Requested Sep 12, 2026, reported as a bug; flagged instead
+  as a feature and queued here. The Micro Topic dropdown
+  (`microtopicTagColumn` / `microtopicRowOptionsForSubjects`) is shared
+  verbatim by Classes, NCERT, Standard Books, Single Pager, and GS Answer
+  Writing, and deliberately lists every Micro Topic under the selected
+  Subject(s) regardless of use elsewhere — those other trackers
+  legitimately need to reuse a Micro Topic across multiple rows. Single
+  Pager alone wants to diverge from that shared behavior: once a Micro
+  Topic already has a Single Pager row, hide it from the dropdown when
+  adding a *new* row. No functional bug today — multiple Single Pager
+  rows tagging the same Micro Topic don't break completion tracking
+  (`singlePager` completion is computed with `.some(...Completed)` across
+  all matches); this is a workflow/dedup convenience only.
+
+  **Still open at implementation time:** "already used" should almost
+  certainly scope to Single Pager's own rows, not cross-tracker, since
+  Classes/NCERT/Standard Books still need multi-use of the same Micro
+  Topic. Whether a Micro Topic should still show as an option on the row
+  that's already using it (so that row stays editable) rather than
+  vanishing everywhere — needs the filter to exclude "used on *other*
+  rows" relative to the row being edited, not "used at all."
