@@ -623,12 +623,23 @@ summary will do.
 - **Google Drive PDFs**: `DriveFilesCell` + `uploadDriveFile`/
   `downloadDriveFile` are generic across trackers — pass a `folderKey`
   (see `DRIVE_FOLDER_NAMES`) to keep each tracker's PDFs in their own
-  Drive folder. Currently wired up for Single Pager, Classes, GS Answer
-  Writing, Topper Copies, Tamil Reading/Writing, and Current Affairs.
-  `ensureDriveFolder` falls back to the legacy singular
-  `settings.driveFolderId` only for the `singlePager` key, to avoid
-  creating a duplicate folder for existing users; new folder ids live in
-  `settings.driveFolders[folderKey]`.
+  Drive folder. Wired up for Single Pager, Classes, GS Answer Writing,
+  Topper Copies, Tamil Reading/Writing, Current Affairs, and (Sep 13,
+  2026, freeze exception) NCERT and Standard Books. `ensureDriveFolder`
+  falls back to the legacy singular `settings.driveFolderId` only for
+  the `singlePager` key, to avoid creating a duplicate folder for
+  existing users; new folder ids live in `settings.driveFolders[folderKey]`.
+  - **NCERT/Standard Books deliberately have no upload gating.** Neither
+    tracker has a status column at all — `dayHasActivity` (see the
+    streak-widget entries above) already treats any dated NCERT/Standard
+    Books row as activity regardless of files, and that stays true
+    unchanged. So there's no `completionRequiresUpload`-style check to
+    add, and none was added — uploading is just optional, same as every
+    other field on those two rows. Sarvesh was explicit about this (Sep
+    13): "that need not be linked with completed status." Multi-file
+    support (see below) came for free from the shared `DriveFilesCell`/
+    `getRowFiles` plumbing — no separate work was needed to support more
+    than one file per row.
   **Multiple files per row**: a row's `driveFile` field holds an ARRAY of
   `{id, name, tag}` once touched by `DriveFilesCell` — never renamed to
   `driveFiles`, never migrated in bulk. Every read site goes through
@@ -650,6 +661,22 @@ summary will do.
   record's full file list; `DriveDownloadLink` (singular) still exists
   for spots that already resolved down to one specific file (e.g.
   `bestFileForRow`'s pick for Topic Master's summary table).
+  - **NCERT/Standard Books wired into Topic Master (Sep 13, 2026,
+    freeze exception, immediately following their upload support
+    above)**: `computeTopicCompletionFields` now also returns
+    `standardMaterialFile`/`ncertFile` via the same `bestFileForRow`
+    call already used for `classNotesFile` — no changes to
+    `bestFileForRow` itself were needed, since neither tracker has a
+    `status` field, so its "prefer a Completed record's file" tier
+    already falls straight through to "any matched record's file" for
+    them. Both the summary table (next to the Standard Material/NCERT
+    badges) and the detail panel's Topic Completion badges show the
+    linked file the same way Class Notes already did. The detail
+    panel's raw per-record NCERT/Standard Books lists also gained
+    `DriveDownloadLinks files={getRowFiles(...)}`, matching the Classes
+    section's existing pattern, so every uploaded file for a topic is
+    reachable from Topic Master, not just the one `bestFileForRow` picks
+    as "the" file.
 - **Enforced status-transition flow (shipped Sep 13, 2026, freeze
   exception)** — `GenericTracker`'s "status" columns now go through
   `FlowStatusSelect` instead of the plain `StatusSelect` (which still

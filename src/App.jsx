@@ -910,6 +910,8 @@ const DRIVE_FOLDER_NAMES = {
   tamilReading: "UPSC 2027 Command Center - Tamil Literature Reading",
   classes: "UPSC 2027 Command Center - Class Notes",
   currentAffairs: "UPSC 2027 Command Center - Current Affairs",
+  ncert: "UPSC 2027 Command Center - NCERT",
+  standardBooks: "UPSC 2027 Command Center - Standard Books",
 };
 const DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.file";
 
@@ -3726,8 +3728,18 @@ function ReadingTab({ db, updateSlice }) {
                       <DriveDownloadLink driveFile={fields.classNotesFile} />
                     </div>
                   </td>
-                  <td><Badge tone={colorFor(fields.standardMaterial)}>{fields.standardMaterial}</Badge></td>
-                  <td><Badge tone={colorFor(fields.ncert)}>{fields.ncert}</Badge></td>
+                  <td>
+                    <div className="ucc-flex" style={{ gap: 4 }}>
+                      <Badge tone={colorFor(fields.standardMaterial)}>{fields.standardMaterial}</Badge>
+                      <DriveDownloadLink driveFile={fields.standardMaterialFile} />
+                    </div>
+                  </td>
+                  <td>
+                    <div className="ucc-flex" style={{ gap: 4 }}>
+                      <Badge tone={colorFor(fields.ncert)}>{fields.ncert}</Badge>
+                      <DriveDownloadLink driveFile={fields.ncertFile} />
+                    </div>
+                  </td>
                   <td><Badge tone={colorFor(fields.singlePager)}>{fields.singlePager}</Badge></td>
                   <td><StatusSelect value={fields.revision1} options={READ_STATUS} onChange={v => updateRevision(row, fields, { revision1: v })} /></td>
                   <td><StatusSelect value={fields.revision2} options={READ_STATUS} onChange={v => updateRevision(row, fields, { revision2: v })} /></td>
@@ -4124,8 +4136,24 @@ function NcertTab({ db, updateSlice }) {
           microtopicTagColumn(db, setAddTopicFor, "Topic"),
           { key: "book", label: "Book", width: 150 },
           { key: "chapter", label: "Chapter", width: 140 },
+          {
+            key: "driveFile", label: "File(s)", width: 170, type: "custom",
+            render: (rec, onChange, onPatch, locked) => {
+              const tagOptions = (rec.microtopics || [])
+                .map(id => ({ id, label: resolveMicrotopicLabelById(db, id) }))
+                .filter(o => o.label);
+              return (
+                <DriveFilesCell files={getRowFiles(rec)} db={db} updateSlice={updateSlice} onChange={onChange} folderKey="ncert" locked={locked}
+                  tagOptions={tagOptions}
+                  getNamePrefixForTag={label => nextFileNamePrefix(db.ncert, rec, r => normKey(r.gsPaper, r.microtopics && r.microtopics[0]), [
+                    [rec.subject, label],
+                    [label],
+                  ])} />
+              );
+            },
+          },
         ]}
-        newRecord={() => ({ date: todayISO(), gsPaper: "", subject: "", microtopics: [], book: "", chapter: "" })}
+        newRecord={() => ({ date: todayISO(), gsPaper: "", subject: "", microtopics: [], book: "", chapter: "", driveFile: null })}
       />
       {addTopicFor && (
         <AddSyllabusRowPopup
@@ -4160,8 +4188,24 @@ function StandardBooksTab({ db, updateSlice }) {
           { key: "bookName", label: "Book", width: 150 },
           { key: "chapter", label: "Chapter", width: 140 },
           { key: "pages", label: "Pages", width: 80 },
+          {
+            key: "driveFile", label: "File(s)", width: 170, type: "custom",
+            render: (rec, onChange, onPatch, locked) => {
+              const tagOptions = (rec.microtopics || [])
+                .map(id => ({ id, label: resolveMicrotopicLabelById(db, id) }))
+                .filter(o => o.label);
+              return (
+                <DriveFilesCell files={getRowFiles(rec)} db={db} updateSlice={updateSlice} onChange={onChange} folderKey="standardBooks" locked={locked}
+                  tagOptions={tagOptions}
+                  getNamePrefixForTag={label => nextFileNamePrefix(db.standardBooks, rec, r => normKey(r.gsPaper, r.microtopics && r.microtopics[0]), [
+                    [rec.subject, label],
+                    [label],
+                  ])} />
+              );
+            },
+          },
         ]}
-        newRecord={() => ({ date: todayISO(), bookName: "", gsPaper: "", subject: "", chapter: "", microtopics: [], pages: "" })}
+        newRecord={() => ({ date: todayISO(), bookName: "", gsPaper: "", subject: "", chapter: "", microtopics: [], pages: "", driveFile: null })}
       />
       {addTopicFor && (
         <AddSyllabusRowPopup
@@ -5013,8 +5057,18 @@ function computeTopicCompletionFields(row, indexes) {
     : matchedClasses.length > 0 ? "In Progress" : "Not Started";
   const classNotesFile = bestFileForRow(matchedClasses, row);
 
-  const standardMaterial = taggedRecsForSyllabusRow(indexes.stdBooksIdx, row).length > 0 ? "Completed" : "Not Started";
-  const ncert = taggedRecsForSyllabusRow(indexes.ncertIdx, row).length > 0 ? "Completed" : "Not Started";
+  // Neither tracker has a status field, so bestFileForRow's "prefer a
+  // Completed record's file" tiers never match anything here (r.status is
+  // always undefined) — it falls straight through to "any matched
+  // record's file", which is exactly right for a tracker with no
+  // completion concept. No change needed there for this to work.
+  const matchedStdBooks = taggedRecsForSyllabusRow(indexes.stdBooksIdx, row);
+  const standardMaterial = matchedStdBooks.length > 0 ? "Completed" : "Not Started";
+  const standardMaterialFile = bestFileForRow(matchedStdBooks, row);
+
+  const matchedNcert = taggedRecsForSyllabusRow(indexes.ncertIdx, row);
+  const ncert = matchedNcert.length > 0 ? "Completed" : "Not Started";
+  const ncertFile = bestFileForRow(matchedNcert, row);
 
   const matchedSP = taggedRecsForSyllabusRow(indexes.spIdx, row);
   const singlePager = matchedSP.some(s => s.status === "Completed") ? "Completed"
@@ -5024,7 +5078,10 @@ function computeTopicCompletionFields(row, indexes) {
   const revision1 = (readingRec && readingRec.revision1) || "Yet to Start";
   const revision2 = (readingRec && readingRec.revision2) || "Yet to Start";
 
-  return { classNotes, classNotesFile, standardMaterial, ncert, singlePager, revision1, revision2, readingRecId: readingRec ? readingRec.id : null };
+  return {
+    classNotes, classNotesFile, standardMaterial, standardMaterialFile, ncert, ncertFile,
+    singlePager, revision1, revision2, readingRecId: readingRec ? readingRec.id : null,
+  };
 }
 
 // Topic Master is keyed on the full Subject → Topic → Subtopic → Micro
@@ -5124,21 +5181,31 @@ function TopicMasterTab({ db, onNavigate }) {
               <TopicSection title="Topic completion">
                 <div className="ucc-tiny" style={{ marginBottom: 4 }}>
                   <Badge tone={colorFor(active.topicCompletion.classNotes)}>Notes {active.topicCompletion.classNotes}</Badge>{" "}
+                  {active.topicCompletion.classNotesFile && <> <DriveDownloadLink driveFile={active.topicCompletion.classNotesFile} /></>}{" "}
                   <Badge tone={colorFor(active.topicCompletion.standardMaterial)}>Std {active.topicCompletion.standardMaterial}</Badge>{" "}
+                  {active.topicCompletion.standardMaterialFile && <> <DriveDownloadLink driveFile={active.topicCompletion.standardMaterialFile} /></>}{" "}
                   <Badge tone={colorFor(active.topicCompletion.ncert)}>NCERT {active.topicCompletion.ncert}</Badge>{" "}
+                  {active.topicCompletion.ncertFile && <> <DriveDownloadLink driveFile={active.topicCompletion.ncertFile} /></>}{" "}
                   <Badge tone={colorFor(active.topicCompletion.singlePager)}>SP {active.topicCompletion.singlePager}</Badge>{" "}
                   <Badge tone={colorFor(active.topicCompletion.revision1)}>Rev1 {active.topicCompletion.revision1}</Badge>{" "}
                   <Badge tone={colorFor(active.topicCompletion.revision2)}>Rev2 {active.topicCompletion.revision2}</Badge>
-                  {active.topicCompletion.classNotesFile && <> <DriveDownloadLink driveFile={active.topicCompletion.classNotesFile} /></>}
                 </div>
               </TopicSection>
               <TopicSection title="NCERT">
                 {active.ncert.length === 0 ? <EmptyState>Not mapped.</EmptyState> :
-                  active.ncert.map(n => <div key={n.id} className="ucc-tiny" style={{ marginBottom: 4 }}>{n.book} — {n.chapter}</div>)}
+                  active.ncert.map(n => (
+                    <div key={n.id} className="ucc-tiny" style={{ marginBottom: 4 }}>
+                      {n.book} — {n.chapter} <DriveDownloadLinks files={getRowFiles(n)} />
+                    </div>
+                  ))}
               </TopicSection>
               <TopicSection title="Standard books">
                 {active.standardBooks.length === 0 ? <EmptyState>Not mapped.</EmptyState> :
-                  active.standardBooks.map(s => <div key={s.id} className="ucc-tiny" style={{ marginBottom: 4 }}>{s.bookName} — {s.chapter}</div>)}
+                  active.standardBooks.map(s => (
+                    <div key={s.id} className="ucc-tiny" style={{ marginBottom: 4 }}>
+                      {s.bookName} — {s.chapter} <DriveDownloadLinks files={getRowFiles(s)} />
+                    </div>
+                  ))}
               </TopicSection>
               <TopicSection title="Single pager">
                 {active.singlePager.length === 0 ? <EmptyState>Not started.</EmptyState> :
