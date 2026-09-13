@@ -1094,3 +1094,33 @@ only after resolving its own open design questions in conversation
 first, rather than guessing across every tracker). See each item's own
 Section 4 entry for what shipped and where — nothing is left queued in
 this backlog as of this PR._
+
+_Sep 13, 2026: the four items below were surfaced from the Sep 3–6
+audit (`claude/app-audit-2026-09-03.md`) — they'd been discussed and,
+in one case, explicitly called "queued," but never actually made it
+into this section. Added now for Oct 1 pickup; none of them shipped
+same-day._
+
+- **JSON import for the Import/Export tab.** Queued by Sarvesh, Sep 6
+  (per the audit). Only Excel import currently exists on that tab; JSON
+  export/backup exists ("Export all as JSON" under EXPORT/BACKUP) but
+  there's no matching import path to restore from one. Scope per the
+  audit: parse the same JSON shape produced by "Export all as JSON,"
+  reuse the existing preview-before-import UX and dedup-key logic
+  already in place for Excel import, and validate against the same
+  per-tracker schemas Excel import already uses.
+- **Spaced-repetition suggestion for Revision 1/2.** Not a firm
+  request — noted as a "still open" idea in the audit (e.g. +7/+21/+45
+  day nudges off the Reading tab's revision1/revision2 fields). Worth a
+  scope-confirmation pass with Sarvesh before building, rather than
+  guessing at trigger timing or where the nudge should surface.
+- **`App.jsx` split + test coverage.** Claude's own recommendation from
+  the audit, not something Sarvesh asked for — revisit once feature
+  velocity slows down or a regression actually occurs, not on a fixed
+  timeline. The file is a single ~6,000+ line monolith with no test
+  suite, linter, or CI configured (confirmed in `CONTRIBUTING.md` as of
+  the audit).
+- **Pace/velocity-vs-target-date forecasting.** Deliberately deferred
+  in the audit itself in favor of the simpler consistency-streak metric
+  that shipped instead — revisit once 4–6 weeks of real nightly data
+  exists to forecast against, not before.
