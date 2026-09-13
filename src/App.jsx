@@ -3710,7 +3710,7 @@ function SinglePagerTab({ db, updateSlice }) {
           { key: "date", label: "Date", type: "date", width: 110 },
           gsPaperColumn(),
           subjectSingleSelectColumn(db),
-          microtopicTagColumn(db, setAddTopicFor, "Topic"),
+          microtopicTagColumn(db, setAddTopicFor, "Topic", db.singlePager),
           { key: "classNotes", label: "Class Notes", type: "select", options: INCLUSION_OPTIONS, width: 120 },
           { key: "handout", label: "Handout", type: "select", options: INCLUSION_OPTIONS, width: 120 },
           { key: "ncert", label: "NCERT", type: "select", options: INCLUSION_OPTIONS, width: 120 },
@@ -4070,13 +4070,34 @@ function subjectSingleSelectColumn(db) {
 // (`updateRecord` == updateDraftFields — draft has no id in `records` to
 // look up afterwards, which is exactly what broke when this used to
 // re-find the record by id once the popup closed).
-function microtopicTagColumn(db, setAddTopicFor, label = "Micro Topic") {
+// dedupWithinRecords (Single Pager only, Sarvesh Sep 12/13): when
+// provided (the tracker's own full records array), once a Micro Topic
+// already has a row on THIS SAME tracker, it's hidden from the dropdown
+// when adding it to a *different* row — scoped to that one tracker's own
+// rows, never cross-tracker. Classes/NCERT/Standard Books/Answer Writing
+// never pass this (stay `null`, unfiltered) since they legitimately need
+// to reuse a Micro Topic across multiple rows. The row currently being
+// edited keeps its own already-picked value(s) available regardless —
+// TagMultiSelectCell already excludes anything in `values` from its own
+// "available to add" list independently of `options`, and resolves an
+// already-picked tag's label via `resolveLabel`, not `options` — so
+// filtering `options` down to "used on *other* rows" here doesn't risk
+// making an already-selected tag unreadable or force-removing it.
+function microtopicTagColumn(db, setAddTopicFor, label = "Micro Topic", dedupWithinRecords = null) {
   return {
     key: "microtopics", label, width: 220, type: "custom",
     render: (rec, _onChange, updateRecord) => {
       const subjects = rec.subjects || (rec.subject ? [rec.subject] : []);
       const values = rec.microtopics || (rec.topic ? [rec.topic] : []);
-      const options = microtopicRowOptionsForSubjects(db, subjects);
+      let options = microtopicRowOptionsForSubjects(db, subjects);
+      if (dedupWithinRecords) {
+        const usedOnOtherRows = new Set();
+        dedupWithinRecords.forEach(other => {
+          if (other.id === rec.id) return;
+          (other.microtopics || []).forEach(id => usedOnOtherRows.add(id));
+        });
+        options = options.filter(o => !usedOnOtherRows.has(o.value));
+      }
       return (
         <TagMultiSelectCell
           values={values} options={options} allowAddNew
