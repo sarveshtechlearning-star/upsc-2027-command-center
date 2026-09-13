@@ -234,9 +234,11 @@ summary will do.
     counts fold into the same weekly report rather than needing a second,
     misaligned one). Shared `WeeklyTaskPanel` component (checkbox
     complete/revert, separate Skip button, add/remove when `allowAdd`) is
-    used in two places: `TodayTab`'s "This week's tasks" card (always the
-    real current week, independent of that tab's own navigable `dateISO`)
-    and `WeeklyReviewTab`'s "Weekly task planner" card (tasks are set
+    used in two places: `TodayTab`'s "This week's tasks" card (keyed to
+    `weekStartISO(dateISO)` — follows whichever date is selected via that
+    tab's own date navigator, changed from an earlier always-real-week
+    version on Sarvesh's request the same day, Sep 13) and
+    `WeeklyReviewTab`'s "Weekly task planner" card (tasks are set
     here, against the same `weekOf` cursor as the journal above it).
     Per-week Completed/Not Completed(`incomplete`)/Skipped counts are
     pushed into `WeeklyReviewTab`'s existing `statsRows` array, so they
