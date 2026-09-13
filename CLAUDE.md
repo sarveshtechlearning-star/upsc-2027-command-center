@@ -613,12 +613,23 @@ summary will do.
 - **Google Drive PDFs**: `DriveFilesCell` + `uploadDriveFile`/
   `downloadDriveFile` are generic across trackers — pass a `folderKey`
   (see `DRIVE_FOLDER_NAMES`) to keep each tracker's PDFs in their own
-  Drive folder. Currently wired up for Single Pager, Classes, GS Answer
-  Writing, Topper Copies, Tamil Reading/Writing, and Current Affairs.
-  `ensureDriveFolder` falls back to the legacy singular
-  `settings.driveFolderId` only for the `singlePager` key, to avoid
-  creating a duplicate folder for existing users; new folder ids live in
-  `settings.driveFolders[folderKey]`.
+  Drive folder. Wired up for Single Pager, Classes, GS Answer Writing,
+  Topper Copies, Tamil Reading/Writing, Current Affairs, and (Sep 13,
+  2026, freeze exception) NCERT and Standard Books. `ensureDriveFolder`
+  falls back to the legacy singular `settings.driveFolderId` only for
+  the `singlePager` key, to avoid creating a duplicate folder for
+  existing users; new folder ids live in `settings.driveFolders[folderKey]`.
+  - **NCERT/Standard Books deliberately have no upload gating.** Neither
+    tracker has a status column at all — `dayHasActivity` (see the
+    streak-widget entries above) already treats any dated NCERT/Standard
+    Books row as activity regardless of files, and that stays true
+    unchanged. So there's no `completionRequiresUpload`-style check to
+    add, and none was added — uploading is just optional, same as every
+    other field on those two rows. Sarvesh was explicit about this (Sep
+    13): "that need not be linked with completed status." Multi-file
+    support (see below) came for free from the shared `DriveFilesCell`/
+    `getRowFiles` plumbing — no separate work was needed to support more
+    than one file per row.
   **Multiple files per row**: a row's `driveFile` field holds an ARRAY of
   `{id, name, tag}` once touched by `DriveFilesCell` — never renamed to
   `driveFiles`, never migrated in bulk. Every read site goes through

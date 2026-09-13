@@ -910,6 +910,8 @@ const DRIVE_FOLDER_NAMES = {
   tamilReading: "UPSC 2027 Command Center - Tamil Literature Reading",
   classes: "UPSC 2027 Command Center - Class Notes",
   currentAffairs: "UPSC 2027 Command Center - Current Affairs",
+  ncert: "UPSC 2027 Command Center - NCERT",
+  standardBooks: "UPSC 2027 Command Center - Standard Books",
 };
 const DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.file";
 
@@ -4118,8 +4120,24 @@ function NcertTab({ db, updateSlice }) {
           microtopicTagColumn(db, setAddTopicFor, "Topic"),
           { key: "book", label: "Book", width: 150 },
           { key: "chapter", label: "Chapter", width: 140 },
+          {
+            key: "driveFile", label: "File(s)", width: 170, type: "custom",
+            render: (rec, onChange, onPatch, locked) => {
+              const tagOptions = (rec.microtopics || [])
+                .map(id => ({ id, label: resolveMicrotopicLabelById(db, id) }))
+                .filter(o => o.label);
+              return (
+                <DriveFilesCell files={getRowFiles(rec)} db={db} updateSlice={updateSlice} onChange={onChange} folderKey="ncert" locked={locked}
+                  tagOptions={tagOptions}
+                  getNamePrefixForTag={label => nextFileNamePrefix(db.ncert, rec, r => normKey(r.gsPaper, r.microtopics && r.microtopics[0]), [
+                    [rec.subject, label],
+                    [label],
+                  ])} />
+              );
+            },
+          },
         ]}
-        newRecord={() => ({ date: todayISO(), gsPaper: "", subject: "", microtopics: [], book: "", chapter: "" })}
+        newRecord={() => ({ date: todayISO(), gsPaper: "", subject: "", microtopics: [], book: "", chapter: "", driveFile: null })}
       />
       {addTopicFor && (
         <AddSyllabusRowPopup
@@ -4154,8 +4172,24 @@ function StandardBooksTab({ db, updateSlice }) {
           { key: "bookName", label: "Book", width: 150 },
           { key: "chapter", label: "Chapter", width: 140 },
           { key: "pages", label: "Pages", width: 80 },
+          {
+            key: "driveFile", label: "File(s)", width: 170, type: "custom",
+            render: (rec, onChange, onPatch, locked) => {
+              const tagOptions = (rec.microtopics || [])
+                .map(id => ({ id, label: resolveMicrotopicLabelById(db, id) }))
+                .filter(o => o.label);
+              return (
+                <DriveFilesCell files={getRowFiles(rec)} db={db} updateSlice={updateSlice} onChange={onChange} folderKey="standardBooks" locked={locked}
+                  tagOptions={tagOptions}
+                  getNamePrefixForTag={label => nextFileNamePrefix(db.standardBooks, rec, r => normKey(r.gsPaper, r.microtopics && r.microtopics[0]), [
+                    [rec.subject, label],
+                    [label],
+                  ])} />
+              );
+            },
+          },
         ]}
-        newRecord={() => ({ date: todayISO(), bookName: "", gsPaper: "", subject: "", chapter: "", microtopics: [], pages: "" })}
+        newRecord={() => ({ date: todayISO(), bookName: "", gsPaper: "", subject: "", chapter: "", microtopics: [], pages: "", driveFile: null })}
       />
       {addTopicFor && (
         <AddSyllabusRowPopup
