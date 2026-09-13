@@ -562,6 +562,27 @@ summary will do.
     a small dependency-free component (CSS `conic-gradient`, no charting
     library) — reuse it for future charts rather than adding a chart
     dependency for a simple pie/donut.
+  - **Orphaned class-subject warning (bug fix, shipped Sep 13, 2026)** —
+    `orphanedClassSubjects` flags any subject present on logged Classes
+    rows but absent from `settings.subjects` entirely, and an amber banner
+    above the two cards above names each one with its affected class
+    count. Root cause it surfaces: Classes' subject dropdown is
+    Syllabus-driven (`subjectSingleSelectColumn`), but
+    `classProgressBySubject`/`classStatusCounts` only iterate
+    `settings.subjects` — the two lists are maintained independently and
+    can drift. Found live: 19 "Modern India" classes (all In Progress)
+    were invisible to both cards because Settings only had "Modern
+    History" (which has no real Syllabus rows at all) with a Total
+    Classes of 19 — the pie showed 8 In Progress instead of the real 27,
+    and a phantom 19 "Not Completed" for a subject with no real
+    not-yet-logged classes. This banner only catches the "subject unknown
+    to Settings" case, not a subject that's known but has no Total Classes
+    set — that's already handled by the existing "no total set" messaging
+    and isn't a bug. Doesn't touch `NcertTab`/`StandardBooksTab`/
+    `SinglePagerTab`, which also use `subjectSingleSelectColumn` — their
+    subjects never feed into a `settings.subjects`-keyed aggregate (they
+    resolve via `syllabusId`/subtopic matching instead), so this failure
+    mode is specific to Classes' Dashboard cards.
   - **Answers written**: plain counts, GS Answer Writing by `GS_PAPERS`
     (the shared GS1–4/Essay list, also used by Answer Writing's own
     dropdown) and a single Tamil Writing total (Tamil has no "paper"

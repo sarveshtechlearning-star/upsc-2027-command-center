@@ -4863,6 +4863,29 @@ function DashboardTab({ db }) {
     return counts;
   }, [settings.subjects, settings.totalClassesBySubject, db.classes]);
 
+  // Classes logged under a subject that isn't in Settings' Subjects list
+  // at all (as opposed to one that's simply missing a Total Classes value)
+  // can never be counted by classProgressBySubject or classStatusCounts
+  // above — there's no way to even set a total for a subject Settings
+  // doesn't know about, so those rows are silently invisible to both
+  // cards with zero indication anywhere in the app. This surfaces that
+  // gap directly instead of leaving it to be found by hand-checking a
+  // JSON export (that's how the "Modern India" vs. "Modern History"
+  // mismatch was found on Sep 13, 2026 — Classes tab correctly pulls its
+  // subject options from Syllabus, but Syllabus and Settings' subject
+  // lists aren't kept in sync with each other, so a rename/typo on either
+  // side silently drops that subject's classes from every Dashboard
+  // classes card). Counted, not just flagged boolean, so the banner can
+  // say how many classes are affected per subject.
+  const orphanedClassSubjects = useMemo(() => {
+    const known = new Set(settings.subjects || []);
+    const counts = new Map();
+    db.classes.forEach(c => {
+      if (c.subject && !known.has(c.subject)) counts.set(c.subject, (counts.get(c.subject) || 0) + 1);
+    });
+    return Array.from(counts.entries()).map(([subject, count]) => ({ subject, count }));
+  }, [settings.subjects, db.classes]);
+
   // Only Completed Answer Writing rows — this card is meant to reflect
   // actually-finished practice answers, not every row you've started
   // logging, and never Topper Copies (someone else's answer, not yours).
@@ -4887,6 +4910,15 @@ function DashboardTab({ db }) {
         </div>
       )}
 
+      {orphanedClassSubjects.length > 0 && (
+        <div className="ucc-flex" style={{ gap: 8, alignItems: "flex-start", background: "var(--amber-soft)", color: "var(--amber)", borderRadius: 6, padding: "8px 12px", marginBottom: 12, fontSize: 12.5, fontWeight: 600 }}>
+          <AlertTriangle size={15} style={{ flexShrink: 0, marginTop: 1 }} />
+          <span>
+            Not counted below: {orphanedClassSubjects.map(o => `${o.count} class${o.count === 1 ? "" : "es"} logged as "${o.subject}"`).join(", ")}.
+            {" "}This subject isn't in Settings' Subjects list, so no Total Classes can be set for it — add it on the Settings tab to include it here.
+          </span>
+        </div>
+      )}
       <div className="ucc-card">
         <h3>Classes completed by subject</h3>
         <p className="ucc-tiny">Count of classes marked Completed vs. that subject's Total Classes (set on the Settings tab). Subjects with no total set aren't shown here.</p>
