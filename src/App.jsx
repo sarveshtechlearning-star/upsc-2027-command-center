@@ -3035,7 +3035,7 @@ function TodayTab({ db, updateSlice, onNavigate }) {
   return (
     <div>
       <div className="ucc-card">
-        <div className="ucc-flex between wrap" style={{ alignItems: "flex-start" }}>
+        <div className="ucc-flex between wrap">
           <div className="ucc-flex">
             <IconBtn icon={ChevronLeft} onClick={() => setDateISO(d => addDaysISO(d, -1))} title="Previous day" />
             <div>
@@ -3063,59 +3063,6 @@ function TodayTab({ db, updateSlice, onNavigate }) {
               </select>
             </label>
           </div>
-
-          {/* Streak, missed-days, and This week's tasks widgets — moved
-              into the header row beside Wake time/Day type (Sarvesh,
-              Sep 13), out of the column that used to sit next to Today's
-              plan below. Internal layout/sizing of all three is otherwise
-              unchanged from before the move; only their position is new. */}
-          <div style={{ display: "flex", flexDirection: "column", gap: 10, flex: "0 1 300px", minWidth: 240 }}>
-            <div className="ucc-card" style={{
-              minHeight: 260, margin: 0, padding: "24px 20px",
-              display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
-              textAlign: "center", gap: 8,
-              background: STREAK_TONE_COLORS[streakTone(consistencyStreak)].soft,
-              border: `3px solid ${STREAK_TONE_COLORS[streakTone(consistencyStreak)].solid}`,
-            }}>
-              <Flame size={44} style={{ color: STREAK_TONE_COLORS[streakTone(consistencyStreak)].solid }} />
-              <div style={{ fontSize: 52, fontWeight: 800, color: STREAK_TONE_COLORS[streakTone(consistencyStreak)].solid, lineHeight: 1 }}>{consistencyStreak}</div>
-              <div style={{ fontSize: 16, fontWeight: 700, color: STREAK_TONE_COLORS[streakTone(consistencyStreak)].solid }}>day{consistencyStreak === 1 ? "" : "s"} streak</div>
-              <div className="ucc-tiny" style={{ color: "var(--ink-muted)", marginTop: 8 }}>
-                Log anything today — a class, a chapter, an answer, a single pager — to keep it going.
-              </div>
-            </div>
-
-            <div className={`ucc-card${missedDaysTone(missedDays) === "severe" ? " ucc-missed-pulse" : ""}`} style={{
-              margin: 0, padding: "10px 14px",
-              display: "flex", flexDirection: "row", alignItems: "center", gap: 12,
-              background: MISSED_DAYS_TONE_COLORS[missedDaysTone(missedDays)].soft,
-              border: `2px dashed ${MISSED_DAYS_TONE_COLORS[missedDaysTone(missedDays)].solid}`,
-            }}>
-              <Frown size={26} style={{ color: MISSED_DAYS_TONE_COLORS[missedDaysTone(missedDays)].solid, flexShrink: 0 }} />
-              <div>
-                <div style={{ fontSize: 22, fontWeight: 800, color: MISSED_DAYS_TONE_COLORS[missedDaysTone(missedDays)].solid, lineHeight: 1 }}>
-                  {missedDays} day{missedDays === 1 ? "" : "s"} missed
-                </div>
-                <div className="ucc-tiny" style={{ color: "var(--ink-muted)" }}>
-                  {missedDays === 0 ? "Today's still in — keep it that way." : "Log anything today to reset this."}
-                </div>
-              </div>
-            </div>
-
-            <div className="ucc-card" style={{ margin: 0 }}>
-              <div className="ucc-flex" style={{ gap: 6, marginBottom: 4 }}>
-                <ListChecks size={18} />
-                <h3 style={{ margin: 0 }}>This week's tasks</h3>
-              </div>
-              <div className="ucc-tiny" style={{ color: "var(--ink-muted)", marginBottom: 8 }}>
-                {fmtDateLong(weekStartISO(dateISO))} – {fmtDateLong(addDaysISO(weekStartISO(dateISO), 6))}
-              </div>
-              <WeeklyTaskPanel db={db} updateSlice={updateSlice} weekStart={weekStartISO(dateISO)} compact />
-              <div className="ucc-tiny" style={{ color: "var(--ink-muted)", marginTop: 8 }}>
-                Set next week's tasks in Weekly Review.
-              </div>
-            </div>
-          </div>
         </div>
         <DayArc blocks={timedBlocks} wakeMinutes={wakeMinutes} sleepMinutes={sleepMinutes} />
         {(plan.breakNote || (plan.droppedLabels && plan.droppedLabels.length > 0)) && (
@@ -3136,7 +3083,7 @@ function TodayTab({ db, updateSlice, onNavigate }) {
       </div>
 
       <div className="ucc-flex wrap" style={{ alignItems: "flex-start", gap: 12 }}>
-        <div className="ucc-card" style={{ flex: "1 1 100%", margin: 0 }}>
+        <div className="ucc-card" style={{ flex: "3 1 420px", margin: 0 }}>
           <h3>Today's plan</h3>
           <p className="ucc-tiny" style={{ marginTop: -4 }}>A quick hourly journal — jot a line on what you actually did in each slot. Detailed logging (topics, PDFs, marks) stays on each tracker's own tab.</p>
           {timedBlocks.map((b, i) => {
@@ -3189,6 +3136,58 @@ function TodayTab({ db, updateSlice, onNavigate }) {
           </div>
         </div>
 
+        {/* Streak, missed-days, and This week's tasks — one stacked
+            column beside Today's plan (Sarvesh, Sep 13: briefly tried in
+            the header row, moved back here same day). Weekly tasks now
+            stacks below streak+missed inside this one column, rather than
+            sitting beside it as its own flex item like it used to. */}
+        <div style={{ flex: "1 1 260px", maxWidth: 300, display: "flex", flexDirection: "column", gap: 10 }}>
+          <div className="ucc-card" style={{
+            minHeight: 260, margin: 0, padding: "24px 20px",
+            display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
+            textAlign: "center", gap: 8,
+            background: STREAK_TONE_COLORS[streakTone(consistencyStreak)].soft,
+            border: `3px solid ${STREAK_TONE_COLORS[streakTone(consistencyStreak)].solid}`,
+          }}>
+            <Flame size={44} style={{ color: STREAK_TONE_COLORS[streakTone(consistencyStreak)].solid }} />
+            <div style={{ fontSize: 52, fontWeight: 800, color: STREAK_TONE_COLORS[streakTone(consistencyStreak)].solid, lineHeight: 1 }}>{consistencyStreak}</div>
+            <div style={{ fontSize: 16, fontWeight: 700, color: STREAK_TONE_COLORS[streakTone(consistencyStreak)].solid }}>day{consistencyStreak === 1 ? "" : "s"} streak</div>
+            <div className="ucc-tiny" style={{ color: "var(--ink-muted)", marginTop: 8 }}>
+              Log anything today — a class, a chapter, an answer, a single pager — to keep it going.
+            </div>
+          </div>
+
+          <div className={`ucc-card${missedDaysTone(missedDays) === "severe" ? " ucc-missed-pulse" : ""}`} style={{
+            margin: 0, padding: "10px 14px",
+            display: "flex", flexDirection: "row", alignItems: "center", gap: 12,
+            background: MISSED_DAYS_TONE_COLORS[missedDaysTone(missedDays)].soft,
+            border: `2px dashed ${MISSED_DAYS_TONE_COLORS[missedDaysTone(missedDays)].solid}`,
+          }}>
+            <Frown size={26} style={{ color: MISSED_DAYS_TONE_COLORS[missedDaysTone(missedDays)].solid, flexShrink: 0 }} />
+            <div>
+              <div style={{ fontSize: 22, fontWeight: 800, color: MISSED_DAYS_TONE_COLORS[missedDaysTone(missedDays)].solid, lineHeight: 1 }}>
+                {missedDays} day{missedDays === 1 ? "" : "s"} missed
+              </div>
+              <div className="ucc-tiny" style={{ color: "var(--ink-muted)" }}>
+                {missedDays === 0 ? "Today's still in — keep it that way." : "Log anything today to reset this."}
+              </div>
+            </div>
+          </div>
+
+          <div className="ucc-card" style={{ margin: 0 }}>
+            <div className="ucc-flex" style={{ gap: 6, marginBottom: 4 }}>
+              <ListChecks size={18} />
+              <h3 style={{ margin: 0 }}>This week's tasks</h3>
+            </div>
+            <div className="ucc-tiny" style={{ color: "var(--ink-muted)", marginBottom: 8 }}>
+              {fmtDateLong(weekStartISO(dateISO))} – {fmtDateLong(addDaysISO(weekStartISO(dateISO), 6))}
+            </div>
+            <WeeklyTaskPanel db={db} updateSlice={updateSlice} weekStart={weekStartISO(dateISO)} compact />
+            <div className="ucc-tiny" style={{ color: "var(--ink-muted)", marginTop: 8 }}>
+              Set next week's tasks in Weekly Review.
+            </div>
+          </div>
+        </div>
       </div>
 
       <div className="ucc-grid">

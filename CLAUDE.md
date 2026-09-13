@@ -179,9 +179,10 @@ summary will do.
     — reusable anywhere else "when did this last become Completed" matters
     — and returns the *most recent* match, so an undo-then-redo doesn't
     anchor to a stale timestamp.
-  - **The Consistency streak widget sits in the header row beside Wake
-    time/Day type, not beside "Today's plan" below it** (moved there from
-    beside the plan card on Sarvesh's request, Sep 13; `computeConsistencyStreak`)
+  - **The Consistency streak widget sits beside "Today's plan", not in
+    the summary grid below it** (`computeConsistencyStreak`; briefly
+    tried in the header row beside Wake time/Day type on Sep 13, moved
+    back beside the plan card the same day after seeing it live)
     — a day counts if *any* of Classes/Standard Books/NCERT/Answer
     Writing/Single Pager/Tamil Reading/Tamil Writing/Current Affairs has a
     record dated that day; counts backward from today, or from yesterday
@@ -199,10 +200,12 @@ summary will do.
     nothing gold-ish existed in the palette before.
   - **Negative-streak widget (shipped Sep 13, 2026 as part of a one-day
     freeze exception — see backlog history below) sits directly beneath
-    the streak card, in the same flex column** (that column now lives in
-    the header row alongside the streak card and "This week's tasks" —
-    see the header-row relocation note above and in the Weekly Planner
-    entry below, both Sep 13) — `computeMissedDays(db)`
+    the streak card, and "This week's tasks" sits beneath both of those —
+    all three now one stacked column beside "Today's plan"** (that
+    column briefly lived in the header row on Sep 13 before moving back
+    here the same day; see the Weekly Planner entry below for how
+    "This week's tasks" ended up folded into this same column instead of
+    sitting beside it as its own flex item) — `computeMissedDays(db)`
     counts consecutive zero-activity days ending **yesterday**;
     **updated same day** (Sarvesh, after seeing it live) to always give
     today itself the real streak's own "day isn't over yet" leniency,
@@ -242,8 +245,9 @@ summary will do.
     `weekStartISO(dateISO)` — follows whichever date is selected via that
     tab's own date navigator, changed from an earlier always-real-week
     version on Sarvesh's request the same day, Sep 13; the card itself
-    lives in the header row next to the streak/missed-days widgets as of
-    a later Sep 13 relocation — see the streak widget note above) and
+    now stacks beneath the streak/missed-days widgets in the single
+    column beside "Today's plan" — see the streak widget note above for
+    that column's Sep 13 history) and
     `WeeklyReviewTab`'s "Weekly task planner" card (tasks are set
     here, against the same `weekOf` cursor as the journal above it).
     Per-week Completed/Not Completed(`incomplete`)/Skipped counts are
