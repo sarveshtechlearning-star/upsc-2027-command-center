@@ -260,6 +260,40 @@ const CA_SOURCES = ["The Hindu", "Indian Express", "PIB", "Other"];
 const AI_STATUS = ["Not Started", "In Progress", "Completed"];
 const TOPPER_STATUS = ["Not Completed", "Completed"];
 const SKIP_REASONS = ["Time shortage", "Office workload", "Fatigue", "Unexpected work", "Other"];
+// Enforced linear-flow chains for GenericTracker's "status" columns
+// (Sarvesh, Sep 13, 2026). A forward move may only reach the next stage,
+// except it may skip over a stage marked `optional` (used for Partially
+// Completed, which can never be reached directly from Not Started, but
+// can be skipped when moving In Progress -> Completed). Backward moves to
+// any earlier stage are always allowed but require a reason (enforced by
+// FlowStatusSelect, not here). "Skipped" is deliberately absent from
+// every chain below — left as an unconstrained escape hatch outside the
+// enforced flow, since Sarvesh asked to defer deciding how it fits in
+// until after the Sep 30 freeze ends. Options arrays not mapped here
+// (e.g. READ_STATUS, used only for the Reading tab's revision cells via a
+// direct <StatusSelect>, never through GenericTracker's column system)
+// get no enforcement at all.
+const STATUS_FLOW_CHAINS = {
+  fourStage: [
+    { name: "Not Started" }, { name: "In Progress" },
+    { name: "Partially Completed", optional: true }, { name: "Completed" },
+  ],
+  threeStage: [
+    { name: "Not Started" }, { name: "In Progress" }, { name: "Completed" },
+  ],
+  binary: [
+    { name: "Not Completed" }, { name: "Completed" },
+  ],
+};
+// Reference-equality lookup — every caller passes one of the module-level
+// status-vocabulary consts below as `options`, never a copy, so this is
+// reliable without needing a name-based lookup.
+function statusFlowChainFor(options) {
+  if (options === TASK_STATUS) return STATUS_FLOW_CHAINS.fourStage;
+  if (options === SP_STATUS || options === AI_STATUS) return STATUS_FLOW_CHAINS.threeStage;
+  if (options === TOPPER_STATUS) return STATUS_FLOW_CHAINS.binary;
+  return null;
+}
 const GS_PAPER_OPTIONS = ["GS Paper I", "GS Paper II", "GS Paper III", "GS Paper IV", "Essay", "CSAT", "Optional Paper I", "Optional Paper II", "Personality Test"];
 // GS_PAPERS (Answer Writing/Topper Copies' own short-form GS Paper field,
 // e.g. "GS1") and GS_PAPER_OPTIONS (Syllabus's long-form field, e.g. "GS
@@ -1508,6 +1542,92 @@ function StatusSelect({ value, options, onChange }) {
   );
 }
 
+// GenericTracker's status-column widget — StatusSelect's flow-enforcing
+// sibling (Sep 13, 2026). StatusSelect itself stays untouched and is
+// still used as-is for the Reading tab's revision1/revision2 cells, which
+// were never part of this feature's scope.
+// - Forward moves: the dropdown simply omits any stage that would skip a
+//   non-optional stage, so an invalid forward jump can't be selected in
+//   the first place (no chain -> unrestricted, same as StatusSelect).
+// - Backward moves (to an earlier chain stage): allowed, but selecting one
+//   opens a small anchored popover (same visual pattern as SkipToggle's
+//   reason popover) asking for a reason; nothing commits until Save, so
+//   Cancel/Escape leaves the record untouched.
+// - Values outside the chain (i.e. "Skipped") are always shown and never
+//   require a reason, in either direction — the deliberate "don't build
+//   Skipped semantics yet" escape hatch.
+function FlowStatusSelect({ value, options, chain, onChange }) {
+  const [pendingValue, setPendingValue] = useState(null);
+  const [reason, setReason] = useState("");
+
+  const chainNames = chain ? chain.map(s => s.name) : null;
+  const currentIdx = chainNames ? chainNames.indexOf(value) : -1;
+
+  // Visible options are filtered by the flow rule above, then re-sorted
+  // into chain order — TASK_STATUS's own array happens to list "Completed"
+  // before "Partially Completed" (unrelated storage-order historical
+  // quirk, not the intended flow order), so without this re-sort the
+  // dropdown would visually suggest Completed comes before Partially
+  // Completed even though the chain says otherwise. Non-chain values
+  // (i.e. "Skipped") keep their original relative position, appended
+  // after every chain stage.
+  const visibleOptions = !chain ? options : (() => {
+    const inChain = [], outChain = [];
+    options.forEach(opt => {
+      const idx = chainNames.indexOf(opt);
+      const visible = idx === -1 || currentIdx === -1 || idx <= currentIdx || (() => {
+        for (let i = currentIdx + 1; i < idx; i++) if (!chain[i].optional) return false;
+        return true;
+      })();
+      if (!visible) return;
+      if (idx === -1) outChain.push(opt); else inChain.push({ opt, idx });
+    });
+    inChain.sort((a, b) => a.idx - b.idx);
+    return [...inChain.map(x => x.opt), ...outChain];
+  })();
+
+  function handleSelect(newVal) {
+    if (newVal === value) return;
+    const idx = chainNames ? chainNames.indexOf(newVal) : -1;
+    const isBackward = chain && idx !== -1 && currentIdx !== -1 && idx < currentIdx;
+    if (isBackward) { setPendingValue(newVal); setReason(""); }
+    else onChange(newVal);
+  }
+  function submitReason() {
+    if (!reason.trim()) return;
+    onChange(pendingValue, reason.trim());
+    setPendingValue(null); setReason("");
+  }
+  function cancelRevert() { setPendingValue(null); setReason(""); }
+
+  return (
+    <div style={{ position: "relative", display: "inline-block" }}>
+      <select className={`ucc-status ${colorFor(value)}`} value={value || options[0]} onChange={e => handleSelect(e.target.value)}>
+        {visibleOptions.map(o => <option key={o} value={o}>{o}</option>)}
+      </select>
+      {pendingValue && (
+        <div style={{
+          position: "absolute", zIndex: 30, top: "100%", left: 0, marginTop: 4, background: "#fff",
+          border: "1px solid var(--line-strong)", borderRadius: 6, padding: 8, minWidth: 220,
+          boxShadow: "0 4px 14px rgba(0,0,0,0.14)",
+        }}>
+          <div className="ucc-tiny" style={{ marginBottom: 6, fontWeight: 600 }}>Why revert to "{pendingValue}"?</div>
+          <input type="text" autoFocus value={reason} onChange={e => setReason(e.target.value)}
+            onKeyDown={e => { if (e.key === "Enter") submitReason(); if (e.key === "Escape") cancelRevert(); }}
+            placeholder="e.g. Marked complete by mistake"
+            style={{ width: "100%", padding: "4px 6px", marginBottom: 6, border: "1px solid var(--line-strong)", borderRadius: 4, fontSize: 12, boxSizing: "border-box" }} />
+          <div className="ucc-flex" style={{ gap: 4 }}>
+            <button type="button" className="ucc-btn ghost" style={{ padding: "2px 8px", fontSize: 11 }}
+              disabled={!reason.trim()} onClick={submitReason}>Save</button>
+            <button type="button" className="ucc-btn ghost" style={{ padding: "2px 8px", fontSize: 11 }}
+              onClick={cancelRevert}>Cancel</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 
 function EmptyState({ children }) {
   return <div className="ucc-empty">{children}</div>;
@@ -1640,7 +1760,7 @@ function GenericTracker({ records, setRecords, columns, newRecord, emptyMessage,
   // other field on that row locks (pointer-events disabled, dimmed) until
   // the status is changed away from Completed again — that's the
   // deliberate escape hatch for fixing a mistake, not an oversight.
-  function updateField(rec, col, val, isStatus) {
+  function updateField(rec, col, val, isStatus, reason) {
     if (completionRequiresUpload && col.type === "status" && val === "Completed" && getRowFiles(rec).length === 0) {
       const driveFileCol = columns.find(c => c.key === "driveFile");
       window.alert(`Upload the ${driveFileCol ? driveFileCol.label : "file"} for this row before marking it Completed.`);
@@ -1667,7 +1787,13 @@ function GenericTracker({ records, setRecords, columns, newRecord, emptyMessage,
       const updated = { ...r, [col.key]: val };
       if (isStatus) {
         const from = r[col.key] || "(empty)";
-        updated.history = [...(r.history || []), { field: col.label, from, to: val, at: new Date().toISOString() }];
+        // `reason` only ever arrives here for a backward move through the
+        // enforced flow (FlowStatusSelect's revert popover) — omitted
+        // entirely from the entry otherwise, rather than stored empty, so
+        // existing history rendering doesn't need to special-case it.
+        const entry = { field: col.label, from, to: val, at: new Date().toISOString() };
+        if (reason) entry.reason = reason;
+        updated.history = [...(r.history || []), entry];
       }
       return updated;
     }));
@@ -1770,7 +1896,8 @@ function GenericTracker({ records, setRecords, columns, newRecord, emptyMessage,
     const isStatusCol = col.type === "status";
     return isStatusCol ? (
       <div className="ucc-flex" style={{ gap: 4 }}>
-        <StatusSelect value={rec[col.key]} options={col.options} onChange={v => onChange(v, true)} />
+        <FlowStatusSelect value={rec[col.key]} options={col.options} chain={statusFlowChainFor(col.options)}
+          onChange={(v, reason) => onChange(v, true, reason)} />
         {locked && <Lock size={13} style={{ color: "var(--green)", flexShrink: 0 }} aria-label="Row locked — change Status to edit" />}
         {partiallyLocked && <Lock size={13} style={{ color: "var(--red)", flexShrink: 0 }} aria-label="Row locked while Partially Completed — change Status to edit anything but Date or the uploaded file" />}
       </div>
@@ -1937,7 +2064,7 @@ function GenericTracker({ records, setRecords, columns, newRecord, emptyMessage,
                     const isDateCol = col.key === "date";
                     const isDriveFileCol = col.key === "driveFile";
                     const cell = renderCellForColumn(rec, col, {
-                      onChange: (val, isStatus) => updateField(rec, col, val, isStatus),
+                      onChange: (val, isStatus, reason) => updateField(rec, col, val, isStatus, reason),
                       onPatch: patch => updateFields(rec, patch),
                       locked, partiallyLocked,
                     });
@@ -1983,7 +2110,10 @@ function GenericTracker({ records, setRecords, columns, newRecord, emptyMessage,
                       <strong>Change history</strong>
                       <ul style={{ margin: "4px 0 0 0", paddingLeft: 18 }}>
                         {(rec.history || []).slice().reverse().map((h, i) => (
-                          <li key={i}>{h.field}: <em>{h.from}</em> → <strong>{h.to}</strong> — {new Date(h.at).toLocaleString()}</li>
+                          <li key={i}>
+                            {h.field}: <em>{h.from}</em> → <strong>{h.to}</strong> — {new Date(h.at).toLocaleString()}
+                            {h.reason && <span className="ucc-tiny" style={{ color: "var(--ink-muted)" }}> — reverted: "{h.reason}"</span>}
+                          </li>
                         ))}
                       </ul>
                     </td>
