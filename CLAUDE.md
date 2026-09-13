@@ -385,6 +385,22 @@ summary will do.
     something that isn't a `records` entry, this is why it'll still work:
     `attach` only ever depends on the closure, never on looking anything
     back up by id.
+  - **Single Pager's Micro Topic dedup (shipped Sep 13, 2026, freeze
+    exception)**: `microtopicTagColumn` takes an optional 4th param,
+    `dedupWithinRecords` — when passed a tracker's own full records array,
+    a Micro Topic already used on one row of that **same tracker** is
+    filtered out of the dropdown when adding it to a *different* row.
+    Single Pager is the only caller that passes this (`db.singlePager`
+    at its one call site in `SinglePagerTab`); Classes/NCERT/Standard
+    Books/Answer Writing all omit it and keep the original unfiltered
+    behavior, since they legitimately need to reuse a Micro Topic across
+    multiple rows. Scoped to that one tracker's own rows, never
+    cross-tracker. The row being edited keeps its own already-picked
+    value(s) available regardless — `TagMultiSelectCell` already excludes
+    anything in `values` from its own "available to add" list
+    independently of `options`, and resolves an already-picked tag's
+    label via `resolveLabel`, never `options` — so no extra guard was
+    needed to keep that row editable.
   `AddSyllabusRowPopup` replicates Syllabus's own add-a-row flow (GS
   Paper/Subject/Topic/Subtopic pickers, Micro Topic pre-filled with
   whatever was just typed); confirming creates a real Syllabus row and
@@ -624,6 +640,45 @@ summary will do.
   record's full file list; `DriveDownloadLink` (singular) still exists
   for spots that already resolved down to one specific file (e.g.
   `bestFileForRow`'s pick for Topic Master's summary table).
+- **Enforced status-transition flow (shipped Sep 13, 2026, freeze
+  exception)** — `GenericTracker`'s "status" columns now go through
+  `FlowStatusSelect` instead of the plain `StatusSelect` (which still
+  exists unchanged, used only for the Reading tab's revision1/revision2
+  cells — out of scope for this feature). `STATUS_FLOW_CHAINS` +
+  `statusFlowChainFor(options)` map each status vocabulary to its
+  intended stage order by **reference equality against the vocabulary
+  consts** (`TASK_STATUS` → `fourStage`, `SP_STATUS`/`AI_STATUS` →
+  `threeStage`, `TOPPER_STATUS` → `binary`) — this is the resolution of
+  the "array order isn't flow order" ambiguity (`TASK_STATUS` itself
+  still lists Completed before Partially Completed; the chain is a
+  separate, authoritative ordering). Confirmed flow (Sarvesh, Sep 13):
+  `Not Started → In Progress → Completed`, with Partially Completed as
+  an **optional** stop between In Progress and Completed — reachable
+  from In Progress, never directly from Not Started. `"Skipped"` is
+  deliberately absent from every chain (decide how it fits in after Sep
+  30) — it's an unconstrained escape hatch, selectable and reachable
+  from anywhere with no ordering or reason requirement.
+  - **Forward moves**: `FlowStatusSelect` filters invalid targets out of
+    the `<select>` entirely (can't select what isn't shown) — no
+    alert/rejection needed since an invalid forward jump was never an
+    option. Options are also re-sorted into chain order for display, so
+    the dropdown doesn't visually contradict the flow the way
+    `TASK_STATUS`'s raw array order would.
+  - **Backward moves** (to any earlier chain stage) are always allowed,
+    but selecting one opens a small anchored reason popover (same visual
+    pattern as `SkipToggle`'s) — nothing commits until Save; Cancel/
+    Escape leaves the record untouched. Confirmed (Sarvesh, Sep 13): no
+    reason needed on forward moves, only backward.
+  - **Per-row log**: reuses the `rec.history` array and the History-icon-
+    plus-expandable-row UI that already existed for every status change
+    (pre-dates this feature) — a reason, when given, is now attached as
+    `entry.reason` and shown inline. No new log infrastructure was
+    needed. Confirmed (Sarvesh, Sep 13): visible now, not deferred.
+  - **Composes with, doesn't replace**, the existing
+    `completionRequiresUpload`/"Partially Completed" row-lock behavior
+    (PRs #68–69) — those checks still run in `updateField`/
+    `updateDraftField` exactly as before; `FlowStatusSelect` only
+    constrains which options even reach that point.
 - **Google Calendar + Tasks sync (Today's Planner)**: `CalendarSyncButton` +
   `addBlocksToGoogleCalendar`/`createCalendarEvent`/`createTask` mirror
   the Drive integration's shape — same `VITE_GOOGLE_CLIENT_ID`/Google
@@ -994,38 +1049,11 @@ is the exception that prompted the stricter policy above._
 _Sep 13, 2026: a second explicit, Sarvesh-authorized exception — this
 time a full day rather than a single item, requested and confirmed as a
 standalone decision (not bundled into an unrelated instruction) after
-Claude flagged the freeze tension per policy. Three items below were
-pulled forward and shipped that day: the PDF View button, the
-negative-streak widget, and the Weekly Planner. See their Section 4
-entries for what shipped and where; each retains its original design
-requirements/history here for context. The remaining item below
-(enforced status-transition flow) was deliberately NOT built same-day —
-its own "still open at implementation time" questions needed resolving
-first rather than guessing across every tracker._
-
-- **Enforced status-transition flow with reasons + a per-row log.**
-  Requested flow: `Not Started → In Progress → Partially Completed →
-  Completed`, no skipping stages and no free reverting. Every status
-  change (including "Skipped", allowed from any stage) pops up asking for
-  a reason/summary; reverting from Completed to an earlier stage also
-  requires a reason. All of it gets appended to a log on that row.
-
-  **Design decision (resolved):** each tracker keeps its own existing
-  status vocabulary — no vocabulary unification, no data migration. The
-  flow/reason/log behavior wraps around whatever stages a tracker already
-  has (e.g. `TASK_STATUS`'s 5 states, the 3-state trackers, `TOPPER_STATUS`'s
-  binary pair, `CA_STATUS`'s To Read/Read/Noted) rather than forcing every
-  tracker onto one 4-stage chain.
-
-  **Still open at implementation time:** the linear order within each
-  tracker's own stage list isn't necessarily its array's storage order
-  (e.g. `TASK_STATUS` lists Completed before Partially Completed) — confirm
-  the intended chain per tracker rather than assuming array order is flow
-  order. Also confirm whether "Skipped" should be added as a new option to
-  trackers that don't have it today, or only enforced on the one tracker
-  (`TASK_STATUS`) that already lists it. Day Planner already has its own
-  separate `skipped`/`skipReason` fields outside `status` entirely — worth
-  looking at as prior art for the reason-capture UX. Needs a new per-row
-  log field (doesn't exist anywhere yet), and has to compose with the
-  Completed/Partially-Completed row-lock behavior already shipped
-  (PRs #68–69) rather than conflict with it.
+Claude flagged the freeze tension per policy. All five items queued in
+this section were pulled forward and shipped that day: the Single Pager
+Micro Topic dedup, the PDF View button, the negative-streak widget, the
+Weekly Planner, and the enforced status-transition flow (the last one
+only after resolving its own open design questions in conversation
+first, rather than guessing across every tracker). See each item's own
+Section 4 entry for what shipped and where — nothing is left queued in
+this backlog as of this PR._
