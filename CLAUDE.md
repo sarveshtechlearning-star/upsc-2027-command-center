@@ -651,6 +651,22 @@ summary will do.
   record's full file list; `DriveDownloadLink` (singular) still exists
   for spots that already resolved down to one specific file (e.g.
   `bestFileForRow`'s pick for Topic Master's summary table).
+  - **NCERT/Standard Books wired into Topic Master (Sep 13, 2026,
+    freeze exception, immediately following their upload support
+    above)**: `computeTopicCompletionFields` now also returns
+    `standardMaterialFile`/`ncertFile` via the same `bestFileForRow`
+    call already used for `classNotesFile` — no changes to
+    `bestFileForRow` itself were needed, since neither tracker has a
+    `status` field, so its "prefer a Completed record's file" tier
+    already falls straight through to "any matched record's file" for
+    them. Both the summary table (next to the Standard Material/NCERT
+    badges) and the detail panel's Topic Completion badges show the
+    linked file the same way Class Notes already did. The detail
+    panel's raw per-record NCERT/Standard Books lists also gained
+    `DriveDownloadLinks files={getRowFiles(...)}`, matching the Classes
+    section's existing pattern, so every uploaded file for a topic is
+    reachable from Topic Master, not just the one `bestFileForRow` picks
+    as "the" file.
 - **Enforced status-transition flow (shipped Sep 13, 2026, freeze
   exception)** — `GenericTracker`'s "status" columns now go through
   `FlowStatusSelect` instead of the plain `StatusSelect` (which still
