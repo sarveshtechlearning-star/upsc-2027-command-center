@@ -199,15 +199,25 @@ summary will do.
   - **Negative-streak widget (shipped Sep 13, 2026 as part of a one-day
     freeze exception — see backlog history below) sits directly beneath
     the streak card, in the same flex column** — `computeMissedDays(db)`
-    counts consecutive zero-activity days backward from today, with no
-    "day isn't over yet" leniency (unlike the real streak, it resets to 0
-    the instant today gets any activity). Both streak functions now share
-    an extracted `dayHasActivity(db, iso)` helper so their definition of
-    "activity" can't drift apart. Deliberately structurally distinct from
-    the streak card per Sarvesh's design ask: a slim horizontal banner
-    (not the same centered-square shape), a `Frown` icon (not `Flame`),
-    and its own `missedDaysTone`/`MISSED_DAYS_TONE_COLORS` severity ramp
-    (calm → amber → orange → red) rather than a reuse of `streakTone`. A
+    counts consecutive zero-activity days ending **yesterday**;
+    **updated same day** (Sarvesh, after seeing it live) to always give
+    today itself the real streak's own "day isn't over yet" leniency,
+    regardless of whether today already has activity — the original
+    version counted today too and reset to 0 the instant today got
+    activity, which showed "1 day missed" the moment you opened the app
+    each morning before logging anything; the fix always starts the
+    count at yesterday, so it only reflects fully-passed missed days
+    (0 if yesterday was fine, 1 if only yesterday was missed, 2 if
+    yesterday and the day before were both missed, etc.) and nudges for
+    today via copy alone ("Today's still in — keep it that way" /
+    "Log anything today to reset this"), never via the count. Both
+    streak functions now share an extracted `dayHasActivity(db, iso)`
+    helper so their definition of "activity" can't drift apart.
+    Deliberately structurally distinct from the streak card per
+    Sarvesh's design ask: a slim horizontal banner (not the same
+    centered-square shape), a `Frown` icon (not `Flame`), and its own
+    `missedDaysTone`/`MISSED_DAYS_TONE_COLORS` severity ramp (calm →
+    amber → orange → red) rather than a reuse of `streakTone`. A
     `ucc-missed-pulse` CSS animation is the one motion cue, applied only
     at the worst ("severe") tier. Fully independent of the streak's own
     state — reads `db` directly, nothing shared with `streakTone`/
