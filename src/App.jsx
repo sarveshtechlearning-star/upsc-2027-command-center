@@ -3192,9 +3192,10 @@ function TodayTab({ db, updateSlice, onNavigate }) {
 
         {/* Beside the streak widget, not the plan card — this week's tasks
             (set in Weekly Review) surface here for the week's full run.
-            Always keyed to the real current week (weekStartISO of actual
-            today), independent of dateISO above, which just navigates the
-            hourly-plan view. Shares weekStartISO's Monday-start convention
+            Keyed to weekStartISO(dateISO) — the week containing whichever
+            date is selected above via the Today tab's date navigator — so
+            navigating to a different day shows that day's week's tasks
+            (Sarvesh, Sep 13). Shares weekStartISO's Monday-start convention
             with Weekly Review so it folds into the same weekly report. */}
         <div className="ucc-card" style={{ flex: "1 1 240px", maxWidth: 300, margin: 0 }}>
           <div className="ucc-flex" style={{ gap: 6, marginBottom: 4 }}>
@@ -3202,9 +3203,9 @@ function TodayTab({ db, updateSlice, onNavigate }) {
             <h3 style={{ margin: 0 }}>This week's tasks</h3>
           </div>
           <div className="ucc-tiny" style={{ color: "var(--ink-muted)", marginBottom: 8 }}>
-            {fmtDateLong(weekStartISO(todayISO()))} – {fmtDateLong(addDaysISO(weekStartISO(todayISO()), 6))}
+            {fmtDateLong(weekStartISO(dateISO))} – {fmtDateLong(addDaysISO(weekStartISO(dateISO), 6))}
           </div>
-          <WeeklyTaskPanel db={db} updateSlice={updateSlice} weekStart={weekStartISO(todayISO())} compact />
+          <WeeklyTaskPanel db={db} updateSlice={updateSlice} weekStart={weekStartISO(dateISO)} compact />
           <div className="ucc-tiny" style={{ color: "var(--ink-muted)", marginTop: 8 }}>
             Set next week's tasks in Weekly Review.
           </div>
