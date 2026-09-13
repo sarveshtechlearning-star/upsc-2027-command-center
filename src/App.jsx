@@ -2789,14 +2789,20 @@ function computeConsistencyStreak(db) {
   return streak;
 }
 // Negative-streak widget's counterpart to computeConsistencyStreak:
-// consecutive days with ZERO activity, counting backward from today.
-// Deliberately NOT given the real streak's "today isn't over yet, don't
-// count it against you" leniency — it resets to 0 the instant today gets
-// any activity logged, per spec ("resets to 0 the moment a day passes
-// computeConsistencyStreak's hasActivity check").
+// consecutive days with ZERO activity, ending yesterday. Updated (Sarvesh,
+// Sep 13): unlike the original spec, today itself is now NEVER counted,
+// regardless of whether today already has activity or not — the widget's
+// job for today is to nudge, not to accuse a day that isn't even over
+// yet. So this always starts at yesterday and counts backward: yesterday
+// only missed -> shows 1 (log today to stop it becoming 2); yesterday AND
+// the day before both missed -> shows 2; and so on. If yesterday had
+// activity, this is 0 even if today hasn't been logged yet — that's the
+// intended "don't show one day missed just because today isn't done yet"
+// behavior, distinct from the original "resets only once today gets
+// activity" version.
 function computeMissedDays(db) {
   let missed = 0;
-  let cursor = todayISO();
+  let cursor = addDaysISO(todayISO(), -1);
   while (!dayHasActivity(db, cursor)) {
     missed++;
     cursor = addDaysISO(cursor, -1);
