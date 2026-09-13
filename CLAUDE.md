@@ -1068,15 +1068,53 @@ Non-bug feature requests intentionally deferred during the Sep 3–30, 2026
 code freeze. Targeted to resume **Oct 1, 2026** — check this section first
 when picking work back up.
 
-**Freeze policy, tightened Sep 7, 2026:** the one exception granted so far
-("Multiple files per row", pulled forward and built the same day — see
-below) is the last one for this freeze window. From Sep 7 through Sep 30,
-only a genuine bug — something broken, not something merely wanted —
-qualifies as a freeze exception. If a request in this window is a feature
-(however small, however badly wanted, "I need it" included), the answer
-is: add it to this list and build it Oct 1. Don't re-litigate whether
-*this particular* feature is different — flag it as a feature and queue
-it, same as any other.
+**Standing rule, effective Sep 13, 2026 through Dec 31, 2026 — weekly
+unfreeze window (supersedes the "tightened Sep 7" ad-hoc-exception policy
+below; that policy is kept only as history):**
+
+- **Genuine bugs — something broken, not something merely wanted — are
+  fixed immediately, any day, no window required.** This was already the
+  rule under the old policy too; restated here because it's easy to
+  conflate with the feature policy below. Don't make Sarvesh wait until
+  Sunday for something that's actually broken.
+- **Feature requests and small "I need this on the go" wants queue all
+  week in this Section 19 backlog**, same as before.
+- **The only time queued features get built is Sunday afternoon through
+  Sunday night.** Nothing outside that window.
+- There is no ad-hoc exception process anymore. If a feature request
+  (however small, however badly wanted, "I need it" included) arrives on
+  any day other than Sunday, the answer is always "queued for Sunday" —
+  never "let's just do this one now." Don't re-litigate whether *this
+  particular* feature is different enough to jump the window; that
+  re-litigation is exactly what produced two ad-hoc exceptions in the
+  first ten days under the old rule (see the dated notes below).
+- If Sunday's window isn't enough time to finish something, it waits for
+  the following Sunday rather than bleeding into the rest of the week.
+
+_Sep 13, 2026: the standing weekly window above replaced the ad-hoc
+"tightened Sep 7" exception policy that follows, after two ad-hoc
+exceptions in the freeze's first ten days — "Multiple files per row"
+(Sep 7) and a five-item batch (Sep 13, the same day as this policy
+change) — showed that a strict-but-negotiable rule doesn't hold in
+practice; each exception makes the next one easier to justify. Sarvesh's
+own reasoning for the change: the app isn't finished and he needs some
+features and fixes on the go, so a predictable weekly slot is more
+sustainable than treating the freeze as airtight and re-litigating it
+every time something comes up. Window runs through Dec 31, 2026 —
+deliberately well past the original Oct 1 freeze-end date, since the
+weekly cadence is meant to replace full daily-build resumption, not just
+bridge to it._
+
+**Freeze policy, tightened Sep 7, 2026 (superseded Sep 13, 2026 — kept
+for history only, see the standing rule above):** the one exception
+granted so far ("Multiple files per row", pulled forward and built the
+same day — see below) is the last one for this freeze window. From Sep 7
+through Sep 30, only a genuine bug — something broken, not something
+merely wanted — qualifies as a freeze exception. If a request in this
+window is a feature (however small, however badly wanted, "I need it"
+included), the answer is: add it to this list and build it Oct 1. Don't
+re-litigate whether *this particular* feature is different — flag it as
+a feature and queue it, same as any other.
 
 _Sep 7, 2026: "Multiple files per row" was pulled forward and built as an
 explicit, Sarvesh-authorized freeze exception rather than waiting for Oct
@@ -1093,7 +1131,8 @@ Weekly Planner, and the enforced status-transition flow (the last one
 only after resolving its own open design questions in conversation
 first, rather than guessing across every tracker). See each item's own
 Section 4 entry for what shipped and where — nothing is left queued in
-this backlog as of this PR._
+this backlog as of this PR. This is the second exception referenced in
+the standing-rule note above._
 
 _Sep 13, 2026: the four items below were surfaced from the Sep 3–6
 audit (`claude/app-audit-2026-09-03.md`) — they'd been discussed and,
