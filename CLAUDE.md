@@ -1029,3 +1029,81 @@ first rather than guessing across every tracker._
   log field (doesn't exist anywhere yet), and has to compose with the
   Completed/Partially-Completed row-lock behavior already shipped
   (PRs #68–69) rather than conflict with it.
+- **Negative-streak / "days missed" widget, beside the existing streak
+  widget.** A companion card in the same Day Planner area as the current
+  streak widget (`~App.jsx:2931`), showing the flip side: consecutive days
+  with zero tracker activity, using a sad/neutral smiley instead of the
+  `Flame` icon. Resets to 0 the moment a day passes `computeConsistencyStreak`'s
+  `hasActivity` check.
+
+  **Design requirements (Sarvesh, Sep 8):**
+  - Must be *unignorably* visually distinct from the real streak
+    widget — not a palette swap on the same card shape. Needs a
+    structurally different treatment (icon/shape, layout weight, or
+    motion cue).
+  - Wants dynamic color-by-severity in the same spirit as
+    `streakTone`/`STREAK_TONE_COLORS` (which step blue→green→gold as the
+    real streak grows), but with its **own distinct thresholds/palette** —
+    not a literal reuse of the same tone function or CSS vars.
+
+  **Still open at implementation time:** `computeConsistencyStreak` only
+  returns 0 once broken, it doesn't track *how long* it's been 0 — likely
+  needs a new `computeMissedDays`-style function, symmetric to the
+  existing one, counting consecutive `!hasActivity` days backward from
+  today. Exact icon (emoji vs. lucide) and severity thresholds not yet
+  specified.
+- **Weekly Planner, with a "today's tasks" panel beside the streak
+  widget.** Requested Sep 11, 2026; a feature (build Oct 1), *not* a
+  freeze exception — flagged and declined as an in-the-moment exception
+  request despite Sarvesh's insistence, per the Sep 7 tightened policy
+  above. Finalized spec after several rounds of clarification:
+
+  - **Saturday 9 PM**: a task-setting window opens (Weekly Review tab,
+    possibly renamed) where Sarvesh enters the coming week's tasks.
+  - **Sun–Sat**: only that week's tasks surface in a "today's planner"
+    panel positioned to the right of the existing streak widget (same
+    Day Planner area, `~App.jsx:2931`).
+  - **Per-task actions, three of them**: checkbox → mark Completed;
+    unchecking → revert to not-completed; a separate **Skip** button
+    (distinct state from incomplete, not just an unchecked box). Day
+    Planner's existing separate `skipped`/`skipReason` fields (see the
+    status-transition-flow entry above) are useful prior art for this.
+  - **Saturday night, end of week**: any task not Completed or Skipped
+    is auto-logged as **Incomplete** — no manual step needed.
+  - **No archiving or reset of the planner list itself.** Instead, the
+    Weekly Review report gains a new section — Completed / Not
+    Completed / Skipped — for that week, tagged to the week's date
+    range.
+  - **Explicitly independent of streak logic.** Must not read from or
+    write to `computeConsistencyStreak`, `streakTone`, or
+    `STREAK_TONE_COLORS` — no shared state, no effect on the streak or
+    negative-streak widgets.
+
+  **Still open at implementation time:** task data model and storage key
+  (new `kv_store` key vs. extending Weekly Review's existing shape);
+  exactly what "today's planner panel" renders when no task-setting has
+  happened yet for the week; whether/how a task can be edited or removed
+  mid-week after Saturday's setting window closes; final tab name if
+  Weekly Review is renamed.
+- **Single Pager: exclude already-tagged Micro Topics from the tag
+  dropdown.** Requested Sep 12, 2026, reported as a bug; flagged instead
+  as a feature and queued here. The Micro Topic dropdown
+  (`microtopicTagColumn` / `microtopicRowOptionsForSubjects`) is shared
+  verbatim by Classes, NCERT, Standard Books, Single Pager, and GS Answer
+  Writing, and deliberately lists every Micro Topic under the selected
+  Subject(s) regardless of use elsewhere — those other trackers
+  legitimately need to reuse a Micro Topic across multiple rows. Single
+  Pager alone wants to diverge from that shared behavior: once a Micro
+  Topic already has a Single Pager row, hide it from the dropdown when
+  adding a *new* row. No functional bug today — multiple Single Pager
+  rows tagging the same Micro Topic don't break completion tracking
+  (`singlePager` completion is computed with `.some(...Completed)` across
+  all matches); this is a workflow/dedup convenience only.
+
+  **Still open at implementation time:** "already used" should almost
+  certainly scope to Single Pager's own rows, not cross-tracker, since
+  Classes/NCERT/Standard Books still need multi-use of the same Micro
+  Topic. Whether a Micro Topic should still show as an option on the row
+  that's already using it (so that row stays editable) rather than
+  vanishing everywhere — needs the filter to exclude "used on *other*
+  rows" relative to the row being edited, not "used at all."
