@@ -3020,8 +3020,6 @@ function TodayTab({ db, updateSlice, onNavigate }) {
   const pendingOnly = pending.filter(p => p.cat === "Pending");
   const revisionDue = pending.filter(p => p.cat === "Revision due");
   const singlePagerPending = pending.filter(p => p.cat === "Single pager");
-  const yISO = addDaysISO(dateISO, -1);
-  const yClasses = db.classes.filter(c => c.date === yISO && c.status === "Completed");
   const todayAnswers = db.answerWriting.filter(a => a.date === dateISO);
   const consistencyStreak = useMemo(() => computeConsistencyStreak(db),
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -3224,13 +3222,6 @@ function TodayTab({ db, updateSlice, onNavigate }) {
         <SummaryCard title="Revision due" count={revisionDue.length} onTitleClick={() => onNavigate("reading")}>
           {revisionDue.length === 0 ? <EmptyState>No revisions due today.</EmptyState> :
             revisionDue.slice(0, 2).map((p, i) => <div key={i} className="ucc-tiny" style={{ marginBottom: 4 }}>{p.label} — {p.detail}</div>)}
-        </SummaryCard>
-        <SummaryCard title="Class" count={yClasses.length} onTitleClick={() => onNavigate("classes")}>
-          {yClasses.length === 0 ? <EmptyState>No class logged for {fmtDateLong(yISO)}.</EmptyState> :
-            yClasses.map(c => {
-              const microtopic = (c.microtopics && c.microtopics[0]) ? resolveMicrotopicLabelById(db, c.microtopics[0]) : null;
-              return <div key={c.id} className="ucc-tiny">{c.subject} #{c.classNumber}{microtopic ? ` — ${microtopic}` : ""}</div>;
-            })}
         </SummaryCard>
         <SummaryCard title="Single pager" count={singlePagerPending.length} onTitleClick={() => onNavigate("singlePager")}>
           {singlePagerPending.length === 0 ? <EmptyState>Nothing waiting on a Single Pager.</EmptyState> :
