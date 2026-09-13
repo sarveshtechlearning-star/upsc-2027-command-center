@@ -7,7 +7,7 @@ import {
   Settings as SettingsIcon, Upload, Download, ChevronUp, ChevronDown,
   Plus, Trash2, History, Check, AlertTriangle, Clock, ChevronLeft,
   ChevronRight as ChevronRightIcon, X, LogOut, LayoutDashboard, Copy, Pencil, Lock, Flame, Target,
-  CalendarPlus
+  CalendarPlus, SkipForward, ListChecks, ExternalLink, Frown
 } from "lucide-react";
 
 /* ============================================================
@@ -74,6 +74,14 @@ const CSS = `
   @keyframes ucc-countdown-pulse{
     0%, 100%{box-shadow:0 0 0 0 rgba(180,64,42,0.35);}
     50%{box-shadow:0 0 0 9px rgba(180,64,42,0);}
+  }
+  /* Negative-streak widget's motion cue at its most severe tier — a slow,
+     subtle pulse (distinct timing from ucc-countdown-pulse's faster nag)
+     so a long run of missed days doesn't just sit there unnoticed. */
+  .ucc-missed-pulse{animation:ucc-missed-days-pulse 3s ease-in-out infinite;}
+  @keyframes ucc-missed-days-pulse{
+    0%, 100%{box-shadow:0 0 0 0 rgba(180,64,42,0.30);}
+    50%{box-shadow:0 0 0 7px rgba(180,64,42,0);}
   }
   .ucc-content{padding:22px 26px 60px 26px; max-width:1180px; width:100%;}
   /* Classes gets a bit more width than the app default now that its rows
@@ -450,7 +458,7 @@ const SYLLABUS_SEED = [
 const STORAGE_KEYS = [
   "settings", "syllabus", "classes", "reading", "singlePager", "ncert", "standardBooks",
   "tamilReading", "tamilWriting", "currentAffairs", "answerWriting", "topperCopies", "aiLearning",
-  "dailyPlans", "dailyReviews", "weeklyReviews"
+  "dailyPlans", "dailyReviews", "weeklyReviews", "weeklyPlanner"
 ];
 
 function defaultDB() {
@@ -470,6 +478,12 @@ function defaultDB() {
     classes: [], reading: [], singlePager: [], ncert: [], standardBooks: [],
     tamilReading: [], tamilWriting: [], currentAffairs: [], answerWriting: [], topperCopies: [], aiLearning: [],
     dailyPlans: {}, dailyReviews: {}, weeklyReviews: {},
+    // { [weekStartISO_Monday]: { tasks: [{ id, text, status }] } } — status is
+    // "pending" | "completed" | "skipped"; "incomplete" is never stored, only
+    // derived (see taskEffectiveStatus) once a week has passed. Keyed by the
+    // same Monday-start weekStartISO() used by the Weekly Review journal, so
+    // task counts fold into that same weekly report — see WeeklyReviewTab.
+    weeklyPlanner: {},
   };
 }
 
@@ -818,6 +832,24 @@ function weekStartISO(iso) {
   const diff = (day === 0 ? -6 : 1) - day; // Monday start
   dt.setDate(dt.getDate() + diff);
   return isoFromDate(dt);
+}
+// Weekly Planner shares weekStartISO's Monday-start weeks with the
+// existing Weekly Review hourly journal — Sarvesh asked for this (Sep 13)
+// specifically so planned tasks and their Completed/Not Completed/Skipped
+// counts fold into the same weekly review/report rather than living on a
+// separate Sun-Sat cursor. (Originally spec'd Sun-Sat on Sep 11; changed
+// before this was ever committed.)
+// A weekly-planner task's stored status is only ever "pending" | "completed"
+// | "skipped" — "incomplete" is never written, only derived here once the
+// task's week has actually ended (its last day is in the past), per the
+// "end of week: any task not Completed or Skipped is auto-logged as
+// Incomplete — no manual step needed" requirement. Deriving it at read
+// time (instead of writing it back on a timer/cron) means it's always
+// correct regardless of when the app happens to be opened.
+function taskEffectiveStatus(task, weekStart) {
+  if (task.status === "completed" || task.status === "skipped") return task.status;
+  const weekEnd = addDaysISO(weekStart, 6);
+  return todayISO() > weekEnd ? "incomplete" : "pending";
 }
 function downloadBlob(content, filename, mime) {
   const blob = new Blob([content], { type: mime });
@@ -2375,6 +2407,11 @@ function DriveFilesCell({ files, db, updateSlice, onChange, folderKey, namePrefi
               <Upload size={11} />
             </button>
           )}
+          <button type="button" className="ucc-btn ghost" style={{ padding: "2px 6px" }} disabled={busy}
+            onClick={() => window.open(`https://drive.google.com/file/d/${file.id}/view`, "_blank", "noopener,noreferrer")}
+            title="View in a new tab">
+            <ExternalLink size={11} />
+          </button>
           <button type="button" className="ucc-btn ghost" style={{ padding: "2px 6px" }} disabled={busy} onClick={() => handleDownload(file)} title="Download">
             <Download size={11} />
           </button>
@@ -2598,9 +2635,11 @@ function statusCompletedAt(rec, fieldLabel = "Status") {
 // backward from today, except when today has nothing logged yet: the day
 // isn't over, so an empty today shouldn't zero out a streak that's still
 // genuinely alive (it starts counting from yesterday instead, in that case).
-function computeConsistencyStreak(db) {
-  const hasActivity = iso =>
-    db.classes.some(c => c.date === iso && c.status === "Completed") ||
+// Shared by computeConsistencyStreak and computeMissedDays (its
+// negative-streak counterpart) so the two can never drift out of sync on
+// what counts as "activity" for a given day.
+function dayHasActivity(db, iso) {
+  return db.classes.some(c => c.date === iso && c.status === "Completed") ||
     db.standardBooks.some(s => s.date === iso) ||
     db.ncert.some(n => n.date === iso) ||
     db.answerWriting.some(a => a.date === iso && a.status === "Completed") ||
@@ -2608,14 +2647,31 @@ function computeConsistencyStreak(db) {
     db.tamilReading.some(t => t.date === iso) ||
     db.tamilWriting.some(t => t.date === iso && t.status === "Completed") ||
     db.currentAffairs.some(c => c.date === iso);
+}
+function computeConsistencyStreak(db) {
   let streak = 0;
   let cursor = todayISO();
-  if (!hasActivity(cursor)) cursor = addDaysISO(cursor, -1);
-  while (hasActivity(cursor)) {
+  if (!dayHasActivity(db, cursor)) cursor = addDaysISO(cursor, -1);
+  while (dayHasActivity(db, cursor)) {
     streak++;
     cursor = addDaysISO(cursor, -1);
   }
   return streak;
+}
+// Negative-streak widget's counterpart to computeConsistencyStreak:
+// consecutive days with ZERO activity, counting backward from today.
+// Deliberately NOT given the real streak's "today isn't over yet, don't
+// count it against you" leniency — it resets to 0 the instant today gets
+// any activity logged, per spec ("resets to 0 the moment a day passes
+// computeConsistencyStreak's hasActivity check").
+function computeMissedDays(db) {
+  let missed = 0;
+  let cursor = todayISO();
+  while (!dayHasActivity(db, cursor)) {
+    missed++;
+    cursor = addDaysISO(cursor, -1);
+  }
+  return missed;
 }
 // Streak widget's color tone by count: 0 (broken) is red, 1-20 blue,
 // 21-99 green, 100+ gold — each step is a small "leveled up" moment
@@ -2633,6 +2689,24 @@ const STREAK_TONE_COLORS = {
   blue: { solid: "var(--blue)", soft: "var(--blue-soft)" },
   green: { solid: "var(--green)", soft: "var(--green-soft)" },
   gold: { solid: "var(--gold)", soft: "var(--gold-soft)" },
+};
+// Negative-streak widget's own tone function — deliberately separate from
+// streakTone (not a reuse/wrapper), with its own thresholds and palette,
+// per Sarvesh's design requirement that it not be a literal reuse of the
+// real streak's tone logic. Ramps amber -> orange -> red as days-missed
+// grows, i.e. the opposite direction of severity from streakTone (whose
+// red is "just broken", not "badly broken").
+function missedDaysTone(missed) {
+  if (missed <= 0) return "calm";
+  if (missed <= 2) return "amber";
+  if (missed <= 6) return "orange";
+  return "severe";
+}
+const MISSED_DAYS_TONE_COLORS = {
+  calm: { solid: "var(--grey)", soft: "var(--grey-soft)" },
+  amber: { solid: "var(--amber)", soft: "var(--amber-soft)" },
+  orange: { solid: "#c2620a", soft: "#fdead6" },
+  severe: { solid: "var(--red)", soft: "var(--red-soft)" },
 };
 function computePendingTasks(db) {
   const items = [];
@@ -2814,6 +2888,13 @@ function TodayTab({ db, updateSlice, onNavigate }) {
   const consistencyStreak = useMemo(() => computeConsistencyStreak(db),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [db.classes, db.standardBooks, db.ncert, db.answerWriting, db.singlePager, db.tamilReading, db.tamilWriting, db.currentAffairs]);
+  // Negative-streak widget's count — same dependency list as the real
+  // streak (both derive from dayHasActivity over the same trackers), kept
+  // as a fully separate useMemo/variable so nothing here ever reads from
+  // or writes to the streak's own state, per the independence requirement.
+  const missedDays = useMemo(() => computeMissedDays(db),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [db.classes, db.standardBooks, db.ncert, db.answerWriting, db.singlePager, db.tamilReading, db.tamilWriting, db.currentAffairs]);
 
   return (
     <div>
@@ -2927,19 +3008,67 @@ function TodayTab({ db, updateSlice, onNavigate }) {
             centered content down past the fold. minHeight below is a fixed
             floor, not tied to the plan card's height the way stretch was,
             so it can be sized generously without reintroducing that bug on
-            a long day. */}
-        <div className="ucc-card" style={{
-          flex: "1 1 220px", maxWidth: 260, minHeight: 300, margin: 0, padding: "24px 20px",
-          display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
-          textAlign: "center", gap: 8,
-          background: STREAK_TONE_COLORS[streakTone(consistencyStreak)].soft,
-          border: `3px solid ${STREAK_TONE_COLORS[streakTone(consistencyStreak)].solid}`,
-        }}>
-          <Flame size={44} style={{ color: STREAK_TONE_COLORS[streakTone(consistencyStreak)].solid }} />
-          <div style={{ fontSize: 52, fontWeight: 800, color: STREAK_TONE_COLORS[streakTone(consistencyStreak)].solid, lineHeight: 1 }}>{consistencyStreak}</div>
-          <div style={{ fontSize: 16, fontWeight: 700, color: STREAK_TONE_COLORS[streakTone(consistencyStreak)].solid }}>day{consistencyStreak === 1 ? "" : "s"} streak</div>
+            a long day.
+            The negative-streak widget lives in this same column, directly
+            beneath the real streak — "beside the streak widget" per its
+            spec, without eating into the Today's Tasks card's own space. */}
+        <div style={{ flex: "1 1 220px", maxWidth: 260, display: "flex", flexDirection: "column", gap: 10 }}>
+          <div className="ucc-card" style={{
+            minHeight: 260, margin: 0, padding: "24px 20px",
+            display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
+            textAlign: "center", gap: 8,
+            background: STREAK_TONE_COLORS[streakTone(consistencyStreak)].soft,
+            border: `3px solid ${STREAK_TONE_COLORS[streakTone(consistencyStreak)].solid}`,
+          }}>
+            <Flame size={44} style={{ color: STREAK_TONE_COLORS[streakTone(consistencyStreak)].solid }} />
+            <div style={{ fontSize: 52, fontWeight: 800, color: STREAK_TONE_COLORS[streakTone(consistencyStreak)].solid, lineHeight: 1 }}>{consistencyStreak}</div>
+            <div style={{ fontSize: 16, fontWeight: 700, color: STREAK_TONE_COLORS[streakTone(consistencyStreak)].solid }}>day{consistencyStreak === 1 ? "" : "s"} streak</div>
+            <div className="ucc-tiny" style={{ color: "var(--ink-muted)", marginTop: 8 }}>
+              Log anything today — a class, a chapter, an answer, a single pager — to keep it going.
+            </div>
+          </div>
+
+          {/* Negative-streak widget. Structurally distinct from the streak
+              card on purpose (Sarvesh, Sep 8): a slim horizontal banner
+              instead of a big centered square, a Frown icon instead of
+              Flame, and its own severity ramp (missedDaysTone) rather than
+              a reuse of streakTone. Only gets the pulse animation at its
+              worst tier, as the one motion cue. */}
+          <div className={`ucc-card${missedDaysTone(missedDays) === "severe" ? " ucc-missed-pulse" : ""}`} style={{
+            margin: 0, padding: "10px 14px",
+            display: "flex", flexDirection: "row", alignItems: "center", gap: 12,
+            background: MISSED_DAYS_TONE_COLORS[missedDaysTone(missedDays)].soft,
+            border: `2px dashed ${MISSED_DAYS_TONE_COLORS[missedDaysTone(missedDays)].solid}`,
+          }}>
+            <Frown size={26} style={{ color: MISSED_DAYS_TONE_COLORS[missedDaysTone(missedDays)].solid, flexShrink: 0 }} />
+            <div>
+              <div style={{ fontSize: 22, fontWeight: 800, color: MISSED_DAYS_TONE_COLORS[missedDaysTone(missedDays)].solid, lineHeight: 1 }}>
+                {missedDays} day{missedDays === 1 ? "" : "s"} missed
+              </div>
+              <div className="ucc-tiny" style={{ color: "var(--ink-muted)" }}>
+                {missedDays === 0 ? "Today's still in — keep it that way." : "Log anything today to reset this."}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Beside the streak widget, not the plan card — this week's tasks
+            (set in Weekly Review) surface here for the week's full run.
+            Always keyed to the real current week (weekStartISO of actual
+            today), independent of dateISO above, which just navigates the
+            hourly-plan view. Shares weekStartISO's Monday-start convention
+            with Weekly Review so it folds into the same weekly report. */}
+        <div className="ucc-card" style={{ flex: "1 1 240px", maxWidth: 300, margin: 0 }}>
+          <div className="ucc-flex" style={{ gap: 6, marginBottom: 4 }}>
+            <ListChecks size={18} />
+            <h3 style={{ margin: 0 }}>This week's tasks</h3>
+          </div>
+          <div className="ucc-tiny" style={{ color: "var(--ink-muted)", marginBottom: 8 }}>
+            {fmtDateLong(weekStartISO(todayISO()))} – {fmtDateLong(addDaysISO(weekStartISO(todayISO()), 6))}
+          </div>
+          <WeeklyTaskPanel db={db} updateSlice={updateSlice} weekStart={weekStartISO(todayISO())} compact />
           <div className="ucc-tiny" style={{ color: "var(--ink-muted)", marginTop: 8 }}>
-            Log anything today — a class, a chapter, an answer, a single pager — to keep it going.
+            Set next week's tasks in Weekly Review.
           </div>
         </div>
       </div>
@@ -2977,6 +3106,97 @@ function TodayTab({ db, updateSlice, onNavigate }) {
             ))}
         </SummaryCard>
       </div>
+    </div>
+  );
+}
+
+// Shared between TodayTab's "This week's tasks" panel and WeeklyReviewTab's
+// task-setting section. Deliberately reads/writes only db.weeklyPlanner —
+// no reference to computeConsistencyStreak, streakTone, or
+// STREAK_TONE_COLORS anywhere in this component, per the "explicitly
+// independent of streak logic" requirement.
+function WeeklyTaskPanel({ db, updateSlice, weekStart, allowAdd = false, compact = false }) {
+  const [newTask, setNewTask] = useState("");
+  const tasks = (db.weeklyPlanner[weekStart] && db.weeklyPlanner[weekStart].tasks) || [];
+
+  function setTasks(updater) {
+    updateSlice("weeklyPlanner", prev => {
+      const current = (prev[weekStart] && prev[weekStart].tasks) || [];
+      const nextTasks = typeof updater === "function" ? updater(current) : updater;
+      return { ...prev, [weekStart]: { ...(prev[weekStart] || {}), tasks: nextTasks } };
+    });
+  }
+
+  function addTask() {
+    const text = newTask.trim();
+    if (!text) return;
+    setTasks(prev => [...prev, { id: uid(), text, status: "pending" }]);
+    setNewTask("");
+  }
+  function toggleComplete(id) {
+    setTasks(prev => prev.map(t => t.id === id
+      ? { ...t, status: t.status === "completed" ? "pending" : "completed" }
+      : t));
+  }
+  function toggleSkip(id) {
+    setTasks(prev => prev.map(t => t.id === id
+      ? { ...t, status: t.status === "skipped" ? "pending" : "skipped" }
+      : t));
+  }
+  function removeTask(id) {
+    setTasks(prev => prev.filter(t => t.id !== id));
+  }
+
+  const counts = tasks.reduce((acc, t) => {
+    const eff = taskEffectiveStatus(t, weekStart);
+    acc[eff] = (acc[eff] || 0) + 1;
+    return acc;
+  }, {});
+
+  return (
+    <div>
+      {allowAdd && (
+        <div className="ucc-flex" style={{ gap: 6, marginBottom: 10 }}>
+          <input className="ucc-input" placeholder="Add a task for this week…" value={newTask}
+            onChange={e => setNewTask(e.target.value)}
+            onKeyDown={e => { if (e.key === "Enter") addTask(); }} style={{ flex: 1 }} />
+          <button className="ucc-btn primary" onClick={addTask}><Plus size={14} /> Add</button>
+        </div>
+      )}
+      {tasks.length === 0 && (
+        <EmptyState>
+          {allowAdd ? "No tasks set for this week yet — add one above." : "No tasks set for this week."}
+        </EmptyState>
+      )}
+      {tasks.map(t => {
+        const eff = taskEffectiveStatus(t, weekStart);
+        return (
+          <div key={t.id} className="ucc-flex between" style={{ gap: 8, padding: compact ? "4px 0" : "6px 0", borderBottom: "1px solid var(--line)" }}>
+            <label className="ucc-flex" style={{ gap: 8, flex: 1, alignItems: "flex-start", cursor: "pointer" }}>
+              <input type="checkbox" checked={eff === "completed"} onChange={() => toggleComplete(t.id)}
+                style={{ marginTop: 3 }} disabled={eff === "skipped"} />
+              <span style={{
+                fontSize: compact ? 13 : 14,
+                textDecoration: eff === "completed" ? "line-through" : "none",
+                color: eff === "skipped" ? "var(--ink-muted)" : "var(--ink)",
+              }}>{t.text}</span>
+            </label>
+            <div className="ucc-flex" style={{ gap: 4, flexShrink: 0 }}>
+              {eff === "incomplete" && <Badge tone="red">Incomplete</Badge>}
+              {eff === "skipped" && <Badge tone="grey">Skipped</Badge>}
+              <IconBtn icon={SkipForward} onClick={() => toggleSkip(t.id)}
+                title={t.status === "skipped" ? "Unskip" : "Skip this task"} />
+              {allowAdd && <IconBtn icon={Trash2} onClick={() => removeTask(t.id)} title="Remove task" />}
+            </div>
+          </div>
+        );
+      })}
+      {tasks.length > 0 && (
+        <div className="ucc-tiny" style={{ marginTop: 10, color: "var(--ink-muted)" }}>
+          {counts.completed || 0} completed · {counts.incomplete || 0} not completed · {counts.skipped || 0} skipped
+          {(counts.pending || 0) > 0 ? ` · ${counts.pending} pending` : ""}
+        </div>
+      )}
     </div>
   );
 }
@@ -4933,6 +5153,17 @@ function WeeklyReviewTab({ db, updateSlice }) {
   const classesThisWeek = db.classes.filter(c => weekDates.includes(c.date)).length;
   const answersThisWeek = db.answerWriting.filter(a => weekDates.includes(a.date)).length;
   const currentAffairsThisWeek = db.currentAffairs.filter(c => weekDates.includes(c.date)).length;
+  // Weekly Planner tasks for this same week — shares weekStartISO's
+  // Monday-start convention (per Sarvesh, Sep 13) specifically so these
+  // counts fold straight into statsRows below, and from there into both
+  // the on-screen stat grid and the printed/emailed report, with no
+  // separate report-building logic needed.
+  const weeklyTasks = (db.weeklyPlanner[weekOf] && db.weeklyPlanner[weekOf].tasks) || [];
+  const taskCounts = weeklyTasks.reduce((acc, t) => {
+    const eff = taskEffectiveStatus(t, weekOf);
+    acc[eff] = (acc[eff] || 0) + 1;
+    return acc;
+  }, {});
   const reflection = db.weeklyReviews[weekOf] || { wellDone: "", notWell: "", change: "" };
   function setReflection(patch) {
     updateSlice("weeklyReviews", prev => ({ ...prev, [weekOf]: { ...(prev[weekOf] || {}), ...patch } }));
@@ -4961,6 +5192,8 @@ function WeeklyReviewTab({ db, updateSlice }) {
     ["Planned sessions", planned], ["Logged", logged], ["Skipped", missed],
     ["Classes this week", classesThisWeek], ["Answers written", answersThisWeek],
     ["Current affairs logged", currentAffairsThisWeek],
+    ["Tasks completed", taskCounts.completed || 0], ["Tasks not completed", taskCounts.incomplete || 0],
+    ["Tasks skipped", taskCounts.skipped || 0],
   ];
   function buildSummaryHtml() {
     const statsHtml = statsRows.map(([label, val]) =>
@@ -5040,6 +5273,26 @@ function WeeklyReviewTab({ db, updateSlice }) {
         </div>
       </div>
 
+      {/* Weekly Task Planner — shares the same weekOf cursor and nav as
+          the journal card above it (Monday-start), so it folds into the
+          same weekly review/report instead of running on its own Sun-Sat
+          cursor (changed from the original Sep 11 spec at Sarvesh's
+          request, Sep 13, specifically to enable that). The interactive
+          add/check/skip controls stay ucc-no-print — the resulting
+          Completed/Not Completed/Skipped counts feed statsRows above,
+          which the stat grid and printed/emailed report both already
+          render. */}
+      <div className="ucc-card ucc-no-print">
+        <div className="ucc-flex" style={{ gap: 6, marginBottom: 4 }}>
+          <ListChecks size={18} />
+          <h3 style={{ margin: 0 }}>Weekly task planner</h3>
+        </div>
+        <p className="ucc-tiny" style={{ marginTop: -4, marginBottom: 12 }}>
+          Tasks for week of {fmtDateLong(weekOf)} – {fmtDateLong(addDaysISO(weekOf, 6))}. Set the coming week's tasks here; they'll show up in Today's Tasks panel all week, and any left over get logged Not Completed once the week ends. Use the nav above to switch weeks.
+        </p>
+        <WeeklyTaskPanel db={db} updateSlice={updateSlice} weekStart={weekOf} allowAdd />
+      </div>
+
       <div className="ucc-print-area">
         <div className="ucc-card">
           <div className="ucc-flex between wrap">
@@ -5063,6 +5316,9 @@ function WeeklyReviewTab({ db, updateSlice }) {
             <div className="ucc-stat"><div className="n">{classesThisWeek}</div><div className="l">Classes this week</div></div>
             <div className="ucc-stat"><div className="n">{answersThisWeek}</div><div className="l">Answers written</div></div>
             <div className="ucc-stat"><div className="n">{currentAffairsThisWeek}</div><div className="l">Current affairs logged</div></div>
+            <div className="ucc-stat"><div className="n">{taskCounts.completed || 0}</div><div className="l">Tasks completed</div></div>
+            <div className="ucc-stat"><div className="n">{taskCounts.incomplete || 0}</div><div className="l">Tasks not completed</div></div>
+            <div className="ucc-stat"><div className="n">{taskCounts.skipped || 0}</div><div className="l">Tasks skipped</div></div>
           </div>
           <div className="ucc-grid">
             <div><label className="ucc-tiny">What went well?</label><textarea className="ucc-textarea" rows={3} value={reflection.wellDone} onChange={e => setReflection({ wellDone: e.target.value })} /></div>
@@ -5204,13 +5460,14 @@ function SettingsTab({ db, updateSlice }) {
 const CLEARABLE_DATA_KEYS = {
   syllabus: [], classes: [], reading: [], singlePager: [], ncert: [], standardBooks: [],
   tamilReading: [], tamilWriting: [], currentAffairs: [], answerWriting: [], topperCopies: [], aiLearning: [],
-  dailyPlans: {}, dailyReviews: {}, weeklyReviews: {},
+  dailyPlans: {}, dailyReviews: {}, weeklyReviews: {}, weeklyPlanner: {},
 };
 const RESETTABLE_SECTION_LABELS = {
   syllabus: "Syllabus", classes: "Classes", reading: "Topic Completion", singlePager: "Single Pager",
   ncert: "NCERT", standardBooks: "Standard Books", tamilReading: "Tamil Literature Reading",
   tamilWriting: "Tamil Literature Writing", currentAffairs: "Current Affairs", answerWriting: "GS Answer Writing",
   topperCopies: "Topper Copies", aiLearning: "AI Learning", dailyPlans: "Daily Plans", dailyReviews: "End-of-day reviews", weeklyReviews: "Weekly reviews",
+  weeklyPlanner: "Weekly Planner",
 };
 // Only Syllabus needs its own extra warning in the section-wise reset:
 // every other tracker stores its own readable subject/topic/etc. text, so
