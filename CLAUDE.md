@@ -196,6 +196,49 @@ summary will do.
     `STREAK_TONE_COLORS`' palette, not the widget's JSX itself. `--gold`/
     `--gold-soft` were added to the `:root` token list for this since
     nothing gold-ish existed in the palette before.
+  - **Negative-streak widget (shipped Sep 13, 2026 as part of a one-day
+    freeze exception — see backlog history below) sits directly beneath
+    the streak card, in the same flex column** — `computeMissedDays(db)`
+    counts consecutive zero-activity days backward from today, with no
+    "day isn't over yet" leniency (unlike the real streak, it resets to 0
+    the instant today gets any activity). Both streak functions now share
+    an extracted `dayHasActivity(db, iso)` helper so their definition of
+    "activity" can't drift apart. Deliberately structurally distinct from
+    the streak card per Sarvesh's design ask: a slim horizontal banner
+    (not the same centered-square shape), a `Frown` icon (not `Flame`),
+    and its own `missedDaysTone`/`MISSED_DAYS_TONE_COLORS` severity ramp
+    (calm → amber → orange → red) rather than a reuse of `streakTone`. A
+    `ucc-missed-pulse` CSS animation is the one motion cue, applied only
+    at the worst ("severe") tier. Fully independent of the streak's own
+    state — reads `db` directly, nothing shared with `streakTone`/
+    `STREAK_TONE_COLORS`.
+  - **Weekly Planner (shipped Sep 13, 2026, same freeze exception) —
+    `db.weeklyPlanner: { [weekStartISO]: { tasks: [{id, text, status}] } }`,
+    status one of `"pending" | "completed" | "skipped"`.** `"incomplete"`
+    is never written — `taskEffectiveStatus(task, weekStart)` derives it
+    at read time once `todayISO() > addDaysISO(weekStart, 6)`, so it's
+    always correct with no cron/write-back needed. Uses the *same*
+    Monday-start `weekStartISO()` as the pre-existing Weekly Review
+    journal (originally spec'd as its own Sun-Sat week on Sep 11; changed
+    to Monday-start at Sarvesh's request on Sep 13 specifically so task
+    counts fold into the same weekly report rather than needing a second,
+    misaligned one). Shared `WeeklyTaskPanel` component (checkbox
+    complete/revert, separate Skip button, add/remove when `allowAdd`) is
+    used in two places: `TodayTab`'s "This week's tasks" card (always the
+    real current week, independent of that tab's own navigable `dateISO`)
+    and `WeeklyReviewTab`'s "Weekly task planner" card (tasks are set
+    here, against the same `weekOf` cursor as the journal above it).
+    Per-week Completed/Not Completed(`incomplete`)/Skipped counts are
+    pushed into `WeeklyReviewTab`'s existing `statsRows` array, so they
+    show up in both the on-screen stat grid and the printed/emailed
+    report with no separate report-building logic. Explicitly independent
+    of streak logic — no reference anywhere to `computeConsistencyStreak`/
+    `streakTone`/`STREAK_TONE_COLORS`/`computeMissedDays`.
+  - **PDF View button (shipped Sep 13, 2026, same freeze exception)** —
+    `DriveFilesCell` has a View button next to Download on every file row,
+    opening `https://drive.google.com/file/d/{file.id}/view` in a new tab
+    (`window.open(..., "_blank", "noopener,noreferrer")`). No new state,
+    no Drive API call — just a URL built from the file id already on hand.
   - **Syllabus's own `studyStatus`/`revisionStatus` fields are dead** —
     never shown or settable by any UI anymore (they used to sit behind
     this same duplication problem). Existing stored values on old rows are
@@ -342,6 +385,22 @@ summary will do.
     something that isn't a `records` entry, this is why it'll still work:
     `attach` only ever depends on the closure, never on looking anything
     back up by id.
+  - **Single Pager's Micro Topic dedup (shipped Sep 13, 2026, freeze
+    exception)**: `microtopicTagColumn` takes an optional 4th param,
+    `dedupWithinRecords` — when passed a tracker's own full records array,
+    a Micro Topic already used on one row of that **same tracker** is
+    filtered out of the dropdown when adding it to a *different* row.
+    Single Pager is the only caller that passes this (`db.singlePager`
+    at its one call site in `SinglePagerTab`); Classes/NCERT/Standard
+    Books/Answer Writing all omit it and keep the original unfiltered
+    behavior, since they legitimately need to reuse a Micro Topic across
+    multiple rows. Scoped to that one tracker's own rows, never
+    cross-tracker. The row being edited keeps its own already-picked
+    value(s) available regardless — `TagMultiSelectCell` already excludes
+    anything in `values` from its own "available to add" list
+    independently of `options`, and resolves an already-picked tag's
+    label via `resolveLabel`, never `options` — so no extra guard was
+    needed to keep that row editable.
   `AddSyllabusRowPopup` replicates Syllabus's own add-a-row flow (GS
   Paper/Subject/Topic/Subtopic pickers, Micro Topic pre-filled with
   whatever was just typed); confirming creates a real Syllabus row and
@@ -581,6 +640,45 @@ summary will do.
   record's full file list; `DriveDownloadLink` (singular) still exists
   for spots that already resolved down to one specific file (e.g.
   `bestFileForRow`'s pick for Topic Master's summary table).
+- **Enforced status-transition flow (shipped Sep 13, 2026, freeze
+  exception)** — `GenericTracker`'s "status" columns now go through
+  `FlowStatusSelect` instead of the plain `StatusSelect` (which still
+  exists unchanged, used only for the Reading tab's revision1/revision2
+  cells — out of scope for this feature). `STATUS_FLOW_CHAINS` +
+  `statusFlowChainFor(options)` map each status vocabulary to its
+  intended stage order by **reference equality against the vocabulary
+  consts** (`TASK_STATUS` → `fourStage`, `SP_STATUS`/`AI_STATUS` →
+  `threeStage`, `TOPPER_STATUS` → `binary`) — this is the resolution of
+  the "array order isn't flow order" ambiguity (`TASK_STATUS` itself
+  still lists Completed before Partially Completed; the chain is a
+  separate, authoritative ordering). Confirmed flow (Sarvesh, Sep 13):
+  `Not Started → In Progress → Completed`, with Partially Completed as
+  an **optional** stop between In Progress and Completed — reachable
+  from In Progress, never directly from Not Started. `"Skipped"` is
+  deliberately absent from every chain (decide how it fits in after Sep
+  30) — it's an unconstrained escape hatch, selectable and reachable
+  from anywhere with no ordering or reason requirement.
+  - **Forward moves**: `FlowStatusSelect` filters invalid targets out of
+    the `<select>` entirely (can't select what isn't shown) — no
+    alert/rejection needed since an invalid forward jump was never an
+    option. Options are also re-sorted into chain order for display, so
+    the dropdown doesn't visually contradict the flow the way
+    `TASK_STATUS`'s raw array order would.
+  - **Backward moves** (to any earlier chain stage) are always allowed,
+    but selecting one opens a small anchored reason popover (same visual
+    pattern as `SkipToggle`'s) — nothing commits until Save; Cancel/
+    Escape leaves the record untouched. Confirmed (Sarvesh, Sep 13): no
+    reason needed on forward moves, only backward.
+  - **Per-row log**: reuses the `rec.history` array and the History-icon-
+    plus-expandable-row UI that already existed for every status change
+    (pre-dates this feature) — a reason, when given, is now attached as
+    `entry.reason` and shown inline. No new log infrastructure was
+    needed. Confirmed (Sarvesh, Sep 13): visible now, not deferred.
+  - **Composes with, doesn't replace**, the existing
+    `completionRequiresUpload`/"Partially Completed" row-lock behavior
+    (PRs #68–69) — those checks still run in `updateField`/
+    `updateDraftField` exactly as before; `FlowStatusSelect` only
+    constrains which options even reach that point.
 - **Google Calendar + Tasks sync (Today's Planner)**: `CalendarSyncButton` +
   `addBlocksToGoogleCalendar`/`createCalendarEvent`/`createTask` mirror
   the Drive integration's shape — same `VITE_GOOGLE_CLIENT_ID`/Google
@@ -948,111 +1046,14 @@ explicit, Sarvesh-authorized freeze exception rather than waiting for Oct
 1 — see the Google Drive PDFs bullet in Section 4 for what shipped. This
 is the exception that prompted the stricter policy above._
 
-- **View button next to Download.** Open a row's attached PDF in a new
-  tab (e.g. `https://drive.google.com/file/d/{fileId}/view`) instead of
-  only downloading it. Small, low-risk addition to `DriveFilesCell`,
-  alongside the existing Upload/Replace/Download/Remove buttons.
-- **Enforced status-transition flow with reasons + a per-row log.**
-  Requested flow: `Not Started → In Progress → Partially Completed →
-  Completed`, no skipping stages and no free reverting. Every status
-  change (including "Skipped", allowed from any stage) pops up asking for
-  a reason/summary; reverting from Completed to an earlier stage also
-  requires a reason. All of it gets appended to a log on that row.
-
-  **Design decision (resolved):** each tracker keeps its own existing
-  status vocabulary — no vocabulary unification, no data migration. The
-  flow/reason/log behavior wraps around whatever stages a tracker already
-  has (e.g. `TASK_STATUS`'s 5 states, the 3-state trackers, `TOPPER_STATUS`'s
-  binary pair, `CA_STATUS`'s To Read/Read/Noted) rather than forcing every
-  tracker onto one 4-stage chain.
-
-  **Still open at implementation time:** the linear order within each
-  tracker's own stage list isn't necessarily its array's storage order
-  (e.g. `TASK_STATUS` lists Completed before Partially Completed) — confirm
-  the intended chain per tracker rather than assuming array order is flow
-  order. Also confirm whether "Skipped" should be added as a new option to
-  trackers that don't have it today, or only enforced on the one tracker
-  (`TASK_STATUS`) that already lists it. Day Planner already has its own
-  separate `skipped`/`skipReason` fields outside `status` entirely — worth
-  looking at as prior art for the reason-capture UX. Needs a new per-row
-  log field (doesn't exist anywhere yet), and has to compose with the
-  Completed/Partially-Completed row-lock behavior already shipped
-  (PRs #68–69) rather than conflict with it.
-- **Negative-streak / "days missed" widget, beside the existing streak
-  widget.** A companion card in the same Day Planner area as the current
-  streak widget (`~App.jsx:2931`), showing the flip side: consecutive days
-  with zero tracker activity, using a sad/neutral smiley instead of the
-  `Flame` icon. Resets to 0 the moment a day passes `computeConsistencyStreak`'s
-  `hasActivity` check.
-
-  **Design requirements (Sarvesh, Sep 8):**
-  - Must be *unignorably* visually distinct from the real streak
-    widget — not a palette swap on the same card shape. Needs a
-    structurally different treatment (icon/shape, layout weight, or
-    motion cue).
-  - Wants dynamic color-by-severity in the same spirit as
-    `streakTone`/`STREAK_TONE_COLORS` (which step blue→green→gold as the
-    real streak grows), but with its **own distinct thresholds/palette** —
-    not a literal reuse of the same tone function or CSS vars.
-
-  **Still open at implementation time:** `computeConsistencyStreak` only
-  returns 0 once broken, it doesn't track *how long* it's been 0 — likely
-  needs a new `computeMissedDays`-style function, symmetric to the
-  existing one, counting consecutive `!hasActivity` days backward from
-  today. Exact icon (emoji vs. lucide) and severity thresholds not yet
-  specified.
-- **Weekly Planner, with a "today's tasks" panel beside the streak
-  widget.** Requested Sep 11, 2026; a feature (build Oct 1), *not* a
-  freeze exception — flagged and declined as an in-the-moment exception
-  request despite Sarvesh's insistence, per the Sep 7 tightened policy
-  above. Finalized spec after several rounds of clarification:
-
-  - **Saturday 9 PM**: a task-setting window opens (Weekly Review tab,
-    possibly renamed) where Sarvesh enters the coming week's tasks.
-  - **Sun–Sat**: only that week's tasks surface in a "today's planner"
-    panel positioned to the right of the existing streak widget (same
-    Day Planner area, `~App.jsx:2931`).
-  - **Per-task actions, three of them**: checkbox → mark Completed;
-    unchecking → revert to not-completed; a separate **Skip** button
-    (distinct state from incomplete, not just an unchecked box). Day
-    Planner's existing separate `skipped`/`skipReason` fields (see the
-    status-transition-flow entry above) are useful prior art for this.
-  - **Saturday night, end of week**: any task not Completed or Skipped
-    is auto-logged as **Incomplete** — no manual step needed.
-  - **No archiving or reset of the planner list itself.** Instead, the
-    Weekly Review report gains a new section — Completed / Not
-    Completed / Skipped — for that week, tagged to the week's date
-    range.
-  - **Explicitly independent of streak logic.** Must not read from or
-    write to `computeConsistencyStreak`, `streakTone`, or
-    `STREAK_TONE_COLORS` — no shared state, no effect on the streak or
-    negative-streak widgets.
-
-  **Still open at implementation time:** task data model and storage key
-  (new `kv_store` key vs. extending Weekly Review's existing shape);
-  exactly what "today's planner panel" renders when no task-setting has
-  happened yet for the week; whether/how a task can be edited or removed
-  mid-week after Saturday's setting window closes; final tab name if
-  Weekly Review is renamed.
-- **Single Pager: exclude already-tagged Micro Topics from the tag
-  dropdown.** Requested Sep 12, 2026, reported as a bug; flagged instead
-  as a feature and queued here. The Micro Topic dropdown
-  (`microtopicTagColumn` / `microtopicRowOptionsForSubjects`) is shared
-  verbatim by Classes, NCERT, Standard Books, Single Pager, and GS Answer
-  Writing, and deliberately lists every Micro Topic under the selected
-  Subject(s) regardless of use elsewhere — those other trackers
-  legitimately need to reuse a Micro Topic across multiple rows. Single
-  Pager alone wants to diverge from that shared behavior: once a Micro
-  Topic already has a Single Pager row, hide it from the dropdown when
-  adding a *new* row. No functional bug today — multiple Single Pager
-  rows tagging the same Micro Topic don't break completion tracking
-  (`singlePager` completion is computed with `.some(...Completed)` across
-  all matches); this is a workflow/dedup convenience only.
-
-  **Still open at implementation time:** "already used" should almost
-  certainly scope to Single Pager's own rows, not cross-tracker, since
-  Classes/NCERT/Standard Books still need multi-use of the same Micro
-  Topic. Whether a Micro Topic should still show as an option on the row
-  that's already using it (so that row stays editable) rather than
-  vanishing everywhere — needs the filter to exclude "used on *other*
-  rows" relative to the row being edited, not "used at all."
+_Sep 13, 2026: a second explicit, Sarvesh-authorized exception — this
+time a full day rather than a single item, requested and confirmed as a
+standalone decision (not bundled into an unrelated instruction) after
+Claude flagged the freeze tension per policy. All five items queued in
+this section were pulled forward and shipped that day: the Single Pager
+Micro Topic dedup, the PDF View button, the negative-streak widget, the
+Weekly Planner, and the enforced status-transition flow (the last one
+only after resolving its own open design questions in conversation
+first, rather than guessing across every tracker). See each item's own
+Section 4 entry for what shipped and where — nothing is left queued in
+this backlog as of this PR._
