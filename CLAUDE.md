@@ -1224,4 +1224,11 @@ above._
   Review's existing Logged/Skipped counts should keep keying off
   `journal` alone (actual, not planned) unless Sarvesh asks otherwise
   when this is built; the Daily/Weekly Review UI needs both values shown
-  per block, not just one.
+  per block, not just one. **Confirmed Sep 14, 2026 (per mockup shown to
+  Sarvesh):** once saved via the finalize popup, `planned` renders as a
+  highlighted, read-only line (tinted background, no input/textarea) —
+  not editable afterward, unlike `journal` which stays a normal editable
+  textarea. No unlock/pencil escape hatch requested for this field
+  (contrast with the wake-time lock's pencil unlock in Section 4) — if
+  Sarvesh wants one later, treat that as a separate ask rather than
+  assuming it's needed now.
