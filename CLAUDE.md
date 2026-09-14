@@ -1212,12 +1212,16 @@ above._
   locked, (3) a second popup lists that day's slots (`plan.blocks`) and
   asks for a planned task/intent per slot; submitting that (4) logs the
   entries into that day's journal and onto the Daily/Weekly Review page.
-  **Open design question to resolve before building:** the per-block
-  `journal` field currently records what was *actually* done (Section 4
-  is explicit that Today's Planner is a retrospective journal, not a
-  planning surface), and Weekly Review's Logged/Skipped counts key off
-  that same field. This new flow captures what's *planned*, not what
-  happened — needs a decision on whether that's a new field sitting
-  alongside `journal`, or whether it pre-fills `journal` and gets
-  overwritten later, before writing any code, so "what I meant to do"
-  and "what I actually did" don't collapse into one ambiguous field.
+  **Design question resolved (Sarvesh, Sep 14, 2026):** keep both,
+  side by side, per slot — a new **planned** field ("what I wanted to
+  do," captured via this button's popup at the start of the day) sitting
+  alongside the existing **`journal`** field ("what I've done," still
+  filled in the normal retrospective way). Not a merge or an overwrite —
+  the point is being able to see intent vs. outcome for the same slot at
+  a glance, both in that day's planner view and on Daily/Weekly Review.
+  Implementation notes for Sunday: add the new field (e.g.
+  `plan.blocks[].planned`) rather than repurposing `journal`; Weekly
+  Review's existing Logged/Skipped counts should keep keying off
+  `journal` alone (actual, not planned) unless Sarvesh asks otherwise
+  when this is built; the Daily/Weekly Review UI needs both values shown
+  per block, not just one.
