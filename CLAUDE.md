@@ -1196,3 +1196,28 @@ same-day._
   in the audit itself in favor of the simpler consistency-streak metric
   that shipped instead — revisit once 4–6 weeks of real nightly data
   exists to forecast against, not before.
+
+_Sep 14, 2026: one new item added directly by Sarvesh (not sourced from
+the audit) — queued for the next Sunday window like everything else
+above._
+
+- **"Finalize the Day" button (Today tab).** New request, Sep 14, 2026.
+  Intended flow: (1) a new button on the Today tab opens a confirmation
+  popup along the lines of "I've planned what to do today and consent to
+  complete as much of it as possible"; confirming it (2) locks that day's
+  wake time — reuses the existing `plan.wakeTimeLocked` mechanism, but
+  needs reconciling with the current auto-lock-on-first-edit behavior
+  (see `changeWakeTime` note in Section 4) so an explicit button-driven
+  lock and the implicit edit-driven lock don't fight each other; once
+  locked, (3) a second popup lists that day's slots (`plan.blocks`) and
+  asks for a planned task/intent per slot; submitting that (4) logs the
+  entries into that day's journal and onto the Daily/Weekly Review page.
+  **Open design question to resolve before building:** the per-block
+  `journal` field currently records what was *actually* done (Section 4
+  is explicit that Today's Planner is a retrospective journal, not a
+  planning surface), and Weekly Review's Logged/Skipped counts key off
+  that same field. This new flow captures what's *planned*, not what
+  happened — needs a decision on whether that's a new field sitting
+  alongside `journal`, or whether it pre-fills `journal` and gets
+  overwritten later, before writing any code, so "what I meant to do"
+  and "what I actually did" don't collapse into one ambiguous field.
