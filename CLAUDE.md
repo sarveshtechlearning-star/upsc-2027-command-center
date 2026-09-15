@@ -1196,3 +1196,39 @@ same-day._
   in the audit itself in favor of the simpler consistency-streak metric
   that shipped instead — revisit once 4–6 weeks of real nightly data
   exists to forecast against, not before.
+
+_Sep 14, 2026: one new item added directly by Sarvesh (not sourced from
+the audit) — queued for the next Sunday window like everything else
+above._
+
+- **"Finalize the Day" button (Today tab).** New request, Sep 14, 2026.
+  Intended flow: (1) a new button on the Today tab opens a confirmation
+  popup along the lines of "I've planned what to do today and consent to
+  complete as much of it as possible"; confirming it (2) locks that day's
+  wake time — reuses the existing `plan.wakeTimeLocked` mechanism, but
+  needs reconciling with the current auto-lock-on-first-edit behavior
+  (see `changeWakeTime` note in Section 4) so an explicit button-driven
+  lock and the implicit edit-driven lock don't fight each other; once
+  locked, (3) a second popup lists that day's slots (`plan.blocks`) and
+  asks for a planned task/intent per slot; submitting that (4) logs the
+  entries into that day's journal and onto the Daily/Weekly Review page.
+  **Design question resolved (Sarvesh, Sep 14, 2026):** keep both,
+  side by side, per slot — a new **planned** field ("what I wanted to
+  do," captured via this button's popup at the start of the day) sitting
+  alongside the existing **`journal`** field ("what I've done," still
+  filled in the normal retrospective way). Not a merge or an overwrite —
+  the point is being able to see intent vs. outcome for the same slot at
+  a glance, both in that day's planner view and on Daily/Weekly Review.
+  Implementation notes for Sunday: add the new field (e.g.
+  `plan.blocks[].planned`) rather than repurposing `journal`; Weekly
+  Review's existing Logged/Skipped counts should keep keying off
+  `journal` alone (actual, not planned) unless Sarvesh asks otherwise
+  when this is built; the Daily/Weekly Review UI needs both values shown
+  per block, not just one. **Confirmed Sep 14, 2026 (per mockup shown to
+  Sarvesh):** once saved via the finalize popup, `planned` renders as a
+  highlighted, read-only line (tinted background, no input/textarea) —
+  not editable afterward, unlike `journal` which stays a normal editable
+  textarea. No unlock/pencil escape hatch requested for this field
+  (contrast with the wake-time lock's pencil unlock in Section 4) — if
+  Sarvesh wants one later, treat that as a separate ask rather than
+  assuming it's needed now.
