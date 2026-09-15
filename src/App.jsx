@@ -403,7 +403,7 @@ function buildBaseBlocks(dayType, settings) {
   const isSlotEnabled = id => slotsEnabled[id] !== false;
   let blocks = CORE_SLOT_TEMPLATE
     .filter(b => (b.type === "break" ? isSlotEnabled(b.pairFor) : isSlotEnabled(b.id)))
-    .map(b => ({ ...b, duration: (byId[b.id] || b).duration }));
+    .map(b => ({ ...b, label: (byId[b.id] || b).label, duration: (byId[b.id] || b).duration }));
   if (dayType === "WFO") {
     const travel = Math.round((settings.travelHoursEachWay ?? 1) * 60);
     const office = Math.round((settings.officeHoursFixed ?? 6) * 60);
@@ -416,7 +416,7 @@ function buildBaseBlocks(dayType, settings) {
   }
   if (isSlotEnabled("ai")) {
     const aiDefault = byId.ai || AI_BLOCK;
-    blocks.push({ ...AI_BLOCK, duration: aiDefault.duration });
+    blocks.push({ ...AI_BLOCK, label: aiDefault.label, duration: aiDefault.duration });
   }
   return blocks;
 }
@@ -5604,7 +5604,13 @@ function SettingsTab({ db, updateSlice }) {
                   <input type="checkbox" checked={enabled}
                     onChange={e => patch({ slotsEnabled: { ...(s.slotsEnabled || {}), [b.id]: e.target.checked } })} />
                 </td>
-                <td>{b.label}</td>
+                <td>
+                  <input type="text" className="ucc-input" style={{ minWidth: 180 }} value={b.label}
+                    onChange={e => {
+                      const label = e.target.value;
+                      patch({ slotTemplate: s.slotTemplate.map((x, xi) => xi === i ? { ...x, label } : x) });
+                    }} />
+                </td>
                 <td><Badge tone="neutral">{b.type}</Badge></td>
                 <td>
                   <input type="number" className="ucc-input ucc-mono" style={{ width: 80 }} value={b.duration} disabled={!enabled}
