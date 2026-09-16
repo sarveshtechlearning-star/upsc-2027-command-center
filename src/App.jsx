@@ -403,7 +403,7 @@ function buildBaseBlocks(dayType, settings) {
   const isSlotEnabled = id => slotsEnabled[id] !== false;
   let blocks = CORE_SLOT_TEMPLATE
     .filter(b => (b.type === "break" ? isSlotEnabled(b.pairFor) : isSlotEnabled(b.id)))
-    .map(b => ({ ...b, duration: (byId[b.id] || b).duration }));
+    .map(b => ({ ...b, label: (byId[b.id] || b).label, duration: (byId[b.id] || b).duration }));
   if (dayType === "WFO") {
     const travel = Math.round((settings.travelHoursEachWay ?? 1) * 60);
     const office = Math.round((settings.officeHoursFixed ?? 6) * 60);
@@ -416,7 +416,7 @@ function buildBaseBlocks(dayType, settings) {
   }
   if (isSlotEnabled("ai")) {
     const aiDefault = byId.ai || AI_BLOCK;
-    blocks.push({ ...AI_BLOCK, duration: aiDefault.duration });
+    blocks.push({ ...AI_BLOCK, label: aiDefault.label, duration: aiDefault.duration });
   }
   return blocks;
 }
@@ -505,6 +505,7 @@ function defaultDB() {
       subjects: DEFAULT_SUBJECTS,
       totalClassesBySubject: {}, // { [subject]: totalClasses } — optional, set on Settings to unlock the Dashboard's per-subject completion %
       slotsEnabled: {}, // { [slotId]: false } — sections turned off entirely skip the daily plan; unset/true means included
+      slotsDeleted: {}, // { [slotId]: true } — hides the row from this Settings table (and, for a study slot, its paired break too); implies slotsEnabled=false. Purely a Settings/template-level flag — never touches already-saved dailyPlans, so past Daily/Weekly Review entries are unaffected either way.
       slotTemplate: [...CORE_SLOT_TEMPLATE, AI_BLOCK],
       driveFolderId: null, // cached id of the Google Drive folder used for Single Pager PDFs
     },
@@ -5594,30 +5595,72 @@ function SettingsTab({ db, updateSlice }) {
       <h3>Default daily slot template</h3>
       <p className="ucc-tiny">Study slots, breaks, and AI learning — their default duration before any day-fit trimming happens, and whether they're generated at all. Office and commute time come from the fixed hours above instead. Changes here set the default for new days — days you've already opened keep their own snapshot until you change wake time or day type.</p>
       <table className="ucc-table">
-        <thead><tr><th>Enabled</th><th>Slot</th><th>Type</th><th>Default duration (min)</th></tr></thead>
+        <thead><tr><th>Enabled</th><th>Slot</th><th>Type</th><th>Default duration (min)</th><th></th></tr></thead>
         <tbody>
-          {s.slotTemplate.map((b, i) => {
+          {s.slotTemplate.filter(b => {
+            const deleted = s.slotsDeleted || {};
+            return !deleted[b.id] && !(b.type === "break" && deleted[b.pairFor]);
+          }).map(b => {
             const enabled = (s.slotsEnabled || {})[b.id] !== false;
+            const idx = s.slotTemplate.findIndex(x => x.id === b.id);
+            // Breaks are auto-managed alongside their parent study slot (see
+            // b.pairFor / buildBaseBlocks) so they get no delete control of
+            // their own — deleting the parent below hides both together.
+            const pairedBreak = b.type !== "break" ? s.slotTemplate.find(x => x.type === "break" && x.pairFor === b.id) : null;
             return (
               <tr key={b.id} style={{ opacity: enabled ? 1 : 0.55 }}>
                 <td>
                   <input type="checkbox" checked={enabled}
                     onChange={e => patch({ slotsEnabled: { ...(s.slotsEnabled || {}), [b.id]: e.target.checked } })} />
                 </td>
-                <td>{b.label}</td>
+                <td>
+                  <input type="text" className="ucc-input" style={{ minWidth: 180 }} value={b.label}
+                    onChange={e => {
+                      const label = e.target.value;
+                      patch({ slotTemplate: s.slotTemplate.map((x, xi) => xi === idx ? { ...x, label } : x) });
+                    }} />
+                </td>
                 <td><Badge tone="neutral">{b.type}</Badge></td>
                 <td>
                   <input type="number" className="ucc-input ucc-mono" style={{ width: 80 }} value={b.duration} disabled={!enabled}
                     onChange={e => {
                       const dur = Number(e.target.value);
-                      patch({ slotTemplate: s.slotTemplate.map((x, xi) => xi === i ? { ...x, duration: dur } : x) });
+                      patch({ slotTemplate: s.slotTemplate.map((x, xi) => xi === idx ? { ...x, duration: dur } : x) });
                     }} />
+                </td>
+                <td>
+                  {b.type !== "break" && (
+                    <IconBtn icon={Trash2} danger title="Delete slot"
+                      onClick={() => {
+                        if (!window.confirm(`Delete "${b.label}"? It stops appearing in future daily plans and in this list. Nothing already logged in Daily/Weekly Review changes — restore it anytime from "Deleted slots" below.`)) return;
+                        const ids = pairedBreak ? [b.id, pairedBreak.id] : [b.id];
+                        patch({
+                          slotsEnabled: { ...(s.slotsEnabled || {}), ...Object.fromEntries(ids.map(id => [id, false])) },
+                          slotsDeleted: { ...(s.slotsDeleted || {}), ...Object.fromEntries(ids.map(id => [id, true])) },
+                        });
+                      }} />
+                  )}
                 </td>
               </tr>
             );
           })}
         </tbody>
       </table>
+      {s.slotTemplate.some(b => b.type !== "break" && (s.slotsDeleted || {})[b.id]) && (
+        <p className="ucc-tiny" style={{ marginTop: 6 }}>
+          <strong>Deleted slots:</strong>{" "}
+          {s.slotTemplate.filter(b => b.type !== "break" && (s.slotsDeleted || {})[b.id]).map(b => (
+            <span key={b.id} style={{ marginRight: 14 }}>
+              {b.label}{" "}
+              <button className="ucc-btn ghost" style={{ padding: "1px 6px" }} onClick={() => {
+                const pairedBreak = s.slotTemplate.find(x => x.type === "break" && x.pairFor === b.id);
+                const ids = pairedBreak ? [b.id, pairedBreak.id] : [b.id];
+                patch({ slotsDeleted: { ...(s.slotsDeleted || {}), ...Object.fromEntries(ids.map(id => [id, false])) } });
+              }}>Restore</button>
+            </span>
+          ))}
+        </p>
+      )}
       <div className="ucc-hr" />
       <h3>Subjects</h3>
       <p className="ucc-tiny">Total Classes is optional — set it once per subject to see that subject's class-completion % on the Dashboard.</p>
