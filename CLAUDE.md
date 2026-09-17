@@ -289,35 +289,69 @@ summary will do.
   — a read-only popover over the record's existing `history` array (already
   populated by `type: "status"` column edits). It's a pure UI addition, not
   a new data source; don't wire up separate audit logging.
-- **Today's Planner is an hourly journal, not a status tracker or an
-  editing surface.** Each plan block (`PlanBlock`/`OfficePlanBlock`) shows
-  its time range, duration, and label, plus a free-text `journal` field
+- **Today's Planner has no auto-generated slots — it's a plain, user-built
+  task list, gated by a two-step confirm/finalize flow** (replaced the old
+  `CORE_SLOT_TEMPLATE`/`buildBaseBlocks`/`applyTrimRules` auto-population-
+  and-drop system entirely — Sep 17, 2026, Sarvesh-authorized freeze
+  exception, see Section 19 history). Each plan block (`PlanBlock`) shows
+  an editable time, editable duration, and a free-text `journal` field
   ("what did you actually do in this slot") — that's it. There is no
-  per-block status control anymore (`TaskStatusButtons`,
-  `GATED_LINK_TABS`, the completion-detecting `useEffect`, and
-  `LinkedTaskInfo` were all removed as a unit — don't reintroduce a
-  status vocabulary or a "click Completed to navigate" flow here; that
-  whole approach was tried and explicitly replaced by the journal). The
-  earlier embedded add/edit widgets (`ClassLectureWidget`,
-  `TodayListWidget`, `QuickPickWidget`, `InlineAddForm`) are also gone —
-  actual tracker data entry (topics, PDFs, marks, etc.) always happens on
-  that tracker's own tab; the planner is only for the quick per-hour note.
+  per-block status control (`TaskStatusButtons`, `GATED_LINK_TABS`, the
+  completion-detecting `useEffect`, and `LinkedTaskInfo` were all removed
+  as a unit, well before this change — don't reintroduce a status
+  vocabulary or a "click Completed to navigate" flow here). Actual tracker
+  data entry (topics, PDFs, marks, etc.) always happens on that tracker's
+  own tab; the planner is only for the quick per-hour note. The earlier
+  embedded add/edit widgets (`ClassLectureWidget`, `TodayListWidget`,
+  `QuickPickWidget`, `InlineAddForm`) are gone for this same reason — don't
+  reintroduce them.
   `block.status`/`completedAt` still exist on already-stored plans for
   backward compatibility but are not read or written anywhere new — don't
   build features on them. Weekly Review's stats and per-day breakdown
   (`WeeklyReviewTab`) are journal-based to match: "Logged" counts blocks
   with non-empty `journal` text, "Skipped" counts `block.skipped`, and the
-  per-day list shows each block's real start/end (via `computePlanTimes`,
-  since the stored plan only has `duration`) alongside its journal text.
-- **Wake time locks after its first edit each day** (`plan.wakeTimeLocked`,
-  set `false` by `initDayPlan`, flipped to `true` inside `changeWakeTime`
-  — not inside the shared `regeneratePlan`, since that's also called by
-  `changeDayType` and a day-type change must not lock wake time). Once
-  locked the `<input type="time">` is `disabled`; the only way back in is
-  the Pencil `IconBtn` next to it (`unlockWakeTime`, sets it back to
-  `false`) — same deliberate-escape-hatch shape as `GenericTracker`'s
-  Completed-row lock. Don't move the lock-setting into `regeneratePlan`
-  itself or a day-type change will start locking wake time too.
+  per-day list shows each block's real start/end via `computePlanTimes`.
+- **The confirm/finalize flow itself**: `initDayPlan` returns `blocks: []`
+  plus `dayConfirmed: false, finalized: false` — nothing is auto-populated
+  going forward. (1) Enter wake time + day type, click Confirm
+  (`confirmDay`, sets `dayConfirmed: true`) — locks both inputs; the
+  Pencil `IconBtn` (`unlockDay`) is the only way back in, same
+  deliberate-escape-hatch shape as `GenericTracker`'s Completed-row lock.
+  (2) Once confirmed, "Available today" shows `settings.sleepTime −
+  wakeTime` (`fmtHM`), raw — deliberately NOT subtracting office/commute
+  (Sarvesh's explicit call when this was built); treat fixed-commitment-
+  aware availability as a separate future ask, not something to add back
+  in silently. (3) "Add tasks" opens a small panel: pick from this week's
+  `db.weeklyPlanner` tasks not already pulled in (deduped via
+  `fromWeeklyTaskId`) or type a new one (`addTaskFromWeekly`/
+  `addNewTask`) — both default a new task's `time` to right after the
+  previous task's end (`nextTaskDefaultTime`, via `computePlanTimes`) and
+  `duration: 30`, both freely editable afterward. (4) "Finalize today"
+  (`finalizeDay`, sets `finalized: true`) hides "Add tasks" — no more
+  tasks can be added — but every task's own time/duration inputs stay
+  editable (`PlanBlock` never checks `finalized`; only the "Add tasks"
+  control in `TodayTab` does). Removing a task stays available even after
+  finalize — only *adding* was asked to be locked; don't extend the lock
+  to removal or to journal/skip editing without a separate ask.
+- **Each block now carries its own explicit `time` (HH:MM), not just a
+  `duration`** — tasks no longer have to be contiguous or run in a fixed
+  cascade. `computePlanTimes` uses `block.time` when present; for blocks
+  saved before this change (no `.time`) it falls back to the old
+  cascading-cursor calculation off `plan.wakeTime`, so historical Daily/
+  Weekly Review data renders exactly as it used to, with no migration.
+- **Backward compatibility for plans saved before Sep 17, 2026**: a stored
+  plan with no `dayConfirmed`/`finalized` field is treated as
+  `dayConfirmed: true, finalized: false` (`TodayTab`'s `??` fallback) — old
+  days skip the confirm gate and keep "Add tasks" available, exactly like
+  before this change; only plans `initDayPlan` creates going forward get
+  the new gated flow. The old auto-injected Office/commute group and its
+  merged card (`OfficePlanBlock`) are gone — historical WFH/WFO days with
+  `office`/`travelTo`/`travelFro` blocks now render as plain individual
+  tasks instead of one merged card. Data is untouched; this is a
+  display-only change for old days. `CalendarSyncButton` is still handed
+  `timedBlocks.filter(b => b.type !== "break")` for this same
+  backward-compatibility reason, even though no block created going
+  forward is ever type `"break"`.
 - **`LiveClock`** (top bar, next to today's date) is a self-contained
   ticking clock — its own `setInterval`/`useState`, cleaned up on
   unmount — not wired to any tracker data. If another live-updating time
@@ -332,20 +366,7 @@ summary will do.
   1s tick). Pill color escalates navy → amber → red (with a CSS pulse) as
   the date gets closer (`>100` / `31–100` / `≤30` days out), purely via
   the `days` value — no separate settings/config for the thresholds.
-- **"Add existing task" brings back a slot `applyTrimRules` dropped** —
-  computed fresh each render as `buildBaseBlocks(dayType, settings)` minus
-  whatever's already in `plan.blocks` (by id), not stored anywhere or
-  derived from `droppedLabels` (that array is label-only, for the
-  "Adjusted for today" note — no full block data to reconstruct from).
-  Only ever contains `REMOVAL_ORDER` slots (study/AI) for this reason:
-  Office/commute are never in `REMOVAL_ORDER` so they're never "missing"
-  this way, and a slot disabled entirely via Settings never reaches
-  `buildBaseBlocks`'s output at all, so it never shows up here either —
-  this is specifically for slots that exist today but got trimmed for
-  not fitting. Re-added blocks get `restored: true` so they're removable
-  again via the same control as a custom task (`b.custom || b.restored`),
-  unlike a normal auto-generated block.
-  There is no separate end-of-day review anymore (`db.dailyReviews` stays
+- **There is no separate end-of-day review** (`db.dailyReviews` stays
   defined in the data model/reset flow for old stored data, but nothing
   reads or writes it) — skip reasons live per-block instead: checking a
   block's Skip box opens a small popover (`SkipToggle`) listing
@@ -847,15 +868,17 @@ summary will do.
   — removed by request, including from `SYLLABUS_SEED`, the Syllabus
   import template, and Topic Master's display. Don't reintroduce it as
   part of some other change without checking this was intentional.
-- **Daily plan sections can be turned off entirely**, not just
-  auto-trimmed when a day is short on time. `settings.slotsEnabled` is a
-  `{ [slotId]: false }` map (unset/true = included), edited via a checkbox
-  per row in the same Settings table that sets each slot's default
-  duration. `buildBaseBlocks` filters both the slot and its paired break
-  out before the day-type/trim logic ever sees them — this is a separate,
-  earlier gate than `REMOVAL_ORDER`/`applyTrimRules`, not a replacement
-  for it. A disabled slot never appears in newly-generated plans; it does
-  not touch days already created.
+- **The Settings "Default daily slot template" editor and the Fixed
+  office/travel hours inputs are gone** (Sep 17, 2026) — they only ever
+  configured `buildBaseBlocks`/`applyTrimRules`, which no longer exist
+  (see the Today's Planner confirm/finalize bullets above). `settings.
+  officeHoursFixed`/`travelHoursEachWay` remain in `defaultDB()` purely as
+  harmless unused leftover values — not worth a schema migration to strip.
+  `slotsEnabled`/`slotsDeleted`/`slotTemplate` were removed from
+  `defaultDB()` and `normalizeSettings` entirely since they referenced the
+  now-deleted `CORE_SLOT_TEMPLATE`/`AI_BLOCK` constants; any already-saved
+  Supabase settings blob that still has these keys keeps them harmlessly
+  in storage, nothing reads them anymore.
 - **Column-level filtering lives once, in `GenericTracker`** — every
   tracker and Syllabus gets it automatically since they all render through
   it; don't add a separate per-tab filter implementation. It introspects
@@ -1167,6 +1190,17 @@ Section 4 entry for what shipped and where — nothing is left queued in
 this backlog as of this PR. This is the second exception referenced in
 the standing-rule note above._
 
+_Sep 17, 2026: a third explicit, Sarvesh-authorized exception — Claude
+flagged the freeze tension (a Thursday, non-Sunday feature request) and
+also flagged that it cut short the Sep 13 decision to hold the 8-block
+template unchanged through Sep 30 as a diagnostic; Sarvesh confirmed
+building it now anyway. Squashed the entire auto-generated/auto-trimmed
+daily-plan template (`CORE_SLOT_TEMPLATE`/`buildBaseBlocks`/
+`applyTrimRules`) and replaced it with a confirm-then-add-tasks-then-
+finalize flow — see the Today's Planner bullets in Section 4 for the full
+design. This supersedes the "Finalize the Day" button spec below rather
+than building it as originally specified; see that entry.
+
 _Sep 13, 2026: the four items below were surfaced from the Sep 3–6
 audit (`claude/app-audit-2026-09-03.md`) — they'd been discussed and,
 in one case, explicitly called "queued," but never actually made it
@@ -1201,7 +1235,16 @@ _Sep 14, 2026: one new item added directly by Sarvesh (not sourced from
 the audit) — queued for the next Sunday window like everything else
 above._
 
-- **"Finalize the Day" button (Today tab).** New request, Sep 14, 2026.
+- **"Finalize the Day" button (Today tab). SUPERSEDED Sep 17, 2026 — not
+  built as specified below.** Sarvesh's underlying need (a confirm step at
+  the start of the day, a lock against further changes) was instead met by
+  squashing the whole auto-generated template and replacing it with the
+  confirm/finalize task-list flow described in Section 4 — see the Sep 17
+  entry above. That flow has no `planned`-vs-`journal` distinction (there
+  is no pre-populated template to plan against anymore — the task list
+  itself, added via "Add tasks," is the plan), so the design below was not
+  carried over. Kept here as history only; do not build this as written.
+  Original spec, new request Sep 14, 2026:
   Intended flow: (1) a new button on the Today tab opens a confirmation
   popup along the lines of "I've planned what to do today and consent to
   complete as much of it as possible"; confirming it (2) locks that day's

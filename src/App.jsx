@@ -238,7 +238,7 @@ const CSS = `
     table.ucc-table{display:block; overflow-x:auto; white-space:nowrap;}
   }
   /* Task status toggle buttons — filled with the status's own color when
-     selected, so it's obvious a click registered (see PlanBlock / OfficePlanBlock). */
+     selected, so it's obvious a click registered (see PlanBlock). */
   .ucc-status-btn{padding:4px 10px; border-radius:6px; font-size:12px;}
   .ucc-status-btn.inactive{background:#fff; color:var(--ink-muted); border-color:var(--line-strong);}
   .ucc-status-btn.neutral{background:var(--grey-soft); color:var(--ink-muted); border-color:var(--grey);}
@@ -357,31 +357,6 @@ function defaultGsPaperForSubject(db, subject) {
   return SUBJECT_TO_GS_PAPER[subject] || "";
 }
 
-// Core study slots + their paired breaks. "removable" + "priority" govern the
-// auto-trim cascade when the day doesn't have enough hours (see applyTrimRules).
-// Lower priority number = removed first. Office/Class Lecture/GS Reading are
-// never auto-removed — they're real-world fixed commitments.
-const CORE_SLOT_TEMPLATE = [
-  { id: "s1", label: "Previous Day's Class Notes & References", type: "study", link: "prevClass", duration: 60, removable: true },
-  { id: "b1", label: "Break", type: "break", duration: 15, pairFor: "s1" },
-  { id: "s2", label: "Class Lecture", type: "study", link: "classLecture", duration: 150, removable: false },
-  { id: "b2", label: "Break", type: "break", duration: 15, pairFor: "s2" },
-  { id: "s3", label: "Tamil Literature Reading", type: "study", link: "tamilReading", duration: 60, removable: true },
-  { id: "b3", label: "Break", type: "break", duration: 15, pairFor: "s3" },
-  { id: "s4", label: "Current Affairs Reading", type: "study", link: "currentAffairs", duration: 60, removable: true },
-  { id: "b4", label: "Break", type: "break", duration: 15, pairFor: "s4" },
-  { id: "s5", label: "Tamil Literature Answer Writing", type: "study", link: "tamilWriting", duration: 60, removable: true },
-  { id: "b5", label: "Break", type: "break", duration: 15, pairFor: "s5" },
-  { id: "s6", label: "GS Notes & Reference Reading", type: "study", link: "gsReading", duration: 60, removable: false },
-  { id: "b6", label: "Break", type: "break", duration: 15, pairFor: "s6" },
-  { id: "s7", label: "GS Answer Writing", type: "study", link: "gsWriting", duration: 60, removable: true },
-];
-const AI_BLOCK = { id: "ai", label: "AI Learning", type: "ai", link: "aiLearning", duration: 60, removable: true };
-
-// Rule (a) shrinks every break to 5 min first. Rules (b)-(g) then drop whole
-// slots in this exact order, stopping as soon as the day fits.
-const REMOVAL_ORDER = ["ai", "s4", "s1", "s7", "s5", "s3"];
-const BREAK_PAIR = { s1: "b1", s3: "b3", s4: "b4", s5: "b5" };
 const DAY_TYPES = ["WFH", "WFO", "Weekend"];
 
 // Default Day Type per weekday, mirroring the real weekly WFH/WFO/Weekend
@@ -395,66 +370,6 @@ function defaultDayType(dateISO) {
   const [y, m, d] = dateISO.split("-").map(Number);
   return DEFAULT_DAY_TYPE_BY_WEEKDAY[new Date(y, m - 1, d).getDay()];
 }
-
-// Builds the full candidate block list for a given day type, before any trimming.
-function buildBaseBlocks(dayType, settings) {
-  const byId = Object.fromEntries((settings.slotTemplate || CORE_SLOT_TEMPLATE).map(b => [b.id, b]));
-  const slotsEnabled = settings.slotsEnabled || {};
-  const isSlotEnabled = id => slotsEnabled[id] !== false;
-  let blocks = CORE_SLOT_TEMPLATE
-    .filter(b => (b.type === "break" ? isSlotEnabled(b.pairFor) : isSlotEnabled(b.id)))
-    .map(b => ({ ...b, label: (byId[b.id] || b).label, duration: (byId[b.id] || b).duration }));
-  if (dayType === "WFO") {
-    const travel = Math.round((settings.travelHoursEachWay ?? 1) * 60);
-    const office = Math.round((settings.officeHoursFixed ?? 6) * 60);
-    blocks.push({ id: "travelTo", label: "Office Commute (To)", type: "travel", link: "office", duration: travel, removable: false });
-    blocks.push({ id: "office", label: "Office Work", type: "office", link: "office", duration: office, removable: false });
-    blocks.push({ id: "travelFro", label: "Office Commute (Fro)", type: "travel", link: "office", duration: travel, removable: false });
-  } else if (dayType === "WFH") {
-    const office = Math.round((settings.officeHoursFixed ?? 6) * 60);
-    blocks.push({ id: "office", label: "Office Work", type: "office", link: "office", duration: office, removable: false });
-  }
-  if (isSlotEnabled("ai")) {
-    const aiDefault = byId.ai || AI_BLOCK;
-    blocks.push({ ...AI_BLOCK, label: aiDefault.label, duration: aiDefault.duration });
-  }
-  return blocks;
-}
-
-// Applies rules (a)-(g) in three phases, stopping as soon as the plan fits:
-//   1. Shrink breaks to 10 min (the break right after Class Lecture stays 15 always)
-//   2. Drop whole optional slots, one at a time, in priority order
-//   3. Last resort: shrink the remaining breaks further, to 5 min
-// Returns the surviving blocks plus a plain-language summary of what changed.
-function applyTrimRules(blocks, availableMinutes) {
-  let working = blocks.map(b => ({ ...b }));
-  const totalNeeded = () => working.reduce((sum, b) => sum + b.duration, 0);
-  let breakNote = null;
-  const droppedLabels = [];
-  const shrinkBreaksTo = (mins) => {
-    working = working.map(b => (b.type === "break" && b.id !== "b2" && b.duration > mins) ? { ...b, duration: mins } : b);
-  };
-
-  if (totalNeeded() <= availableMinutes) return { blocks: working, breakNote, droppedLabels };
-
-  shrinkBreaksTo(10);
-  breakNote = "Shortened breaks to 10 minutes";
-  if (totalNeeded() <= availableMinutes) return { blocks: working, breakNote, droppedLabels };
-
-  for (const id of REMOVAL_ORDER) {
-    const idx = working.findIndex(b => b.id === id);
-    if (idx === -1) continue;
-    droppedLabels.push(working[idx].label);
-    const pairId = BREAK_PAIR[id];
-    working = working.filter(b => b.id !== id && b.id !== pairId);
-    if (totalNeeded() <= availableMinutes) return { blocks: working, breakNote, droppedLabels };
-  }
-
-  shrinkBreaksTo(5);
-  breakNote = "Shortened breaks to 5 minutes";
-  return { blocks: working, breakNote, droppedLabels };
-}
-
 
 // Detailed subtopics intentionally left for the user to add / import from the real syllabus PDF.
 // "gsPaper" captures the exam structure; "subject" is left blank
@@ -504,9 +419,6 @@ function defaultDB() {
       travelHoursEachWay: 1,
       subjects: DEFAULT_SUBJECTS,
       totalClassesBySubject: {}, // { [subject]: totalClasses } — optional, set on Settings to unlock the Dashboard's per-subject completion %
-      slotsEnabled: {}, // { [slotId]: false } — sections turned off entirely skip the daily plan; unset/true means included
-      slotsDeleted: {}, // { [slotId]: true } — hides the row from this Settings table (and, for a study slot, its paired break too); implies slotsEnabled=false. Purely a Settings/template-level flag — never touches already-saved dailyPlans, so past Daily/Weekly Review entries are unaffected either way.
-      slotTemplate: [...CORE_SLOT_TEMPLATE, AI_BLOCK],
       driveFolderId: null, // cached id of the Google Drive folder used for Single Pager PDFs
     },
     syllabus: SYLLABUS_SEED.map(s => ({ id: uid(), ...s, subtopic: "", microtopic: "", history: [] })),
@@ -563,6 +475,11 @@ function minutesToTime(mins) {
   const h = Math.floor(m / 60), mm = m % 60;
   const hh = String(h).padStart(2, "0"), mmS = String(mm).padStart(2, "0");
   return (overflowDays > 0 ? "+1d " : "") + `${hh}:${mmS}`;
+}
+function fmtHM(mins) {
+  const m = Math.max(0, Math.round(mins));
+  const h = Math.floor(m / 60), mm = m % 60;
+  return mm > 0 ? `${h}h ${mm}m` : `${h}h`;
 }
 function normKey(...parts) { return parts.map(p => String(p || "").trim().toLowerCase()).join("|"); }
 // Escapes user-typed text (journal entries, reflections) before it goes into
@@ -1511,9 +1428,6 @@ function normalizeSettings(s) {
   const defaults = defaultDB().settings;
   if (!s) return defaults;
   const merged = { ...defaults, ...s };
-  if (merged.officeHoursFixed == null) merged.officeHoursFixed = s.officeDurationDefault ?? defaults.officeHoursFixed;
-  if (merged.travelHoursEachWay == null) merged.travelHoursEachWay = defaults.travelHoursEachWay;
-  if (!Array.isArray(merged.slotTemplate) || !merged.slotTemplate.some(b => b.id === "s1")) merged.slotTemplate = defaults.slotTemplate;
   return merged;
 }
 
@@ -2683,49 +2597,36 @@ function DayArc({ blocks, wakeMinutes, sleepMinutes }) {
 /* ============================================================
    PLANNER LOGIC
    ============================================================ */
+// No auto-generated slots: a fresh day plan starts with an empty task list.
+// `dayConfirmed` gates wake time/day type editing (set once, via the Confirm
+// button); `finalized` gates adding further tasks (set once, via Finalize
+// Today) but never gates editing a task's own time/duration.
 function initDayPlan(dateISO, settings, dayType) {
-  const wakeTime = settings.wakeTimeDefault;
-  const dt = dayType || defaultDayType(dateISO);
-  const available = parseTimeToMinutes(settings.sleepTime) - parseTimeToMinutes(wakeTime);
-  const base = buildBaseBlocks(dt, settings);
-  const { blocks, breakNote, droppedLabels } = applyTrimRules(base, available);
   return {
     date: dateISO,
-    wakeTime,
-    wakeTimeLocked: false,
-    dayType: dt,
-    breakNote,
-    droppedLabels,
-    blocks: blocks.map(b => ({ ...b, status: "Not Started", skipped: false, skipReason: "", completedAt: null, journal: "" })),
+    wakeTime: settings.wakeTimeDefault,
+    dayType: dayType || defaultDayType(dateISO),
+    dayConfirmed: false,
+    finalized: false,
+    blocks: [],
   };
 }
 
-// Re-runs the day-type/wake-time -> composition logic (used whenever either
-// input changes), while preserving progress on any block that survives and
-// keeping any custom tasks the user added by hand.
-function regeneratePlan(prevPlan, wakeTime, dayType, settings) {
-  const available = parseTimeToMinutes(settings.sleepTime) - parseTimeToMinutes(wakeTime);
-  const base = buildBaseBlocks(dayType, settings);
-  const { blocks, breakNote, droppedLabels } = applyTrimRules(base, available);
-  const prevById = new Map((prevPlan.blocks || []).map(b => [b.id, b]));
-  const merged = blocks.map(b => {
-    const prev = prevById.get(b.id);
-    return prev
-      ? { ...b, status: prev.status, completedAt: prev.completedAt, skipped: false, skipReason: "", journal: prev.journal || "", googleSync: prev.googleSync }
-      : { ...b, status: "Not Started", completedAt: null, skipped: false, skipReason: "", journal: "" };
-  });
-  const customBlocks = (prevPlan.blocks || []).filter(b => b.custom);
-  return { ...prevPlan, wakeTime, dayType, breakNote, droppedLabels, blocks: [...merged, ...customBlocks] };
-}
-
+// Each block carries its own explicit `time` (HH:MM), set when the task is
+// added (defaulting to right after the previous task) and freely editable
+// afterward — tasks no longer have to be contiguous. Plans saved before this
+// change have no `.time` on their blocks; for those we fall back to the old
+// cascading-cursor calculation so historical Daily/Weekly Review data still
+// renders exactly as it used to.
 function computePlanTimes(plan) {
   const wakeMinutes = parseTimeToMinutes(plan.wakeTime);
   let cursor = wakeMinutes;
-  const timed = plan.blocks.map(b => {
-    const start = cursor;
+  const timed = (plan.blocks || []).map(b => {
+    const start = b.time != null ? parseTimeToMinutes(b.time) : cursor;
     const dur = b.skipped ? 0 : Number(b.duration || 0);
-    cursor += dur;
-    return { ...b, start, end: cursor };
+    const end = start + dur;
+    cursor = end;
+    return { ...b, start, end };
   });
   return { wakeMinutes, endMinutes: cursor, blocks: timed };
 }
@@ -2913,6 +2814,8 @@ function computePendingTasks(db) {
    ============================================================ */
 function TodayTab({ db, updateSlice, onNavigate }) {
   const [dateISO, setDateISO] = useState(todayISO());
+  const [addOpen, setAddOpen] = useState(false);
+  const [newTaskText, setNewTaskText] = useState("");
   const settings = db.settings;
   const plan = db.dailyPlans[dateISO] || initDayPlan(dateISO, settings);
 
@@ -2931,20 +2834,23 @@ function TodayTab({ db, updateSlice, onNavigate }) {
     });
   }
 
-  // Wake time can only be edited once per day plan — meant to mirror
-  // reality (you wake up once), not to be freely re-typed. The first edit
-  // sets wakeTimeLocked, which disables the input; Edit (Pencil icon,
-  // same "deliberate escape hatch" pattern GenericTracker uses for
-  // Completed rows) is the only way back in, both for genuinely fixing a
-  // mistyped time and for repeated testing right now.
-  function changeWakeTime(newWakeTime) {
-    setPlan(p => ({ ...regeneratePlan(p, newWakeTime, p.dayType || defaultDayType(dateISO), settings), wakeTimeLocked: true }));
+  // Plans created before this change have no `dayConfirmed`/`finalized`
+  // field at all — treat those as already confirmed and never finalized,
+  // so historical days keep behaving exactly as they always did (fully
+  // editable, no confirm gate). Only plans created going forward (which
+  // initDayPlan sets explicitly to false) go through the new gated flow.
+  const dayConfirmed = plan.dayConfirmed ?? true;
+  const finalized = plan.finalized ?? false;
+
+  // Wake time + day type are entered once and locked together via Confirm
+  // — mirrors reality (you wake up once and know what kind of day it is).
+  // Edit (pencil icon, same escape-hatch pattern used elsewhere in this
+  // file) is the only way back in.
+  function confirmDay() {
+    setPlan(p => ({ ...p, dayConfirmed: true }));
   }
-  function unlockWakeTime() {
-    setPlan(p => ({ ...p, wakeTimeLocked: false }));
-  }
-  function changeDayType(newDayType) {
-    setPlan(p => regeneratePlan(p, p.wakeTime, newDayType, settings));
+  function unlockDay() {
+    setPlan(p => ({ ...p, dayConfirmed: false }));
   }
 
   function updateBlock(id, patch) {
@@ -2960,62 +2866,55 @@ function TodayTab({ db, updateSlice, onNavigate }) {
       return { ...p, blocks };
     });
   }
-  // Office/commute render as one merged card (see the "office" branch in the
-  // render below), so moving it has to shift travelTo+office+travelFro as a
-  // contiguous group past one adjacent block, rather than swapping a single
-  // id like moveBlock does — otherwise the group would silently fall apart.
-  function moveOfficeGroup(dir) {
-    setPlan(p => {
-      const blocks = [...p.blocks];
-      const groupIds = ["travelTo", "office", "travelFro"].filter(id => blocks.some(b => b.id === id));
-      if (groupIds.length === 0) return p;
-      const indices = groupIds.map(id => blocks.findIndex(b => b.id === id)).sort((a, b) => a - b);
-      const first = indices[0], last = indices[indices.length - 1];
-      const groupBlocks = blocks.slice(first, last + 1);
-      if (dir === -1) {
-        if (first === 0) return p;
-        const before = blocks[first - 1];
-        return { ...p, blocks: [...blocks.slice(0, first - 1), ...groupBlocks, before, ...blocks.slice(last + 1)] };
-      } else {
-        if (last === blocks.length - 1) return p;
-        const after = blocks[last + 1];
-        return { ...p, blocks: [...blocks.slice(0, first), after, ...groupBlocks, ...blocks.slice(last + 2)] };
-      }
-    });
-  }
-  function addCustomBlock() {
-    setPlan(p => ({
-      ...p, blocks: [...p.blocks, { id: uid(), label: "Custom task", type: "study", link: "custom", duration: 30, status: "Not Started", skipped: false, skipReason: "", journal: "", custom: true }]
-    }));
-  }
-  // Brings back one of today's standard slots that applyTrimRules dropped
-  // for not fitting (or that's simply not in the plan yet for some other
-  // reason) — looked up fresh from buildBaseBlocks rather than stored
-  // anywhere, so it's always the current Settings-defined version of that
-  // slot. Marked `restored` so it can be removed again via the same
-  // control as a custom task, unlike a normal auto-generated block.
-  function addExistingBlock(blockId) {
-    const dayType = plan.dayType || defaultDayType(dateISO);
-    const template = buildBaseBlocks(dayType, settings).find(b => b.id === blockId);
-    if (!template) return;
-    setPlan(p => ({
-      ...p,
-      droppedLabels: (p.droppedLabels || []).filter(l => l !== template.label),
-      blocks: [...p.blocks, { ...template, status: "Not Started", skipped: false, skipReason: "", completedAt: null, journal: "", restored: true }],
-    }));
-  }
   function removeBlock(id) {
     setPlan(p => ({ ...p, blocks: p.blocks.filter(b => b.id !== id) }));
   }
+  // Default time for a newly added task: right after whatever the last
+  // task in the list ends, or wake time if the list is still empty. Just
+  // a starting point — the time input stays freely editable afterward.
+  function nextTaskDefaultTime(p) {
+    const { blocks } = computePlanTimes(p);
+    if (blocks.length === 0) return p.wakeTime;
+    return minutesToTime(blocks[blocks.length - 1].end);
+  }
+  function addTaskFromWeekly(taskId) {
+    const task = availableWeeklyTasks.find(t => t.id === taskId);
+    if (!task) return;
+    setPlan(p => ({
+      ...p,
+      blocks: [...(p.blocks || []), {
+        id: uid(), label: task.text, time: nextTaskDefaultTime(p), duration: 30,
+        status: "Not Started", skipped: false, skipReason: "", completedAt: null, journal: "",
+        custom: true, fromWeeklyTaskId: task.id,
+      }],
+    }));
+    setAddOpen(false);
+  }
+  function addNewTask() {
+    const text = newTaskText.trim();
+    if (!text) return;
+    setPlan(p => ({
+      ...p,
+      blocks: [...(p.blocks || []), {
+        id: uid(), label: text, time: nextTaskDefaultTime(p), duration: 30,
+        status: "Not Started", skipped: false, skipReason: "", completedAt: null, journal: "", custom: true,
+      }],
+    }));
+    setNewTaskText("");
+  }
+  function finalizeDay() {
+    setPlan(p => ({ ...p, finalized: true }));
+    setAddOpen(false);
+  }
 
-  const { wakeMinutes, endMinutes, blocks: timedBlocks } = computePlanTimes(plan);
+  const { wakeMinutes, blocks: timedBlocks } = computePlanTimes(plan);
   const sleepMinutes = parseTimeToMinutes(settings.sleepTime);
-  const overflow = endMinutes - sleepMinutes;
-  // Standard slots that would normally be in today's plan (per Settings)
-  // but aren't currently — almost always because applyTrimRules dropped
-  // them for not fitting; powers "+ Add existing task" below.
-  const missingBlocks = buildBaseBlocks(plan.dayType || defaultDayType(dateISO), settings)
-    .filter(b => !plan.blocks.some(pb => pb.id === b.id));
+  const availableMinutes = sleepMinutes - parseTimeToMinutes(plan.wakeTime);
+  const plannedMinutes = timedBlocks.filter(b => !b.skipped).reduce((sum, b) => sum + Number(b.duration || 0), 0);
+  const weekStartForDay = weekStartISO(dateISO);
+  const weeklyTasksForDay = (db.weeklyPlanner[weekStartForDay] && db.weeklyPlanner[weekStartForDay].tasks) || [];
+  const alreadyAddedWeeklyIds = new Set((plan.blocks || []).map(b => b.fromWeeklyTaskId).filter(Boolean));
+  const availableWeeklyTasks = weeklyTasksForDay.filter(t => !alreadyAddedWeeklyIds.has(t.id));
 
   const pending = useMemo(() => computePendingTasks(db), [db]);
   const pendingOnly = pending.filter(p => p.cat === "Pending");
@@ -3048,93 +2947,91 @@ function TodayTab({ db, updateSlice, onNavigate }) {
           <div className="ucc-flex wrap">
             <div className="ucc-flex" style={{ gap: 4 }}>
               <label className="ucc-tiny">Wake time
-                <input type="time" className="ucc-input ucc-mono" value={plan.wakeTime} disabled={plan.wakeTimeLocked}
-                  onChange={e => changeWakeTime(e.target.value)} style={{ marginLeft: 6, width: 100 }} />
+                <input type="time" className="ucc-input ucc-mono" value={plan.wakeTime} disabled={dayConfirmed}
+                  onChange={e => setPlan(p => ({ ...p, wakeTime: e.target.value }))} style={{ marginLeft: 6, width: 100 }} />
               </label>
-              {plan.wakeTimeLocked && (
-                <>
-                  <Lock size={12} style={{ color: "var(--ink-muted)" }} aria-label="Wake time locked for today" />
-                  <IconBtn icon={Pencil} onClick={unlockWakeTime} title="Unlock to edit wake time again" />
-                </>
-              )}
             </div>
             <label className="ucc-tiny">Day type
-              <select className="ucc-select" value={plan.dayType || defaultDayType(dateISO)} onChange={e => changeDayType(e.target.value)} style={{ marginLeft: 6, width: 110, display: "inline-block" }}>
+              <select className="ucc-select" value={plan.dayType || defaultDayType(dateISO)} disabled={dayConfirmed}
+                onChange={e => setPlan(p => ({ ...p, dayType: e.target.value }))} style={{ marginLeft: 6, width: 110, display: "inline-block" }}>
                 {DAY_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
               </select>
             </label>
+            {!dayConfirmed ? (
+              <button className="ucc-btn" onClick={confirmDay}><Check size={14} /> Confirm</button>
+            ) : (
+              <>
+                <Lock size={12} style={{ color: "var(--ink-muted)" }} aria-label="Day confirmed" />
+                <IconBtn icon={Pencil} onClick={unlockDay} title="Unlock to edit wake time/day type again" />
+              </>
+            )}
           </div>
         </div>
-        <DayArc blocks={timedBlocks} wakeMinutes={wakeMinutes} sleepMinutes={sleepMinutes} />
-        {(plan.breakNote || (plan.droppedLabels && plan.droppedLabels.length > 0)) && (
-          <div className="ucc-tiny" style={{ background: "var(--amber-soft)", color: "var(--amber)", borderRadius: 6, padding: "8px 12px", marginTop: 8 }}>
-            <strong>Adjusted for today:</strong>{" "}
-            {[
-              plan.breakNote,
-              plan.droppedLabels && plan.droppedLabels.length > 0 ? `Dropped ${plan.droppedLabels.map(l => `"${l}"`).join(", ")}` : null,
-            ].filter(Boolean).join(" · ")}
+        {dayConfirmed && (
+          <div className="ucc-tiny" style={{ marginTop: 8, color: "var(--ink-muted)" }}>
+            Available today: <strong>{fmtHM(availableMinutes)}</strong> ({plan.wakeTime} → {settings.sleepTime})
+            {plannedMinutes > 0 && ` · ${fmtHM(plannedMinutes)} planned, ${fmtHM(Math.max(0, availableMinutes - plannedMinutes))} remaining`}
           </div>
         )}
-        {overflow > 0 && (
-          <div className="ucc-overflow-banner">
-            <AlertTriangle size={15} />
-            Schedule overflow — even after trimming everything adjustable, you have {Math.floor(overflow / 60)}h {overflow % 60}m of fixed work (class, GS reading, office/commute) that cannot fit before {settings.sleepTime}.
-          </div>
-        )}
+        {dayConfirmed && <DayArc blocks={timedBlocks} wakeMinutes={wakeMinutes} sleepMinutes={sleepMinutes} />}
       </div>
 
       <div className="ucc-flex wrap" style={{ alignItems: "flex-start", gap: 12 }}>
         <div className="ucc-card" style={{ flex: "3 1 420px", margin: 0 }}>
           <h3>Today's plan</h3>
-          <p className="ucc-tiny" style={{ marginTop: -4 }}>A quick hourly journal — jot a line on what you actually did in each slot. Detailed logging (topics, PDFs, marks) stays on each tracker's own tab.</p>
-          {timedBlocks.map((b, i) => {
-            if (b.id === "travelTo" || b.id === "travelFro") return null; // shown inside the merged Office card
-            if (b.id === "office") {
-              const travelTo = timedBlocks.find(x => x.id === "travelTo");
-              const travelFro = timedBlocks.find(x => x.id === "travelFro");
-              const groupIndices = ["travelTo", "office", "travelFro"]
-                .map(id => timedBlocks.findIndex(x => x.id === id))
-                .filter(idx => idx !== -1);
-              const firstIdx = Math.min(...groupIndices);
-              const lastIdx = Math.max(...groupIndices);
-              return (
-                <OfficePlanBlock key="office-group" office={b} travelTo={travelTo} travelFro={travelFro}
-                  onSkipAll={reason => {
-                    updateBlock("office", { skipped: true, skipReason: reason });
-                    if (travelTo) updateBlock("travelTo", { skipped: true, skipReason: reason });
-                    if (travelFro) updateBlock("travelFro", { skipped: true, skipReason: reason });
-                  }}
-                  onUnskipAll={() => {
-                    updateBlock("office", { skipped: false, skipReason: "" });
-                    if (travelTo) updateBlock("travelTo", { skipped: false, skipReason: "" });
-                    if (travelFro) updateBlock("travelFro", { skipped: false, skipReason: "" });
-                  }}
-                  onJournalChange={v => updateBlock("office", { journal: v })}
-                  onDurationChange={(blockId, duration) => updateBlock(blockId, { duration })}
-                  onMoveUp={firstIdx > 0 ? () => moveOfficeGroup(-1) : null}
-                  onMoveDown={lastIdx < timedBlocks.length - 1 ? () => moveOfficeGroup(1) : null} />
-              );
-            }
-            return (
-              <PlanBlock key={b.id} block={b} onUpdate={patch => updateBlock(b.id, patch)}
-                onMoveUp={i > 0 ? () => moveBlock(b.id, -1) : null}
-                onMoveDown={i < timedBlocks.length - 1 ? () => moveBlock(b.id, 1) : null}
-                onRemove={(b.custom || b.restored) ? () => removeBlock(b.id) : null} />
-            );
-          })}
-          <div className="ucc-flex wrap" style={{ gap: 8, alignItems: "center" }}>
-            <button className="ucc-btn" onClick={addCustomBlock}><Plus size={14} /> Add custom task</button>
-            <CalendarSyncButton dateISO={dateISO} blocks={timedBlocks.filter(b => b.type !== "break")}
-              onSynced={results => results.forEach(r => updateBlock(r.id, { googleSync: r.googleSync }))} />
-            {missingBlocks.length > 0 && (
-              <select className="ucc-select" style={{ width: "auto", maxWidth: 240 }} value=""
-                title="Bring back a slot dropped from today's plan"
-                onChange={e => { if (e.target.value) addExistingBlock(e.target.value); }}>
-                <option value="">+ Add existing task…</option>
-                {missingBlocks.map(b => <option key={b.id} value={b.id}>{b.label}</option>)}
-              </select>
-            )}
-          </div>
+          {!dayConfirmed ? (
+            <p className="ucc-tiny">Confirm your wake time and day type above to start planning today.</p>
+          ) : (
+            <>
+              <p className="ucc-tiny" style={{ marginTop: -4 }}>A quick hourly journal — jot a line on what you actually did in each slot. Detailed logging (topics, PDFs, marks) stays on each tracker's own tab.</p>
+              {timedBlocks.map((b, i) => (
+                <PlanBlock key={b.id} block={b} onUpdate={patch => updateBlock(b.id, patch)}
+                  onMoveUp={i > 0 ? () => moveBlock(b.id, -1) : null}
+                  onMoveDown={i < timedBlocks.length - 1 ? () => moveBlock(b.id, 1) : null}
+                  onRemove={() => removeBlock(b.id)} />
+              ))}
+              {timedBlocks.length === 0 && <EmptyState>No tasks added yet — use "Add tasks" below.</EmptyState>}
+              {!finalized && (
+                <div style={{ marginTop: 8 }}>
+                  <div className="ucc-flex wrap" style={{ gap: 8, alignItems: "center" }}>
+                    <button className="ucc-btn" onClick={() => setAddOpen(o => !o)}><Plus size={14} /> Add tasks</button>
+                    <button className="ucc-btn" onClick={finalizeDay} disabled={timedBlocks.length === 0}
+                      title={timedBlocks.length === 0 ? "Add at least one task first" : "Lock today's task list — time and duration stay editable"}>
+                      <Lock size={14} /> Finalize today
+                    </button>
+                    <CalendarSyncButton dateISO={dateISO} blocks={timedBlocks.filter(b => b.type !== "break")}
+                      onSynced={results => results.forEach(r => updateBlock(r.id, { googleSync: r.googleSync }))} />
+                  </div>
+                  {addOpen && (
+                    <div className="ucc-card" style={{ margin: "8px 0 0", padding: 12 }}>
+                      {availableWeeklyTasks.length > 0 && (
+                        <label className="ucc-tiny" style={{ display: "block", marginBottom: 8 }}>From this week's tasks
+                          <select className="ucc-select" style={{ marginLeft: 6, width: "auto", maxWidth: 260 }} value=""
+                            onChange={e => { if (e.target.value) addTaskFromWeekly(e.target.value); }}>
+                            <option value="">Choose a task…</option>
+                            {availableWeeklyTasks.map(t => <option key={t.id} value={t.id}>{t.text}</option>)}
+                          </select>
+                        </label>
+                      )}
+                      <div className="ucc-flex wrap" style={{ gap: 8 }}>
+                        <input type="text" className="ucc-input" style={{ flex: "1 1 200px" }} placeholder="New task name" value={newTaskText}
+                          onChange={e => setNewTaskText(e.target.value)}
+                          onKeyDown={e => { if (e.key === "Enter") addNewTask(); }} />
+                        <button className="ucc-btn" onClick={addNewTask}><Plus size={14} /> Add</button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+              {finalized && (
+                <div className="ucc-flex wrap" style={{ gap: 8, alignItems: "center", marginTop: 8 }}>
+                  <span className="ucc-badge"><Lock size={12} /> Finalized — no more tasks can be added</span>
+                  <CalendarSyncButton dateISO={dateISO} blocks={timedBlocks.filter(b => b.type !== "break")}
+                    onSynced={results => results.forEach(r => updateBlock(r.id, { googleSync: r.googleSync }))} />
+                </div>
+              )}
+            </>
+          )}
         </div>
 
         {/* Streak, missed-days, and This week's tasks — one stacked
@@ -3396,66 +3293,21 @@ function SkipToggle({ skipped, skipReason, onSkip, onUnskip }) {
   );
 }
 
-function OfficePlanBlock({ office, travelTo, travelFro, onSkipAll, onUnskipAll, onJournalChange, onDurationChange, onMoveUp, onMoveDown }) {
-  const skipped = office.skipped;
-  const start = (travelTo || office).start;
-  const end = (travelFro || office).end;
-  const duration = (travelTo ? travelTo.duration : 0) + office.duration + (travelFro ? travelFro.duration : 0);
-  return (
-    <div className={`ucc-planblock ${skipped ? "skipped" : ""}`}>
-      <div className="time ucc-mono ucc-tiny">
-        {skipped ? "skipped" : `${minutesToTime(start)} – ${minutesToTime(end)}`}
-        <div className="ucc-tiny" style={{ marginTop: 4 }}>{duration} min</div>
-      </div>
-      <div className="body">
-        <div className="ucc-flex between wrap">
-          <strong>Office Work{travelTo ? " (incl. commute)" : ""}</strong>
-          <div className="ucc-flex">
-            {onMoveUp && <IconBtn icon={ChevronUp} onClick={onMoveUp} title="Move up" />}
-            {onMoveDown && <IconBtn icon={ChevronDown} onClick={onMoveDown} title="Move down" />}
-            <SkipToggle skipped={skipped} skipReason={office.skipReason} onSkip={r => onSkipAll(r)} onUnskip={onUnskipAll} />
-          </div>
-        </div>
-        <div className="ucc-tiny" style={{ margin: "4px 0", color: "var(--ink-muted)" }}>
-          Default durations come from Settings — adjust here for just today.
-        </div>
-        <div className="ucc-flex wrap" style={{ gap: 14, marginBottom: 4 }}>
-          {travelTo && (
-            <label className="ucc-tiny">Commute (to)
-              <input type="number" className="ucc-input ucc-mono" style={{ width: 60, marginLeft: 6 }} value={travelTo.duration}
-                onChange={e => onDurationChange("travelTo", Number(e.target.value))} /> min
-            </label>
-          )}
-          <label className="ucc-tiny">Office
-            <input type="number" className="ucc-input ucc-mono" style={{ width: 60, marginLeft: 6 }} value={office.duration}
-              onChange={e => onDurationChange("office", Number(e.target.value))} /> min
-          </label>
-          {travelFro && (
-            <label className="ucc-tiny">Commute (fro)
-              <input type="number" className="ucc-input ucc-mono" style={{ width: 60, marginLeft: 6 }} value={travelFro.duration}
-                onChange={e => onDurationChange("travelFro", Number(e.target.value))} /> min
-            </label>
-          )}
-        </div>
-        {!skipped && (
-          <textarea className="ucc-textarea" rows={2} style={{ marginTop: 4 }}
-            placeholder="What's worth noting about today's office block? (optional)"
-            value={office.journal || ""} onChange={e => onJournalChange(e.target.value)} />
-        )}
-      </div>
-    </div>
-  );
-}
-
+// Time and duration stay editable even after Finalize Today locks further
+// additions (see the `finalized` gate in TodayTab, which only hides the Add
+// Tasks control) — this component itself never checks `finalized`.
 function PlanBlock({ block, onUpdate, onMoveUp, onMoveDown, onRemove }) {
   return (
     <div className={`ucc-planblock ${block.skipped ? "skipped" : ""}`}>
       <div className="time ucc-mono ucc-tiny">
-        {block.skipped ? "skipped" : `${minutesToTime(block.start)} – ${minutesToTime(block.end)}`}
+        <input type="time" className="ucc-input ucc-mono" style={{ width: 90 }}
+          value={block.time != null ? block.time : minutesToTime(block.start)}
+          onChange={e => onUpdate({ time: e.target.value })} />
         <div className="ucc-tiny" style={{ marginTop: 4 }}>
           <input type="number" className="ucc-input ucc-mono" style={{ width: 60 }} value={block.duration}
             onChange={e => onUpdate({ duration: Number(e.target.value) })} /> min
         </div>
+        {block.skipped && <div className="ucc-tiny" style={{ marginTop: 4 }}>skipped</div>}
       </div>
       <div className="body">
         <div className="ucc-flex between wrap">
@@ -3466,7 +3318,7 @@ function PlanBlock({ block, onUpdate, onMoveUp, onMoveDown, onRemove }) {
               style={{ fontWeight: 700, flex: "1 1 160px", minWidth: 120, marginRight: 8 }}
               value={block.label}
               onChange={e => onUpdate({ label: e.target.value })}
-              placeholder="Custom task name"
+              placeholder="Task name"
             />
           ) : (
             <strong>{block.label}</strong>
@@ -3480,7 +3332,7 @@ function PlanBlock({ block, onUpdate, onMoveUp, onMoveDown, onRemove }) {
             {onRemove && <IconBtn icon={Trash2} onClick={onRemove} title="Remove" danger />}
           </div>
         </div>
-        {block.type !== "break" && !block.skipped && (
+        {!block.skipped && (
           <textarea className="ucc-textarea" rows={2} style={{ marginTop: 6 }}
             placeholder="What did you actually do in this slot? (a line or two is plenty)"
             value={block.journal || ""} onChange={e => onUpdate({ journal: e.target.value })} />
@@ -5582,85 +5434,7 @@ function SettingsTab({ db, updateSlice }) {
           <label className="ucc-tiny">Fixed sleep boundary</label>
           <input type="time" className="ucc-input ucc-mono" value={s.sleepTime} onChange={e => patch({ sleepTime: e.target.value })} />
         </div>
-        <div>
-          <label className="ucc-tiny">Fixed office hours (WFH/WFO)</label>
-          <input type="number" step="0.5" className="ucc-input ucc-mono" value={s.officeHoursFixed} onChange={e => patch({ officeHoursFixed: Number(e.target.value) })} />
-        </div>
-        <div>
-          <label className="ucc-tiny">Fixed travel hours, each way (WFO only)</label>
-          <input type="number" step="0.5" className="ucc-input ucc-mono" value={s.travelHoursEachWay} onChange={e => patch({ travelHoursEachWay: Number(e.target.value) })} />
-        </div>
       </div>
-      <div className="ucc-hr" />
-      <h3>Default daily slot template</h3>
-      <p className="ucc-tiny">Study slots, breaks, and AI learning — their default duration before any day-fit trimming happens, and whether they're generated at all. Office and commute time come from the fixed hours above instead. Changes here set the default for new days — days you've already opened keep their own snapshot until you change wake time or day type.</p>
-      <table className="ucc-table">
-        <thead><tr><th>Enabled</th><th>Slot</th><th>Type</th><th>Default duration (min)</th><th></th></tr></thead>
-        <tbody>
-          {s.slotTemplate.filter(b => {
-            const deleted = s.slotsDeleted || {};
-            return !deleted[b.id] && !(b.type === "break" && deleted[b.pairFor]);
-          }).map(b => {
-            const enabled = (s.slotsEnabled || {})[b.id] !== false;
-            const idx = s.slotTemplate.findIndex(x => x.id === b.id);
-            // Breaks are auto-managed alongside their parent study slot (see
-            // b.pairFor / buildBaseBlocks) so they get no delete control of
-            // their own — deleting the parent below hides both together.
-            const pairedBreak = b.type !== "break" ? s.slotTemplate.find(x => x.type === "break" && x.pairFor === b.id) : null;
-            return (
-              <tr key={b.id} style={{ opacity: enabled ? 1 : 0.55 }}>
-                <td>
-                  <input type="checkbox" checked={enabled}
-                    onChange={e => patch({ slotsEnabled: { ...(s.slotsEnabled || {}), [b.id]: e.target.checked } })} />
-                </td>
-                <td>
-                  <input type="text" className="ucc-input" style={{ minWidth: 180 }} value={b.label}
-                    onChange={e => {
-                      const label = e.target.value;
-                      patch({ slotTemplate: s.slotTemplate.map((x, xi) => xi === idx ? { ...x, label } : x) });
-                    }} />
-                </td>
-                <td><Badge tone="neutral">{b.type}</Badge></td>
-                <td>
-                  <input type="number" className="ucc-input ucc-mono" style={{ width: 80 }} value={b.duration} disabled={!enabled}
-                    onChange={e => {
-                      const dur = Number(e.target.value);
-                      patch({ slotTemplate: s.slotTemplate.map((x, xi) => xi === idx ? { ...x, duration: dur } : x) });
-                    }} />
-                </td>
-                <td>
-                  {b.type !== "break" && (
-                    <IconBtn icon={Trash2} danger title="Delete slot"
-                      onClick={() => {
-                        if (!window.confirm(`Delete "${b.label}"? It stops appearing in future daily plans and in this list. Nothing already logged in Daily/Weekly Review changes — restore it anytime from "Deleted slots" below.`)) return;
-                        const ids = pairedBreak ? [b.id, pairedBreak.id] : [b.id];
-                        patch({
-                          slotsEnabled: { ...(s.slotsEnabled || {}), ...Object.fromEntries(ids.map(id => [id, false])) },
-                          slotsDeleted: { ...(s.slotsDeleted || {}), ...Object.fromEntries(ids.map(id => [id, true])) },
-                        });
-                      }} />
-                  )}
-                </td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
-      {s.slotTemplate.some(b => b.type !== "break" && (s.slotsDeleted || {})[b.id]) && (
-        <p className="ucc-tiny" style={{ marginTop: 6 }}>
-          <strong>Deleted slots:</strong>{" "}
-          {s.slotTemplate.filter(b => b.type !== "break" && (s.slotsDeleted || {})[b.id]).map(b => (
-            <span key={b.id} style={{ marginRight: 14 }}>
-              {b.label}{" "}
-              <button className="ucc-btn ghost" style={{ padding: "1px 6px" }} onClick={() => {
-                const pairedBreak = s.slotTemplate.find(x => x.type === "break" && x.pairFor === b.id);
-                const ids = pairedBreak ? [b.id, pairedBreak.id] : [b.id];
-                patch({ slotsDeleted: { ...(s.slotsDeleted || {}), ...Object.fromEntries(ids.map(id => [id, false])) } });
-              }}>Restore</button>
-            </span>
-          ))}
-        </p>
-      )}
       <div className="ucc-hr" />
       <h3>Subjects</h3>
       <p className="ucc-tiny">Total Classes is optional — set it once per subject to see that subject's class-completion % on the Dashboard.</p>
