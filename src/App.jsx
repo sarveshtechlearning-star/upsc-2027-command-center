@@ -476,6 +476,17 @@ function minutesToTime(mins) {
   const hh = String(h).padStart(2, "0"), mmS = String(mm).padStart(2, "0");
   return (overflowDays > 0 ? "+1d " : "") + `${hh}:${mmS}`;
 }
+// Same wraparound as minutesToTime, but without the "+1d " prefix — that
+// prefix is fine for a read-only display string (DayArc tooltips, Weekly
+// Review's block list) but is NOT a valid <input type="time"> value, and
+// would corrupt right back through parseTimeToMinutes if it were ever
+// stored in block.time and re-parsed. Use this, not minutesToTime, for
+// anything that feeds a time input or gets written into block.time.
+function minutesToTimeInput(mins) {
+  const m = ((Math.round(mins) % 1440) + 1440) % 1440;
+  const h = Math.floor(m / 60), mm = m % 60;
+  return `${String(h).padStart(2, "0")}:${String(mm).padStart(2, "0")}`;
+}
 function fmtHM(mins) {
   const m = Math.max(0, Math.round(mins));
   const h = Math.floor(m / 60), mm = m % 60;
@@ -2545,15 +2556,31 @@ function DriveDownloadLinks({ files }) {
    DAY ARC (signature visual)
    ============================================================ */
 // Office + its commute legs share one color family (requirement: commute is
-// a sub-section of office, not its own category); every study slot gets its
-// own distinct color so the day is scannable at a glance.
+// a sub-section of office, not its own category). s1-s7 only ever appear on
+// plans saved before the Sep 17, 2026 daily-plan-template removal (see
+// Section 4) — every task added since then is freeform, so it can't be
+// colored by a fixed slot id anymore. Those get a color hashed from their
+// own label instead: same task name -> same color every time it recurs
+// (e.g. "GS Answer Writing" looks the same day to day), and different task
+// names are very likely (7/8 odds per pair) to land on different colors,
+// which is what actually matters for the arc being scannable at a glance.
+const TASK_COLOR_PALETTE = [
+  "var(--sec-s1)", "var(--sec-s2)", "var(--sec-s3)", "var(--sec-s4)",
+  "var(--sec-s5)", "var(--sec-s6)", "var(--sec-s7)", "var(--sec-custom)",
+];
+function hashTaskColor(label) {
+  const s = String(label || "");
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
+  return TASK_COLOR_PALETTE[Math.abs(h) % TASK_COLOR_PALETTE.length];
+}
 function colorForBlock(b) {
   if (b.type === "break") return "var(--break)";
   if (b.id === "office") return "var(--office)";
   if (b.id === "travelTo" || b.id === "travelFro") return "var(--travel)";
   if (b.type === "ai") return "var(--ai)";
   if (["s1", "s2", "s3", "s4", "s5", "s6", "s7"].includes(b.id)) return `var(--sec-${b.id})`;
-  return "var(--sec-custom)";
+  return hashTaskColor(b.label);
 }
 function DayArc({ blocks, wakeMinutes, sleepMinutes }) {
   let cursor = wakeMinutes;
@@ -2853,8 +2880,35 @@ function TodayTab({ db, updateSlice, onNavigate }) {
     setPlan(p => ({ ...p, dayConfirmed: false }));
   }
 
+  // Editing one task's time or duration used to leave every later task
+  // sitting at its old (now overlapping or gapped) time, since each task
+  // stores its own explicit `time` rather than being derived from a
+  // cascade. Fixed Sep 17, 2026: a duration or time edit now shifts every
+  // *later* task's stored time by the same delta, so the rest of the day
+  // slides with it — exactly as if you'd stretched or moved one card on a
+  // timeline. Any deliberate gap/overlap between later tasks is preserved
+  // (the whole tail moves together, not each task recomputed from wake
+  // time). Skipping a task does NOT trigger a shift — only a direct edit
+  // to `time` or `duration` does; toggling skip doesn't reflow the day.
   function updateBlock(id, patch) {
-    setPlan(p => ({ ...p, blocks: p.blocks.map(b => b.id === id ? { ...b, ...patch } : b) }));
+    setPlan(p => {
+      const idx = p.blocks.findIndex(b => b.id === id);
+      if (idx === -1) return p;
+      const current = p.blocks[idx];
+      let delta = 0;
+      if (Object.prototype.hasOwnProperty.call(patch, "duration")) {
+        delta = Number(patch.duration || 0) - Number(current.duration || 0);
+      } else if (Object.prototype.hasOwnProperty.call(patch, "time")) {
+        const oldStart = current.time != null ? parseTimeToMinutes(current.time) : computePlanTimes(p).blocks[idx].start;
+        delta = parseTimeToMinutes(patch.time) - oldStart;
+      }
+      const blocks = p.blocks.map((b, i) => {
+        if (i === idx) return { ...b, ...patch };
+        if (delta !== 0 && i > idx && b.time != null) return { ...b, time: minutesToTimeInput(parseTimeToMinutes(b.time) + delta) };
+        return b;
+      });
+      return { ...p, blocks };
+    });
   }
   function moveBlock(id, dir) {
     setPlan(p => {
@@ -2875,7 +2929,7 @@ function TodayTab({ db, updateSlice, onNavigate }) {
   function nextTaskDefaultTime(p) {
     const { blocks } = computePlanTimes(p);
     if (blocks.length === 0) return p.wakeTime;
-    return minutesToTime(blocks[blocks.length - 1].end);
+    return minutesToTimeInput(blocks[blocks.length - 1].end);
   }
   function addTaskFromWeekly(taskId) {
     const task = availableWeeklyTasks.find(t => t.id === taskId);
@@ -3301,7 +3355,7 @@ function PlanBlock({ block, onUpdate, onMoveUp, onMoveDown, onRemove }) {
     <div className={`ucc-planblock ${block.skipped ? "skipped" : ""}`}>
       <div className="time ucc-mono ucc-tiny">
         <input type="time" className="ucc-input ucc-mono" style={{ width: 90 }}
-          value={block.time != null ? block.time : minutesToTime(block.start)}
+          value={block.time != null ? block.time : minutesToTimeInput(block.start)}
           onChange={e => onUpdate({ time: e.target.value })} />
         <div className="ucc-tiny" style={{ marginTop: 4 }}>
           <input type="number" className="ucc-input ucc-mono" style={{ width: 60 }} value={block.duration}
