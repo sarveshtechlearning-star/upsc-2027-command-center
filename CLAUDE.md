@@ -352,6 +352,20 @@ summary will do.
   `timedBlocks.filter(b => b.type !== "break")` for this same
   backward-compatibility reason, even though no block created going
   forward is ever type `"break"`.
+- **Day Arc colors freeform tasks by a hash of their own label**
+  (`hashTaskColor`, `TASK_COLOR_PALETTE` — fixed Sep 17, 2026, same day as
+  the daily-plan-template removal above, once the resulting bug was
+  reported live). Since every task added going forward has no fixed slot
+  id, `colorForBlock`'s old fallback (`var(--sec-custom)`) was hit by
+  *every* task — the whole arc rendered as one solid color. The fix reuses
+  the same 8-color palette (`--sec-s1`..`--sec-s7`, `--sec-custom` — s1-s7
+  are otherwise dead now that no new block ever has those ids) via a
+  simple string hash of `block.label`, so the same task name gets the same
+  color every time it recurs and different names are very likely (7/8
+  odds per pair, not guaranteed — don't "fix" an occasional same-day color
+  repeat, that's expected) to differ. `s1`-`s7` ids on plans saved before
+  Sep 17, 2026 still resolve to their original fixed colors first, via the
+  existing id check ahead of the hash fallback — unaffected.
 - **`LiveClock`** (top bar, next to today's date) is a self-contained
   ticking clock — its own `setInterval`/`useState`, cleaned up on
   unmount — not wired to any tracker data. If another live-updating time
