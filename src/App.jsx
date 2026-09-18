@@ -2896,9 +2896,9 @@ function TodayTab({ db, updateSlice, onNavigate }) {
       if (idx === -1) return p;
       const current = p.blocks[idx];
       let delta = 0;
-      if (Object.prototype.hasOwnProperty.call(patch, "duration")) {
-        delta = Number(patch.duration || 0) - Number(current.duration || 0);
-      } else if (Object.prototype.hasOwnProperty.call(patch, "time")) {
+      if (Object.prototype.hasOwnProperty.call(patch, "duration") && patch.duration !== "" && !Number.isNaN(Number(patch.duration))) {
+        delta = Number(patch.duration) - Number(current.duration || 0);
+      } else if (Object.prototype.hasOwnProperty.call(patch, "time") && patch.time) {
         const oldStart = current.time != null ? parseTimeToMinutes(current.time) : computePlanTimes(p).blocks[idx].start;
         delta = parseTimeToMinutes(patch.time) - oldStart;
       }
@@ -3350,16 +3350,60 @@ function SkipToggle({ skipped, skipReason, onSkip, onUnskip }) {
 // Time and duration stay editable even after Finalize Today locks further
 // additions (see the `finalized` gate in TodayTab, which only hides the Add
 // Tasks control) — this component itself never checks `finalized`.
+// The duration and time inputs below are controlled by state derived from
+// the block (block.duration / block.time), and committing a change fires
+// updateBlock's shift-cascade onto every later task. A plain controlled
+// input bound straight to that value has a well-known trap: clearing the
+// field while typing a replacement (e.g. backspacing "60" before typing
+// "90") makes the DOM value momentarily "", and if that empty string were
+// committed as 0 / "00:00", the controlled value snaps back to "0" /
+// "00:00" mid-edit — fighting the user's own typing (Chrome does not
+// auto-select a number input's contents on focus, so backspace-then-type
+// is the natural way most people replace a value) and touching off a
+// large, wrong shift on every later task, which is exactly the reported
+// bug: the spin buttons never hit this (stepUp/stepDown never produce an
+// empty value, so they always commit a clean number immediately) while
+// typing a replacement did. Both inputs below keep their own local text
+// state so the field can sit empty mid-edit, and only commit (call
+// onCommit, which fires the shift) once a complete, valid, changed value
+// exists — never for the transient empty state. Re-sync from the block's
+// real value only when it changes from elsewhere (e.g. a shift caused by
+// an earlier task's edit), not on every render, so this never fights the
+// user's own in-progress typing in this same field.
+function DurationInput({ value, onCommit }) {
+  const [text, setText] = useState(String(value));
+  useEffect(() => { setText(String(value)); }, [value]);
+  return (
+    <input type="number" className="ucc-input ucc-mono" style={{ width: 60 }} value={text}
+      onChange={e => {
+        setText(e.target.value);
+        const n = Number(e.target.value);
+        if (e.target.value !== "" && !Number.isNaN(n) && n !== value) onCommit(n);
+      }}
+      onBlur={() => { if (text === "" || Number.isNaN(Number(text))) setText(String(value)); }}
+      onKeyDown={e => { if (e.key === "Enter") e.currentTarget.blur(); }} />
+  );
+}
+function TimeInput({ value, onCommit }) {
+  const [text, setText] = useState(value);
+  useEffect(() => { setText(value); }, [value]);
+  return (
+    <input type="time" className="ucc-input ucc-mono" style={{ width: 90 }} value={text}
+      onChange={e => {
+        setText(e.target.value);
+        if (e.target.value !== "" && e.target.value !== value) onCommit(e.target.value);
+      }}
+      onBlur={() => { if (!text) setText(value); }} />
+  );
+}
 function PlanBlock({ block, onUpdate, onMoveUp, onMoveDown, onRemove }) {
   return (
     <div className={`ucc-planblock ${block.skipped ? "skipped" : ""}`}>
       <div className="time ucc-mono ucc-tiny">
-        <input type="time" className="ucc-input ucc-mono" style={{ width: 90 }}
-          value={block.time != null ? block.time : minutesToTimeInput(block.start)}
-          onChange={e => onUpdate({ time: e.target.value })} />
+        <TimeInput value={block.time != null ? block.time : minutesToTimeInput(block.start)}
+          onCommit={t => onUpdate({ time: t })} />
         <div className="ucc-tiny" style={{ marginTop: 4 }}>
-          <input type="number" className="ucc-input ucc-mono" style={{ width: 60 }} value={block.duration}
-            onChange={e => onUpdate({ duration: Number(e.target.value) })} /> min
+          <DurationInput value={block.duration} onCommit={d => onUpdate({ duration: d })} /> min
         </div>
         {block.skipped && <div className="ucc-tiny" style={{ marginTop: 4 }}>skipped</div>}
       </div>
