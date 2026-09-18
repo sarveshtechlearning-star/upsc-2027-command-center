@@ -388,6 +388,49 @@ summary will do.
   into `block.time` (currently: this shift logic, `nextTaskDefaultTime`'s
   default for a new task, and `PlanBlock`'s input fallback for legacy
   blocks with no `.time`).
+- **`DurationInput`/`TimeInput` (in `PlanBlock`) keep their own local text
+  state instead of binding straight to `block.duration`/`block.time`** —
+  fixed Sep 17, 2026, immediately after the shift-cascade fix above, once
+  it turned out the spin buttons shifted later tasks correctly but typing
+  a replacement value didn't. Cause: Chrome doesn't auto-select a number
+  input's contents on focus, so backspacing first is the natural way to
+  replace a value — which makes the DOM value momentarily `""`. A plain
+  controlled input commits that immediately as `duration: 0` / `time: ""`
+  (`parseTimeToMinutes("")` is `0`, i.e. `00:00`), snapping the visible
+  value to `"0"`/`"00:00"` mid-edit and firing `updateBlock`'s shift with
+  a large, wrong delta computed against 0. `stepUp`/`stepDown` never
+  produce an empty value, so the spin buttons never hit this — hence the
+  exact arrows-work/typing-doesn't split that got reported. Both inputs
+  now hold their displayed text locally, syncing from the block's real
+  value only when it changes from elsewhere (never fighting in-progress
+  typing in the same field), and only call `onCommit` — which is what
+  triggers the shift — once a complete, valid, *changed* value exists;
+  the transient empty string is never committed. `updateBlock` also
+  guards against an empty/NaN `duration`/`time` reaching the shift math
+  at all now, as defense in depth now that the inputs guard against it
+  too. If a similar text/number field is ever added to a block in the
+  future, use this same local-state-plus-commit-guard pattern rather than
+  binding straight to the stored value — the trap isn't specific to
+  duration/time. (Renamed to `MinutesInput` and reused for the `break`
+  field below the same day — if you're looking for `DurationInput` by
+  that name, it no longer exists under that name.)
+- **Each task has its own `break` (minutes), shown at the right end of
+  its row** — added Sep 18, 2026, Sarvesh-authorized freeze exception,
+  same day as the two input fixes above. `nextTaskDefaultTime` now adds
+  a task's own `break` on top of its `time + duration` when computing a
+  newly-added task's default start — this was the missing term in the
+  "previous task's time + duration" rule from the two bullets above;
+  it's now genuinely "previous task's time + duration + break." Editing
+  a task's own `break` triggers the same shift-cascade as editing its
+  `duration` (`updateBlock` treats them identically for this purpose):
+  increasing the gap after a task pushes every later task forward by the
+  same delta. `computePlanTimes`'s own `start`/`end` for a block
+  deliberately excludes its break — the break is dead time *after* the
+  task, not part of it, so the task's own displayed duration and its
+  Google Calendar sync stay exactly what the task itself is, unpadded;
+  only the *next* task's default start is break-aware. Legacy blocks (no
+  `.break` field, i.e. everything before this date) read as `break: 0`
+  everywhere (`block.break || 0`) — no migration needed.
 - **`LiveClock`** (top bar, next to today's date) is a self-contained
   ticking clock — its own `setInterval`/`useState`, cleaned up on
   unmount — not wired to any tracker data. If another live-updating time
@@ -1236,6 +1279,19 @@ daily-plan template (`CORE_SLOT_TEMPLATE`/`buildBaseBlocks`/
 finalize flow — see the Today's Planner bullets in Section 4 for the full
 design. This supersedes the "Finalize the Day" button spec below rather
 than building it as originally specified; see that entry.
+
+_Sep 18, 2026: a fourth explicit, Sarvesh-authorized exception — while
+Sarvesh was live-testing the Sep 17 daily-plan rework, he reported that
+newly added tasks' default times looked wrong and asked for a per-task
+break field in the same message. Claude flagged that the "wrong
+default time" symptom was consistent with the still-unmerged #107
+input fix rather than a new bug (see the input-fix bullets in Section
+4 — #107 was open at the time), and separately flagged that "add a
+break field" is a genuine new feature, not a bug fix. Sarvesh confirmed
+building the break feature now anyway. See the break-field bullet in
+Section 4 for the design; it shipped as a third commit on the same
+still-open PR as the two input fixes (bundled since it reuses the same
+input component and shift-cascade logic), not queued separately.
 
 _Sep 13, 2026: the four items below were surfaced from the Sep 3–6
 audit (`claude/app-audit-2026-09-03.md`) — they'd been discussed and,
