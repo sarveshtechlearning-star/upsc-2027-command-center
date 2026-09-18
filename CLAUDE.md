@@ -475,6 +475,23 @@ summary will do.
   only the *next* task's default start is break-aware. Legacy blocks (no
   `.break` field, i.e. everything before this date) read as `break: 0`
   everywhere (`block.break || 0`) — no migration needed.
+- **`DayArc` uses each block's own `start`/`end` directly, not a
+  re-derived cascade** — fixed Sep 18, 2026, same day, once it turned out
+  breaks weren't showing in the arc bar. `DayArc` used to maintain its
+  own `cursor` (`wakeMinutes`, then `+= each block's duration` in array
+  order), a leftover from before per-task explicit `time` (#105) that
+  assumed every task ran back-to-back with no gaps and had no concept of
+  a break at all. Now it reads `b.start`/`b.end` straight from the
+  `timedBlocks` it's passed (already correct, from `computePlanTimes`),
+  and renders each task's break as its own segment immediately after the
+  task's own one (`var(--break)`, excluded from the legend — same
+  treatment the old auto-generated break blocks got). `endMinutes` (the
+  arc's total width) is the max end across all segments including
+  trailing breaks, not a running cursor, so the arc sizes correctly
+  regardless of gaps. If a day ever has a genuine gap between two tasks
+  (not a break — an actual unscheduled span from a manually-set time),
+  this now shows correctly too, as empty background, instead of being
+  silently papered over the way the old cascade did.
 - **`LiveClock`** (top bar, next to today's date) is a self-contained
   ticking clock — its own `setInterval`/`useState`, cleaned up on
   unmount — not wired to any tracker data. If another live-updating time
