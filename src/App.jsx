@@ -2898,6 +2898,8 @@ function TodayTab({ db, updateSlice, onNavigate }) {
       let delta = 0;
       if (Object.prototype.hasOwnProperty.call(patch, "duration") && patch.duration !== "" && !Number.isNaN(Number(patch.duration))) {
         delta = Number(patch.duration) - Number(current.duration || 0);
+      } else if (Object.prototype.hasOwnProperty.call(patch, "break") && patch.break !== "" && !Number.isNaN(Number(patch.break))) {
+        delta = Number(patch.break) - Number(current.break || 0);
       } else if (Object.prototype.hasOwnProperty.call(patch, "time") && patch.time) {
         const oldStart = current.time != null ? parseTimeToMinutes(current.time) : computePlanTimes(p).blocks[idx].start;
         delta = parseTimeToMinutes(patch.time) - oldStart;
@@ -2924,12 +2926,14 @@ function TodayTab({ db, updateSlice, onNavigate }) {
     setPlan(p => ({ ...p, blocks: p.blocks.filter(b => b.id !== id) }));
   }
   // Default time for a newly added task: right after whatever the last
-  // task in the list ends, or wake time if the list is still empty. Just
-  // a starting point — the time input stays freely editable afterward.
+  // task in the list ends, including its own break, or wake time if the
+  // list is still empty. Just a starting point — the time input stays
+  // freely editable afterward.
   function nextTaskDefaultTime(p) {
     const { blocks } = computePlanTimes(p);
     if (blocks.length === 0) return p.wakeTime;
-    return minutesToTimeInput(blocks[blocks.length - 1].end);
+    const last = blocks[blocks.length - 1];
+    return minutesToTimeInput(last.end + Number(last.break || 0));
   }
   function addTaskFromWeekly(taskId) {
     const task = availableWeeklyTasks.find(t => t.id === taskId);
@@ -2937,7 +2941,7 @@ function TodayTab({ db, updateSlice, onNavigate }) {
     setPlan(p => ({
       ...p,
       blocks: [...(p.blocks || []), {
-        id: uid(), label: task.text, time: nextTaskDefaultTime(p), duration: 30,
+        id: uid(), label: task.text, time: nextTaskDefaultTime(p), duration: 30, break: 0,
         status: "Not Started", skipped: false, skipReason: "", completedAt: null, journal: "",
         custom: true, fromWeeklyTaskId: task.id,
       }],
@@ -2950,7 +2954,7 @@ function TodayTab({ db, updateSlice, onNavigate }) {
     setPlan(p => ({
       ...p,
       blocks: [...(p.blocks || []), {
-        id: uid(), label: text, time: nextTaskDefaultTime(p), duration: 30,
+        id: uid(), label: text, time: nextTaskDefaultTime(p), duration: 30, break: 0,
         status: "Not Started", skipped: false, skipReason: "", completedAt: null, journal: "", custom: true,
       }],
     }));
@@ -3370,11 +3374,13 @@ function SkipToggle({ skipped, skipReason, onSkip, onUnskip }) {
 // real value only when it changes from elsewhere (e.g. a shift caused by
 // an earlier task's edit), not on every render, so this never fights the
 // user's own in-progress typing in this same field.
-function DurationInput({ value, onCommit }) {
+// Reused for both duration and break — same "don't commit the transient
+// empty value" guard as TimeInput above, for the same reason.
+function MinutesInput({ value, onCommit, width = 60 }) {
   const [text, setText] = useState(String(value));
   useEffect(() => { setText(String(value)); }, [value]);
   return (
-    <input type="number" className="ucc-input ucc-mono" style={{ width: 60 }} value={text}
+    <input type="number" className="ucc-input ucc-mono" style={{ width }} value={text}
       onChange={e => {
         setText(e.target.value);
         const n = Number(e.target.value);
@@ -3403,7 +3409,7 @@ function PlanBlock({ block, onUpdate, onMoveUp, onMoveDown, onRemove }) {
         <TimeInput value={block.time != null ? block.time : minutesToTimeInput(block.start)}
           onCommit={t => onUpdate({ time: t })} />
         <div className="ucc-tiny" style={{ marginTop: 4 }}>
-          <DurationInput value={block.duration} onCommit={d => onUpdate({ duration: d })} /> min
+          <MinutesInput value={block.duration} onCommit={d => onUpdate({ duration: d })} /> min
         </div>
         {block.skipped && <div className="ucc-tiny" style={{ marginTop: 4 }}>skipped</div>}
       </div>
@@ -3421,7 +3427,10 @@ function PlanBlock({ block, onUpdate, onMoveUp, onMoveDown, onRemove }) {
           ) : (
             <strong>{block.label}</strong>
           )}
-          <div className="ucc-flex">
+          <div className="ucc-flex" style={{ gap: 10, alignItems: "center" }}>
+            <label className="ucc-tiny" style={{ display: "flex", alignItems: "center", gap: 4 }} title="Gap after this task before the next one starts">
+              Break <MinutesInput value={block.break || 0} onCommit={b => onUpdate({ break: b })} width={46} /> min
+            </label>
             {onMoveUp && <IconBtn icon={ChevronUp} onClick={onMoveUp} title="Move up" />}
             {onMoveDown && <IconBtn icon={ChevronDown} onClick={onMoveDown} title="Move down" />}
             <SkipToggle skipped={block.skipped} skipReason={block.skipReason}
