@@ -64,7 +64,51 @@ summary will do.
   normalized relational tables — cross-tracker relationships are mostly
   resolved in client-side JS, not SQL joins. The Syllabus tracker is the
   hierarchy anchor (Subject → Topic → Subtopic → Micro Topic, each row with
-  a stable `id`). Every tracker that links to a Syllabus row — Classes,
+  a stable `id`).
+- **`updateSlice` (in `useDB`) serializes its Supabase writes per storage
+  key — this is app-wide, not planner-specific, so read this before
+  touching persistence anywhere.** Fixed Sep 18, 2026, after several
+  rounds of what looked like daily-planner shift-cascade bugs (see the
+  Today's Planner bullets further down) turned out to actually be this:
+  every `updateSlice` call used to fire its own independent, un-awaited
+  `upsert()`, with no ordering guarantee between them. A burst of rapid
+  edits to the *same key* (typing a multi-digit number fires one
+  `updateSlice` call per keystroke) sent multiple concurrent requests
+  that could complete out of order over a real network — whichever
+  landed LAST in the database won, not necessarily the one dispatched
+  last, silently persisting a mid-edit value. Local React state was
+  never affected (it updates synchronously inside `updateSlice`,
+  independent of the network), which is exactly why this was so hard to
+  catch live — everything looked right in the session, and the
+  corruption only showed up as "my edit didn't stick" on the next
+  load/refresh. Proved it in Node before fixing: simulating the old
+  behavior with realistic 0-100ms network jitter across 200 trials gave
+  a wrong final value 68.5% of the time; the fix (below) gave 0/200.
+  Fix: `pendingRef`/`flushingRef` (per key, in `useDB`) ensure only one
+  `upsert` per key is ever in flight; a new `updateSlice` call while one
+  is already flying replaces the pending value rather than racing it
+  (coalescing a burst into one write, not queuing every intermediate
+  value), and `flushKey`'s loop re-checks for a newer pending value
+  after each write completes — so whatever is truly latest when the
+  queue drains is what lands, regardless of network timing. This changed
+  nothing about when local state updates (still synchronous, still
+  instant) — only the write *ordering* to Supabase. A write that fails
+  still just surfaces the existing `saveError` banner rather than
+  retrying, matching prior behavior (not a regression; retry/offline
+  resilience would be a separate, larger change). If you're ever
+  debugging "an edit looks right in the UI but reverts/reappears wrong
+  after a reload," suspect this class of race before suspecting the
+  feature's own logic — check whether the affected data went through a
+  burst of rapid same-key edits first.
+  **Retroactive note on the Sep 17-18 daily-plan-shift reports**: the
+  `updateBlock` shift-cascade logic and the `DurationInput`/`TimeInput`/
+  `MinutesInput` empty-value guards (both described below) were real,
+  correct fixes for real, separate bugs — but this write race was very
+  likely *also* contributing to some of what got reported as "the shift
+  didn't apply," since a shifted value that then loses the persistence
+  race reverts on reload exactly as if the shift never ran. Don't assume
+  every future planner report needs a planner-side fix; rule this class
+  out first. Every tracker that links to a Syllabus row — Classes,
   Reading, NCERT, Standard Books, Single Pager, Current Affairs — carries a
   `syllabusId` (`findSyllabusId`), resolved fresh every time its own
   Subject/Topic/Subtopic/Micro Topic selects change. This is what lets
