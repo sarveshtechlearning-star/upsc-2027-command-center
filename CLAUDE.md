@@ -366,6 +366,28 @@ summary will do.
   repeat, that's expected) to differ. `s1`-`s7` ids on plans saved before
   Sep 17, 2026 still resolve to their original fixed colors first, via the
   existing id check ahead of the hash fallback — unaffected.
+- **Editing a task's own time or duration shifts every later task's stored
+  time by the same delta** (`updateBlock`, fixed Sep 17, 2026, same
+  session as the two fixes above — also reported live). Each task stores
+  an explicit `time` (PR #105) rather than being derived from a cascade,
+  so without this a duration/time edit left every later task at its old,
+  now-overlapping-or-gapped time. `updateBlock` computes the delta only
+  when the patch touches `duration` or `time` specifically (not skip,
+  journal, or label edits) and shifts every block after that one's index
+  by the same amount — the whole tail slides together, so any deliberate
+  gap/overlap already between later tasks is preserved rather than
+  recomputed from wake time. Skipping a task never triggers a shift.
+  This also surfaced a latent bug worth knowing about:
+  `minutesToTime()`'s "+1d " prefix past midnight is fine for the several
+  genuinely display-only strings that use it (DayArc tooltips, Weekly
+  Review's block list) but is NOT a valid `<input type="time">` value —
+  feeding it into one, or into `block.time`, corrupts right back through
+  `parseTimeToMinutes` on the next edit. `minutesToTimeInput()` (plain
+  HH:MM wraparound, no prefix) exists for exactly this — use it, never
+  `minutesToTime`, for anything that feeds a time input or gets written
+  into `block.time` (currently: this shift logic, `nextTaskDefaultTime`'s
+  default for a new task, and `PlanBlock`'s input fallback for legacy
+  blocks with no `.time`).
 - **`LiveClock`** (top bar, next to today's date) is a self-contained
   ticking clock — its own `setInterval`/`useState`, cleaned up on
   unmount — not wired to any tracker data. If another live-updating time
