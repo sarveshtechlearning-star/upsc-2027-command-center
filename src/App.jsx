@@ -1472,17 +1472,51 @@ function useDB(userId) {
     return () => { cancelled = true; };
   }, [userId]);
 
+  // Persistence queue, one per storage key. Each updateSlice call used to
+  // fire its own independent, un-awaited upsert — fine for a single edit,
+  // but a burst of rapid edits to the SAME key (e.g. typing "120" fires
+  // three: duration:1, duration:12, duration:120) sends three concurrent
+  // requests with no ordering guarantee. Over a real network, they can
+  // complete out of order, and whichever lands LAST in the database wins
+  // — not necessarily the one dispatched last. That silently persists a
+  // mid-edit value, invisible until the next reload (local React state
+  // is unaffected in the moment, since it updates synchronously below,
+  // so this only shows up as "my edit didn't stick" after a refresh).
+  // pendingRef/flushingRef below serialize writes per key: only one
+  // upsert per key is ever in flight, and a new push while one is
+  // already flying just overwrites the pending value (coalescing a
+  // typing burst into a single write) rather than queuing every
+  // intermediate one — the loop in flushKey re-checks for a newer
+  // pending value after each write completes, so the true final value
+  // is always what eventually lands, regardless of network timing.
+  const pendingRef = useRef({});
+  const flushingRef = useRef({});
+  const flushKey = useCallback(async (key) => {
+    if (flushingRef.current[key]) return;
+    flushingRef.current[key] = true;
+    try {
+      while (pendingRef.current[key] && pendingRef.current[key].has) {
+        const { value } = pendingRef.current[key];
+        pendingRef.current[key] = { value: undefined, has: false };
+        const { error } = await supabase.from("kv_store")
+          .upsert({ user_id: userId, key, value, updated_at: new Date().toISOString() }, { onConflict: "user_id,key" });
+        if (error) setSaveError(`Could not save "${key}" — ${error.message}`);
+      }
+    } finally {
+      flushingRef.current[key] = false;
+    }
+  }, [userId]);
+
   const updateSlice = useCallback((key, updater) => {
     setDb(prev => {
       if (!prev) return prev;
       const nextVal = typeof updater === "function" ? updater(prev[key]) : updater;
       const next = { ...prev, [key]: nextVal };
-      supabase.from("kv_store")
-        .upsert({ user_id: userId, key, value: nextVal, updated_at: new Date().toISOString() }, { onConflict: "user_id,key" })
-        .then(({ error }) => { if (error) setSaveError(`Could not save "${key}" — ${error.message}`); });
+      pendingRef.current[key] = { value: nextVal, has: true };
+      flushKey(key);
       return next;
     });
-  }, [userId]);
+  }, [flushKey]);
 
   return { db, loaded, updateSlice, saveError, setSaveError };
 }
