@@ -2617,14 +2617,30 @@ function colorForBlock(b) {
   return hashTaskColor(b.label);
 }
 function DayArc({ blocks, wakeMinutes, sleepMinutes }) {
-  let cursor = wakeMinutes;
+  // Each block already carries its own real start/end from
+  // computePlanTimes (task duration only — break excluded, see that
+  // function's comment) — use those directly rather than re-deriving a
+  // contiguous cascade here. The old cascade assumed every task ran
+  // back-to-back with no gaps and had no concept of a break at all,
+  // which is exactly why breaks never showed up here and why the arc
+  // could silently misrepresent a day with a manually-created gap
+  // between two tasks. A task's break renders as its own segment right
+  // after the task's own one (colorForBlock's "break" branch).
   const segs = [];
+  let endMinutes = wakeMinutes;
   blocks.forEach(b => {
-    const dur = b.skipped ? 0 : b.duration;
-    if (dur > 0) segs.push({ ...b, start: cursor, end: cursor + dur });
-    cursor += dur;
+    if (b.skipped) return;
+    if (b.duration > 0) {
+      segs.push({ ...b, start: b.start, end: b.end });
+      endMinutes = Math.max(endMinutes, b.end);
+    }
+    const brk = Number(b.break || 0);
+    if (brk > 0) {
+      const breakEnd = b.end + brk;
+      segs.push({ id: `${b.id}-break`, label: "Break", type: "break", start: b.end, end: breakEnd });
+      endMinutes = Math.max(endMinutes, breakEnd);
+    }
   });
-  const endMinutes = cursor;
   const totalSpan = Math.max(endMinutes, sleepMinutes) - wakeMinutes;
   const markerPct = ((sleepMinutes - wakeMinutes) / totalSpan) * 100;
   const legendSegs = segs.filter(s => s.type !== "break" && s.id !== "travelTo" && s.id !== "travelFro");
