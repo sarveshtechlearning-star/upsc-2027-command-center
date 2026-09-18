@@ -492,6 +492,26 @@ summary will do.
   (not a break — an actual unscheduled span from a manually-set time),
   this now shows correctly too, as empty background, instead of being
   silently papered over the way the old cascade did.
+- **Reordering a task (`moveBlock`) also resequences the swapped pair's
+  times, not just their array position** — fixed Sep 18, 2026, same day,
+  once it turned out a reorder left the list visually out of
+  chronological order (moving a later task above an earlier one kept
+  showing it at the later time — correct per-task data, confusing list).
+  A swap is always adjacent (`moveBlock` only ever swaps `idx` with
+  `idx±1`), so on every move: the task now in the *earlier* of the two
+  positions takes over that position's original start time, and the task
+  now in the *later* position starts right after it (own `duration +
+  break`). Nothing outside the swapped pair is ever touched — the pair's
+  combined span (both tasks' `duration+break` summed) is invariant under
+  a swap regardless of order, so there's mathematically nothing to shift
+  beyond the two that moved. This composes correctly across multiple
+  consecutive moves (e.g. moving a task up several positions via several
+  arrow clicks) since each individual swap is self-contained. If a
+  `moveBlock`-like operation is ever generalized beyond an adjacent swap
+  (e.g. drag-to-anywhere), this pairwise-invariant reasoning won't
+  directly extend — that would need its own resequencing logic, most
+  likely a full recompute of every affected task's time in the new order
+  rather than a pairwise anchor-and-cascade.
 - **`LiveClock`** (top bar, next to today's date) is a self-contained
   ticking clock — its own `setInterval`/`useState`, cleaned up on
   unmount — not wired to any tracker data. If another live-updating time
