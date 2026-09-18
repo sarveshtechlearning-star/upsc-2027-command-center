@@ -2962,13 +2962,31 @@ function TodayTab({ db, updateSlice, onNavigate }) {
       return { ...p, blocks };
     });
   }
+  // Reordering used to only swap array position, leaving each task's own
+  // explicit time untouched — correct in isolation, but it meant the
+  // list could end up visually out of chronological order (e.g. moving
+  // a later task above an earlier one left it still showing the later
+  // time). Fixed Sep 18, 2026: a reorder now also resequences the
+  // swapped pair's times, treating the swap as "run these two the other
+  // way round, starting from the same point" — the task moving into the
+  // earlier slot takes over that slot's original start, and the other
+  // task starts right after it (its own duration + break). The pair's
+  // combined span (both tasks' duration+break summed) is unchanged by a
+  // swap regardless of order, so nothing after the pair ever needs to
+  // shift — this never touches any task outside the swapped pair.
   function moveBlock(id, dir) {
     setPlan(p => {
       const idx = p.blocks.findIndex(b => b.id === id);
       const newIdx = idx + dir;
       if (newIdx < 0 || newIdx >= p.blocks.length) return p;
       const blocks = [...p.blocks];
-      [blocks[idx], blocks[newIdx]] = [blocks[newIdx], blocks[idx]];
+      const lo = Math.min(idx, newIdx), hi = lo + 1;
+      const loOld = blocks[lo];
+      [blocks[lo], blocks[hi]] = [blocks[hi], blocks[lo]];
+      const anchor = loOld.time != null ? parseTimeToMinutes(loOld.time) : computePlanTimes(p).blocks[lo].start;
+      blocks[lo] = { ...blocks[lo], time: minutesToTimeInput(anchor) };
+      const loEnd = anchor + Number(blocks[lo].duration || 0) + Number(blocks[lo].break || 0);
+      blocks[hi] = { ...blocks[hi], time: minutesToTimeInput(loEnd) };
       return { ...p, blocks };
     });
   }
