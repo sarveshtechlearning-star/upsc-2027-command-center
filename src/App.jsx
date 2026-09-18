@@ -2545,15 +2545,31 @@ function DriveDownloadLinks({ files }) {
    DAY ARC (signature visual)
    ============================================================ */
 // Office + its commute legs share one color family (requirement: commute is
-// a sub-section of office, not its own category); every study slot gets its
-// own distinct color so the day is scannable at a glance.
+// a sub-section of office, not its own category). s1-s7 only ever appear on
+// plans saved before the Sep 17, 2026 daily-plan-template removal (see
+// Section 4) — every task added since then is freeform, so it can't be
+// colored by a fixed slot id anymore. Those get a color hashed from their
+// own label instead: same task name -> same color every time it recurs
+// (e.g. "GS Answer Writing" looks the same day to day), and different task
+// names are very likely (7/8 odds per pair) to land on different colors,
+// which is what actually matters for the arc being scannable at a glance.
+const TASK_COLOR_PALETTE = [
+  "var(--sec-s1)", "var(--sec-s2)", "var(--sec-s3)", "var(--sec-s4)",
+  "var(--sec-s5)", "var(--sec-s6)", "var(--sec-s7)", "var(--sec-custom)",
+];
+function hashTaskColor(label) {
+  const s = String(label || "");
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
+  return TASK_COLOR_PALETTE[Math.abs(h) % TASK_COLOR_PALETTE.length];
+}
 function colorForBlock(b) {
   if (b.type === "break") return "var(--break)";
   if (b.id === "office") return "var(--office)";
   if (b.id === "travelTo" || b.id === "travelFro") return "var(--travel)";
   if (b.type === "ai") return "var(--ai)";
   if (["s1", "s2", "s3", "s4", "s5", "s6", "s7"].includes(b.id)) return `var(--sec-${b.id})`;
-  return "var(--sec-custom)";
+  return hashTaskColor(b.label);
 }
 function DayArc({ blocks, wakeMinutes, sleepMinutes }) {
   let cursor = wakeMinutes;
