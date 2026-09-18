@@ -388,6 +388,30 @@ summary will do.
   into `block.time` (currently: this shift logic, `nextTaskDefaultTime`'s
   default for a new task, and `PlanBlock`'s input fallback for legacy
   blocks with no `.time`).
+- **`DurationInput`/`TimeInput` (in `PlanBlock`) keep their own local text
+  state instead of binding straight to `block.duration`/`block.time`** —
+  fixed Sep 17, 2026, immediately after the shift-cascade fix above, once
+  it turned out the spin buttons shifted later tasks correctly but typing
+  a replacement value didn't. Cause: Chrome doesn't auto-select a number
+  input's contents on focus, so backspacing first is the natural way to
+  replace a value — which makes the DOM value momentarily `""`. A plain
+  controlled input commits that immediately as `duration: 0` / `time: ""`
+  (`parseTimeToMinutes("")` is `0`, i.e. `00:00`), snapping the visible
+  value to `"0"`/`"00:00"` mid-edit and firing `updateBlock`'s shift with
+  a large, wrong delta computed against 0. `stepUp`/`stepDown` never
+  produce an empty value, so the spin buttons never hit this — hence the
+  exact arrows-work/typing-doesn't split that got reported. Both inputs
+  now hold their displayed text locally, syncing from the block's real
+  value only when it changes from elsewhere (never fighting in-progress
+  typing in the same field), and only call `onCommit` — which is what
+  triggers the shift — once a complete, valid, *changed* value exists;
+  the transient empty string is never committed. `updateBlock` also
+  guards against an empty/NaN `duration`/`time` reaching the shift math
+  at all now, as defense in depth now that the inputs guard against it
+  too. If a similar text/number field is ever added to a block in the
+  future, use this same local-state-plus-commit-guard pattern rather than
+  binding straight to the stored value — the trap isn't specific to
+  duration/time.
 - **`LiveClock`** (top bar, next to today's date) is a self-contained
   ticking clock — its own `setInterval`/`useState`, cleaned up on
   unmount — not wired to any tracker data. If another live-updating time
