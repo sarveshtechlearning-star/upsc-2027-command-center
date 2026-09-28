@@ -2959,7 +2959,7 @@ function TodayTab({ db, updateSlice, onNavigate }) {
         if (delta !== 0 && i > idx && b.time != null) return { ...b, time: minutesToTimeInput(parseTimeToMinutes(b.time) + delta) };
         return b;
       });
-      return { ...p, blocks };
+      return { ...p, blocks: delta !== 0 ? healBackwardTimes(p, blocks, idx + 1) : blocks };
     });
   }
   // Reordering used to only swap array position, leaving each task's own
@@ -2987,8 +2987,32 @@ function TodayTab({ db, updateSlice, onNavigate }) {
       blocks[lo] = { ...blocks[lo], time: minutesToTimeInput(anchor) };
       const loEnd = anchor + Number(blocks[lo].duration || 0) + Number(blocks[lo].break || 0);
       blocks[hi] = { ...blocks[hi], time: minutesToTimeInput(loEnd) };
-      return { ...p, blocks };
+      return { ...p, blocks: healBackwardTimes(p, blocks, hi) };
     });
+  }
+  // Heals a broken chain after a time-changing edit or reorder (fixed Sep
+  // 28, 2026). The delta cascade (updateBlock) and pairwise swap
+  // (moveBlock) both preserve whatever relation the tail already had to
+  // the task before it — including a *backwards* one, where a later task
+  // in the list starts before the previous task (plus its break) has even
+  // ended (e.g. SQL Practice 18:55–19:55 +10 break, followed by Office
+  // work at 12:50). That state is never deliberate, but nothing ever
+  // repaired it, so every later edit/reorder just carried it along (and a
+  // swap of a pair that wasn't back-to-back could create it). Walking
+  // forward from `fromIdx`, any task that starts before the previous
+  // task's duration + break has elapsed is pushed to exactly that point;
+  // a task that's already at or after it is left alone, so genuine
+  // forward gaps from a manually-set time are still preserved. Uses
+  // `duration` even for skipped tasks, matching moveBlock/updateBlock
+  // (skipping never reflows the day).
+  function healBackwardTimes(p, blocks, fromIdx) {
+    const out = [...blocks];
+    const startOf = i => out[i].time != null ? parseTimeToMinutes(out[i].time) : computePlanTimes({ ...p, blocks: out }).blocks[i].start;
+    for (let i = Math.max(1, fromIdx); i < out.length; i++) {
+      const prevEnd = startOf(i - 1) + Number(out[i - 1].duration || 0) + Number(out[i - 1].break || 0);
+      if (startOf(i) < prevEnd) out[i] = { ...out[i], time: minutesToTimeInput(prevEnd) };
+    }
+    return out;
   }
   function removeBlock(id) {
     setPlan(p => ({ ...p, blocks: p.blocks.filter(b => b.id !== id) }));
@@ -3001,7 +3025,10 @@ function TodayTab({ db, updateSlice, onNavigate }) {
     const { blocks } = computePlanTimes(p);
     if (blocks.length === 0) return p.wakeTime;
     const last = blocks[blocks.length - 1];
-    return minutesToTimeInput(last.end + Number(last.break || 0));
+    // start + duration (not `end`, which computePlanTimes zeroes for a
+    // skipped task) — otherwise a task added after a skipped last task
+    // would default to overlapping it.
+    return minutesToTimeInput(last.start + Number(last.duration || 0) + Number(last.break || 0));
   }
   function addTaskFromWeekly(taskId) {
     const task = availableWeeklyTasks.find(t => t.id === taskId);

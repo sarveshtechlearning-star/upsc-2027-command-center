@@ -512,6 +512,17 @@ summary will do.
   directly extend — that would need its own resequencing logic, most
   likely a full recompute of every affected task's time in the new order
   rather than a pairwise anchor-and-cascade.
+- **Backward-time healing (`healBackwardTimes`)** — fixed Sep 28, 2026.
+  The pairwise-invariant claim above only holds when the swapped pair was
+  already back-to-back; and neither the reorder nor the delta cascade
+  ever repaired a list where a later task starts *before* the previous
+  one (duration + break) ends (seen live: SQL Practice 18:55 +60 +10
+  break, then Office work at 12:50). After every `moveBlock`, and after
+  any `updateBlock` edit that shifts times, a forward pass from the edited
+  point pushes any such task to exactly the previous task's end + break.
+  Forward gaps are never touched (a manually-set later time stays).
+  `nextTaskDefaultTime` also now uses `start + duration + break` rather
+  than `computePlanTimes`' `end`, which is zeroed for a skipped task.
 - **`LiveClock`** (top bar, next to today's date) is a self-contained
   ticking clock — its own `setInterval`/`useState`, cleaned up on
   unmount — not wired to any tracker data. If another live-updating time
