@@ -257,11 +257,15 @@ summary will do.
     version counted today too and reset to 0 the instant today got
     activity, which showed "1 day missed" the moment you opened the app
     each morning before logging anything; the fix always starts the
-    count at yesterday, so it only reflects fully-passed missed days
-    (0 if yesterday was fine, 1 if only yesterday was missed, 2 if
-    yesterday and the day before were both missed, etc.) and nudges for
-    today via copy alone ("Today's still in — keep it that way" /
-    "Log anything today to reset this"), never via the count. Both
+    count at yesterday while today is still empty, so it only reflects
+    fully-passed missed days (0 if yesterday was fine, 1 if only
+    yesterday was missed, 2 if yesterday and the day before were both
+    missed, etc.). **Fixed Oct 21, 2026**: that version skipped today
+    even once today had activity, so logging a completed class never
+    cleared the count (the real streak went 0 → 1 while this stayed put)
+    despite the copy saying "Log anything today to reset this" — now,
+    if `dayHasActivity(db, todayISO())`, `computeMissedDays` returns 0
+    immediately; an empty today still never adds to the count. Both
     streak functions now share an extracted `dayHasActivity(db, iso)`
     helper so their definition of "activity" can't drift apart.
     Deliberately structurally distinct from the streak card per
