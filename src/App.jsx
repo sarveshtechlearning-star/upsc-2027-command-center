@@ -2749,8 +2749,18 @@ function statusCompletedAt(rec, fieldLabel = "Status") {
 // Shared by computeConsistencyStreak and computeMissedDays (its
 // negative-streak counterpart) so the two can never drift out of sync on
 // what counts as "activity" for a given day.
+// Classes get one extra route in (Nov 4 fix): a class that's In Progress
+// (or Partially Completed) counts once its notes are uploaded, since that
+// upload is real study output even if the class isn't finished yet. Without
+// this, a freshly added In Progress class with notes attached never moved
+// either widget — Completed was the only way in.
+function classCountsAsActivity(c) {
+  if (c.status === "Completed") return true;
+  return (c.status === "In Progress" || c.status === "Partially Completed") &&
+    getRowFiles(c).length > 0;
+}
 function dayHasActivity(db, iso) {
-  return db.classes.some(c => c.date === iso && c.status === "Completed") ||
+  return db.classes.some(c => c.date === iso && classCountsAsActivity(c)) ||
     db.standardBooks.some(s => s.date === iso) ||
     db.ncert.some(n => n.date === iso) ||
     db.answerWriting.some(a => a.date === iso && a.status === "Completed") ||

@@ -231,7 +231,15 @@ summary will do.
     Writing/Single Pager/Tamil Reading/Tamil Writing/Current Affairs has a
     record dated that day; counts backward from today, or from yesterday
     if today has nothing logged yet (the day isn't over, so an empty today
-    shouldn't zero out an otherwise-alive streak). NCERT and Standard Books
+    shouldn't zero out an otherwise-alive streak). **Fixed Nov 4, 2026**:
+    a Classes row used to count only at `status === "Completed"`, so a
+    new class added as In Progress with notes uploaded never moved the
+    streak or the missed-days widget. `classCountsAsActivity(c)` now also
+    counts In Progress / Partially Completed classes that have at least
+    one uploaded file (`getRowFiles(c).length > 0`) — In Progress with no
+    file, or Not Started/Skipped with a file, still don't count. Both
+    widgets pick this up automatically via the shared `dayHasActivity`.
+    NCERT and Standard Books
     gained a `date` field for this specifically — neither had one before,
     since neither needed one until a cross-tracker "was something logged
     today" check existed. Its color is driven by `streakTone(streak)`
